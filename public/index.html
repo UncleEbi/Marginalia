@@ -1,0 +1,992 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Marginalia — read-along prototype</title>
+<style>
+  :root{
+    --bg: #1c1a17;
+    --panel: #24211c;
+    --panel-edge: #37312a;
+    --ink: #ece5d6;
+    --ink-dim: #948c7c;
+    --lamp: #e8a33d;
+    --lamp-dim: #a5763a;
+  }
+  *{ box-sizing: border-box; }
+  html, body{ height: 100%; }
+  body{
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+  }
+
+  header{
+    padding: 28px 24px 8px;
+    text-align: center;
+  }
+  header h1{
+    font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+    font-weight: 400;
+    font-size: 26px;
+    letter-spacing: 0.01em;
+    margin: 0 0 4px;
+  }
+  header p{
+    margin: 0;
+    color: var(--ink-dim);
+    font-size: 13px;
+  }
+
+  main{
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    padding: 20px 20px 140px;
+    overflow-y: auto;
+  }
+
+  .stage{
+    width: 100%;
+    max-width: 620px;
+  }
+
+  .intake{
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 22px;
+  }
+  .intake label{
+    display: block;
+    font-size: 13px;
+    color: var(--ink-dim);
+    margin-bottom: 8px;
+  }
+  .intake textarea{
+    width: 100%;
+    min-height: 110px;
+    resize: vertical;
+    background: var(--bg);
+    border: 1px solid var(--panel-edge);
+    border-radius: 6px;
+    color: var(--ink);
+    font-family: "Iowan Old Style", Georgia, serif;
+    font-size: 15px;
+    line-height: 1.6;
+    padding: 12px;
+  }
+  .intake-row{
+    display: flex;
+    gap: 10px;
+    margin-top: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .divider{
+    text-align: center;
+    color: var(--ink-dim);
+    font-size: 12px;
+    margin: 16px 0;
+    position: relative;
+  }
+  .divider::before, .divider::after{
+    content: '';
+    position: absolute;
+    top: 50%;
+    width: 38%;
+    height: 1px;
+    background: var(--panel-edge);
+  }
+  .divider::before{ left: 0; }
+  .divider::after{ right: 0; }
+
+  .engine-toggle{
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .engine-btn{
+    flex: 1;
+    text-align: center;
+    padding: 10px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--panel-edge);
+    background: var(--bg);
+    color: var(--ink-dim);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .engine-btn:hover{ border-color: var(--lamp-dim); }
+  .engine-btn.active{
+    border-color: var(--lamp);
+    color: var(--ink);
+    background: #2c2213;
+  }
+  .tag{
+    font-size: 10px;
+    color: var(--lamp);
+    border: 1px solid var(--lamp-dim);
+    border-radius: 4px;
+    padding: 1px 5px;
+    margin-left: 4px;
+  }
+  .upload-box{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border: 1px solid var(--panel-edge);
+    border-radius: 8px;
+    padding: 10px 14px;
+    background: var(--bg);
+    flex-wrap: wrap;
+  }
+  .upload-btn{
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: 6px;
+    border: 1px solid var(--lamp-dim);
+    background: transparent;
+    color: var(--lamp);
+    padding: 7px 13px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .upload-btn:hover{ background: var(--lamp); color: #23180a; }
+  .upload-filename{
+    font-size: 13px;
+    color: var(--ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 60px;
+  }
+  .upload-hint{
+    font-size: 11px;
+    color: var(--ink-dim);
+    white-space: nowrap;
+    margin-left: auto;
+  }
+  button{
+    font-family: inherit;
+    font-size: 13px;
+    border-radius: 6px;
+    border: 1px solid var(--panel-edge);
+    background: var(--bg);
+    color: var(--ink);
+    padding: 8px 14px;
+    cursor: pointer;
+  }
+  button:hover{ border-color: var(--lamp-dim); }
+  button.primary{
+    background: var(--lamp);
+    border-color: var(--lamp);
+    color: #23180a;
+    font-weight: 600;
+  }
+  button.primary:hover{ background: #f0ae4f; }
+
+  #reader{
+    font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+    font-size: 19px;
+    line-height: 1.85;
+    letter-spacing: 0.01em;
+  }
+  #reader .w{
+    padding: 1px 1px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  #reader .w:hover{ background: #33291a; }
+  #reader .w.active{
+    background: var(--lamp);
+    color: #221a0d;
+  }
+  #reader .placeholder{
+    color: var(--ink-dim);
+    font-style: italic;
+  }
+
+  footer{
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--panel);
+    border-top: 1px solid var(--panel-edge);
+    padding: 14px 20px 18px;
+  }
+  .player{
+    max-width: 620px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .player .controls{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  #playBtn{
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+  .player select, .player input[type="range"]{
+    background: var(--bg);
+    border: 1px solid var(--panel-edge);
+    color: var(--ink);
+    border-radius: 6px;
+    font-size: 12px;
+    padding: 6px 8px;
+  }
+  .player .rate-label{
+    font-size: 12px;
+    color: var(--ink-dim);
+    min-width: 34px;
+  }
+  .status{
+    font-size: 12px;
+    color: var(--ink-dim);
+    margin-left: auto;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Marginalia</h1>
+  <p>read-along prototype — proving the word-sync mechanic</p>
+</header>
+
+<main>
+  <div class="stage">
+    <div class="intake">
+      <label for="textInput">Paste a passage</label>
+      <textarea id="textInput" placeholder="Paste text here, then press Load…">It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness, it was the epoch of belief, it was the epoch of incredulity.</textarea>
+      <div class="intake-row">
+        <button id="loadBtn" class="primary">Load pasted text</button>
+      </div>
+
+      <div class="divider">or upload a book</div>
+
+      <div class="upload-box">
+        <label for="fileInput" class="upload-btn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Choose file
+        </label>
+        <input type="file" id="fileInput" accept=".txt,.epub,.pdf,.docx,.html,.htm,.md,.markdown,.rtf" style="display:none;">
+        <span id="fileNameLabel" class="upload-filename">No file selected</span>
+        <span class="upload-hint">.txt · .epub · .pdf · .docx · .html · .md · .rtf</span>
+      </div>
+      <div class="intake-row" style="margin-top:8px;">
+        <label style="margin:0; display:flex; align-items:center; gap:6px; font-size:12px; color:var(--ink-dim);">
+          <input type="checkbox" id="ocrToggle" checked> OCR scanned PDF pages (slower, runs in-browser)
+        </label>
+      </div>
+      <div class="intake-row" id="epubStatusRow" style="display:none;">
+        <span class="rate-label" id="epubStatus"></span>
+      </div>
+      <div class="intake-row" id="chapterRow" style="display:none;">
+        <label style="margin:0;" for="chapterSelect">Chapter</label>
+        <select id="chapterSelect"></select>
+      </div>
+    </div>
+
+    <div class="intake" id="voiceEnginePanel">
+      <label>Voice engine</label>
+      <div class="engine-toggle">
+        <button type="button" id="engineBrowserBtn" class="engine-btn">Browser voice <span class="tag">free</span></button>
+        <button type="button" id="engineNeuralBtn" class="engine-btn">Neural voice (ElevenLabs)</button>
+      </div>
+
+      <div id="neuralFields" style="display:none; margin-top:16px;">
+        <label for="elKey">ElevenLabs API key (used only in your browser, never stored)</label>
+        <div class="intake-row">
+          <input type="password" id="elKey" placeholder="sk_…" style="flex:1; min-width:180px; background:var(--bg); border:1px solid var(--panel-edge); color:var(--ink); border-radius:6px; padding:8px;">
+          <button id="fetchVoicesBtn">Fetch voices</button>
+        </div>
+        <div class="intake-row">
+          <select id="neuralVoiceSelect" style="flex:1;"><option value="">No neural voices loaded</option></select>
+          <button id="clearCacheBtn" style="font-size:11px; padding:6px 10px;">Clear audio cache</button>
+        </div>
+        <span class="rate-label" id="neuralStatus"></span>
+      </div>
+    </div>
+
+    <div id="reader"><span class="placeholder">Load some text above to begin.</span></div>
+  </div>
+</main>
+
+<footer>
+  <div class="player">
+    <div class="controls">
+      <button id="playBtn" title="Play/Pause">▶</button>
+      <button id="stopBtn" title="Stop">■</button>
+    </div>
+    <select id="voiceSelect"></select>
+    <div class="controls">
+      <span class="rate-label" id="rateLabel">1.0x</span>
+      <input type="range" id="rateSlider" min="0.6" max="1.6" step="0.1" value="1">
+    </div>
+    <span class="status" id="statusText">idle</span>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.12.2/mammoth.browser.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script>
+  if(window.pdfjsLib){
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+</script>
+<script>
+  const reader = document.getElementById('reader');
+  const chapterRow = document.getElementById('chapterRow');
+  const chapterSelect = document.getElementById('chapterSelect');
+  const epubStatus = document.getElementById('epubStatus');
+  let chapters = []; // { title, text }
+  const textInput = document.getElementById('textInput');
+  const fileInput = document.getElementById('fileInput');
+  const loadBtn = document.getElementById('loadBtn');
+  const playBtn = document.getElementById('playBtn');
+  const stopBtn = document.getElementById('stopBtn');
+  const voiceSelect = document.getElementById('voiceSelect');
+  const rateSlider = document.getElementById('rateSlider');
+  const rateLabel = document.getElementById('rateLabel');
+  const statusText = document.getElementById('statusText');
+
+  let words = [];        // { text, start, end } char offsets into currentText
+  let currentText = '';
+  let currentTextId = 0;
+  let currentUtterance = null;
+  let isPlaying = false;
+  let startWordIndex = 0; // used when resuming from a clicked word
+  let voices = [];
+
+  function populateVoices(){
+    voices = window.speechSynthesis.getVoices();
+    voiceSelect.innerHTML = '';
+    if(voices.length === 0){
+      const opt = document.createElement('option');
+      opt.textContent = 'Loading voices…';
+      voiceSelect.appendChild(opt);
+      return;
+    }
+    voices.forEach((v, i) => {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = v.name + (v.lang ? ' (' + v.lang + ')' : '');
+      voiceSelect.appendChild(opt);
+    });
+  }
+  populateVoices();
+  if('onvoiceschanged' in window.speechSynthesis){
+    window.speechSynthesis.onvoiceschanged = populateVoices;
+  }
+
+  const elKey = document.getElementById('elKey');
+  const fetchVoicesBtn = document.getElementById('fetchVoicesBtn');
+  const neuralVoiceSelect = document.getElementById('neuralVoiceSelect');
+  const neuralStatus = document.getElementById('neuralStatus');
+  const engineBrowserBtn = document.getElementById('engineBrowserBtn');
+  const engineNeuralBtn = document.getElementById('engineNeuralBtn');
+  const neuralFields = document.getElementById('neuralFields');
+
+  let engineMode = 'browser';
+
+  function setEngine(mode){
+    engineMode = mode;
+    engineBrowserBtn.classList.toggle('active', mode === 'browser');
+    engineNeuralBtn.classList.toggle('active', mode === 'neural');
+    neuralFields.style.display = mode === 'neural' ? 'block' : 'none';
+    voiceSelect.style.opacity = mode === 'neural' ? '0.4' : '1';
+    if(!isPlaying) statusText.textContent = mode === 'neural' ? 'neural voice selected' : 'browser voice selected';
+  }
+  engineBrowserBtn.addEventListener('click', () => setEngine('browser'));
+  engineNeuralBtn.addEventListener('click', () => setEngine('neural'));
+  setEngine('browser');
+
+  let neuralAudio = null;
+  let neuralRAF = null;
+  const MAX_NEURAL_CHARS = 2000; // cost/reliability cap per ElevenLabs' own guidance
+
+  fetchVoicesBtn.addEventListener('click', async () => {
+    const key = elKey.value.trim();
+    if(!key){ neuralStatus.textContent = 'enter an API key first'; return; }
+    neuralStatus.textContent = 'fetching voices…';
+    try{
+      const res = await fetch('https://api.elevenlabs.io/v1/voices', {
+        headers: { 'xi-api-key': key }
+      });
+      if(!res.ok){
+        const bodyText = await res.text();
+        throw new Error('HTTP ' + res.status + ' — ' + bodyText.slice(0, 200));
+      }
+      const data = await res.json();
+      const list = data.voices || [];
+      if(list.length === 0){
+        neuralStatus.textContent = 'no voices returned for this key';
+        return;
+      }
+      neuralVoiceSelect.innerHTML = list.map(v =>
+        `<option value="${v.voice_id}">${escapeHtml(v.name)}</option>`
+      ).join('');
+      setEngine('neural');
+      neuralStatus.textContent = list.length + ' voices loaded';
+    } catch(err){
+      console.error(err);
+      neuralStatus.textContent = 'error: ' + err.message;
+    }
+  });
+
+  let neuralChunks = [];
+  let neuralChunkIndex = 0;
+  let currentNeuralUrl = null;
+  const neuralCache = new Map(); // key: textId::voiceId::chunkStart -> { blob, alignment }
+
+  function buildChunks(fromOffset){
+    const chunks = [];
+    let pos = fromOffset;
+    while(pos < currentText.length){
+      let end = Math.min(pos + MAX_NEURAL_CHARS, currentText.length);
+      if(end < currentText.length){
+        const backtrack = currentText.lastIndexOf(' ', end);
+        if(backtrack > pos) end = backtrack;
+      }
+      chunks.push({ start: pos, text: currentText.slice(pos, end) });
+      pos = end;
+    }
+    return chunks;
+  }
+
+  function playNeuralFromWord(index){
+    const key = elKey.value.trim();
+    const voiceId = neuralVoiceSelect.value;
+    if(!key || !voiceId){ neuralStatus.textContent = 'missing API key or voice'; return; }
+    stopNeuralPlayback();
+    startWordIndex = index;
+    neuralChunks = buildChunks(words[index].start);
+    neuralChunkIndex = 0;
+    playNeuralChunk();
+  }
+
+  async function playNeuralChunk(){
+    if(neuralChunkIndex >= neuralChunks.length) return;
+    const key = elKey.value.trim();
+    const voiceId = neuralVoiceSelect.value;
+    const chunk = neuralChunks[neuralChunkIndex];
+    const cacheKey = currentTextId + '::' + voiceId + '::' + chunk.start;
+    const chunkLabel = 'chunk ' + (neuralChunkIndex + 1) + '/' + neuralChunks.length;
+
+    let cached = neuralCache.get(cacheKey);
+    if(!cached){
+      neuralStatus.textContent = 'generating ' + chunkLabel + '…';
+      statusText.textContent = 'generating…';
+      try{
+        const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/with-timestamps`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'xi-api-key': key },
+          body: JSON.stringify({ text: chunk.text, model_id: 'eleven_multilingual_v2' })
+        });
+        if(!res.ok){
+          const bodyText = await res.text();
+          throw new Error('HTTP ' + res.status + ' — ' + bodyText.slice(0, 200));
+        }
+        const data = await res.json();
+        const audioBytes = Uint8Array.from(atob(data.audio_base64), c => c.charCodeAt(0));
+        const blob = new Blob([audioBytes], { type: 'audio/mpeg' });
+        cached = { blob, alignment: data.alignment };
+        neuralCache.set(cacheKey, cached);
+        neuralStatus.textContent = 'generated ' + chunkLabel + ' (' + neuralCache.size + ' cached)';
+      } catch(err){
+        console.error(err);
+        neuralStatus.textContent = 'error on ' + chunkLabel + ': ' + err.message;
+        statusText.textContent = 'idle';
+        return;
+      }
+    } else {
+      neuralStatus.textContent = 'using cached audio for ' + chunkLabel;
+    }
+
+    if(currentNeuralUrl) URL.revokeObjectURL(currentNeuralUrl);
+    currentNeuralUrl = URL.createObjectURL(cached.blob);
+    neuralAudio = new Audio(currentNeuralUrl);
+    neuralAudio.playbackRate = parseFloat(rateSlider.value);
+    const align = cached.alignment;
+    const baseOffset = chunk.start;
+
+    function tick(){
+      if(!neuralAudio) return;
+      const t = neuralAudio.currentTime;
+      let charIdx = 0;
+      for(let i = 0; i < align.character_start_times_seconds.length; i++){
+        if(align.character_start_times_seconds[i] <= t) charIdx = i; else break;
+      }
+      const wordIdx = findWordAtOffset(baseOffset + charIdx);
+      if(wordIdx !== -1) highlightWord(wordIdx);
+      neuralRAF = requestAnimationFrame(tick);
+    }
+
+    neuralAudio.onplay = () => {
+      isPlaying = true;
+      playBtn.textContent = '❚❚';
+      statusText.textContent = 'reading… (' + chunkLabel + ')';
+      neuralRAF = requestAnimationFrame(tick);
+    };
+    neuralAudio.onended = () => {
+      cancelAnimationFrame(neuralRAF);
+      neuralChunkIndex++;
+      if(neuralChunkIndex < neuralChunks.length){
+        playNeuralChunk(); // seamless continuation into the next chunk
+      } else {
+        isPlaying = false;
+        playBtn.textContent = '▶';
+        statusText.textContent = 'finished';
+        startWordIndex = 0;
+        clearHighlight();
+      }
+    };
+    neuralAudio.play();
+  }
+
+  function stopNeuralPlayback(){
+    if(neuralAudio){
+      neuralAudio.onended = null;
+      neuralAudio.pause();
+      neuralAudio = null;
+    }
+    if(currentNeuralUrl){ URL.revokeObjectURL(currentNeuralUrl); currentNeuralUrl = null; }
+    if(neuralRAF) cancelAnimationFrame(neuralRAF);
+    neuralChunks = [];
+    neuralChunkIndex = 0;
+  }
+
+  function isNeuralMode(){
+    return engineMode === 'neural' && neuralVoiceSelect.value;
+  }
+
+  document.getElementById('clearCacheBtn').addEventListener('click', () => {
+    neuralCache.clear();
+    neuralStatus.textContent = 'cache cleared';
+  });
+
+  function tokenize(text){
+    // build word list with char offsets, splitting on whitespace but keeping punctuation attached
+    const list = [];
+    const re = /\S+/g;
+    let m;
+    while((m = re.exec(text)) !== null){
+      list.push({ text: m[0], start: m.index, end: m.index + m[0].length });
+    }
+    return list;
+  }
+
+  function renderReader(){
+    reader.innerHTML = words.map((w, i) =>
+      `<span class="w" data-i="${i}">${escapeHtml(w.text)}</span>`
+    ).join(' ');
+  }
+
+  function escapeHtml(s){
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  loadBtn.addEventListener('click', () => {
+    const text = textInput.value.trim();
+    if(!text) return;
+    loadText(text);
+  });
+
+  const fileNameLabel = document.getElementById('fileNameLabel');
+  const epubStatusRow = document.getElementById('epubStatusRow');
+
+  // Without this, browsers don't fire 'change' if you pick the same file twice in a row —
+  // resetting the value on click guarantees a fresh change event every time.
+  fileInput.addEventListener('click', () => { fileInput.value = ''; });
+
+  fileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if(!file) return;
+    fileNameLabel.textContent = file.name;
+    epubStatusRow.style.display = 'flex';
+    const ext = file.name.split('.').pop().toLowerCase();
+    const binaryFormats = ['epub', 'pdf', 'docx'];
+
+    if(binaryFormats.includes(ext)){
+      chapterRow.style.display = 'none';
+      chapters = [];
+      epubStatus.textContent = 'reading…';
+      const fr = new FileReader();
+      fr.onload = () => {
+        if(ext === 'epub') parseEpub(fr.result);
+        else if(ext === 'pdf') parsePdf(fr.result);
+        else if(ext === 'docx') parseDocx(fr.result);
+      };
+      fr.readAsArrayBuffer(file);
+      return;
+    }
+
+    chapterRow.style.display = 'none';
+    chapters = [];
+    const fr = new FileReader();
+    fr.onload = () => {
+      let text = fr.result;
+      if(ext === 'html' || ext === 'htm') text = htmlToText(text);
+      else if(ext === 'md' || ext === 'markdown') text = stripMarkdown(text);
+      else if(ext === 'rtf') text = stripRtf(text);
+      else if(ext !== 'txt'){
+        epubStatus.textContent = 'unsupported file type: .' + ext;
+        return;
+      }
+      epubStatus.textContent = 'loaded';
+      textInput.value = text;
+      loadText(text.trim());
+    };
+    fr.readAsText(file);
+  });
+
+  let ocrWorker = null;
+  const ocrToggle = document.getElementById('ocrToggle');
+
+  async function getOcrWorker(){
+    if(!ocrWorker){
+      epubStatus.textContent = 'loading OCR engine (first scanned page takes longest)…';
+      ocrWorker = await Tesseract.createWorker('eng');
+    }
+    return ocrWorker;
+  }
+
+  async function ocrPage(page){
+    const viewport = page.getViewport({ scale: 2 }); // higher scale = better OCR accuracy, slower
+    const canvas = document.createElement('canvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+    const worker = await getOcrWorker();
+    const { data } = await worker.recognize(canvas);
+    return (data.text || '').trim();
+  }
+
+  async function parsePdf(arrayBuffer){
+    try{
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      chapters = [];
+      for(let p = 1; p <= pdf.numPages; p++){
+        epubStatus.textContent = 'reading page ' + p + '/' + pdf.numPages + '…';
+        const page = await pdf.getPage(p);
+        const content = await page.getTextContent();
+        let text = content.items.map(it => it.str).join(' ').replace(/\s+/g, ' ').trim();
+
+        if(text.length <= 10 && ocrToggle.checked){
+          epubStatus.textContent = 'no text layer on page ' + p + ' — running OCR…';
+          try{
+            text = await ocrPage(page);
+          } catch(ocrErr){
+            console.error('OCR failed on page ' + p, ocrErr);
+          }
+        }
+
+        if(text.length > 10) chapters.push({ title: 'Page ' + p, text });
+      }
+      if(ocrWorker){ await ocrWorker.terminate(); ocrWorker = null; }
+
+      if(chapters.length === 0){
+        epubStatus.textContent = ocrToggle.checked
+          ? 'no extractable text found, even after OCR — the scan quality may be too low'
+          : 'no extractable text found — this PDF may be scanned images; try enabling OCR above';
+        return;
+      }
+      chapterSelect.innerHTML = chapters.map((c, i) =>
+        `<option value="${i}">${escapeHtml(c.title)}</option>`
+      ).join('');
+      chapterRow.style.display = 'flex';
+      epubStatus.textContent = chapters.length + ' pages loaded';
+      loadText(chapters[0].text);
+    } catch(err){
+      console.error(err);
+      epubStatus.textContent = 'could not parse this PDF (' + err.message + ')';
+    }
+  }
+
+  async function parseDocx(arrayBuffer){
+    try{
+      epubStatus.textContent = 'reading document…';
+      const result = await mammoth.extractRawText({ arrayBuffer });
+      const text = (result.value || '').trim();
+      if(!text){
+        epubStatus.textContent = 'no readable text found in this document';
+        return;
+      }
+      epubStatus.textContent = 'document loaded';
+      loadText(text);
+    } catch(err){
+      console.error(err);
+      epubStatus.textContent = 'could not parse this document (' + err.message + ')';
+    }
+  }
+
+  function stripMarkdown(md){
+    return md
+      .replace(/```[\s\S]*?```/g, '')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, '')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      .replace(/^#{1,6}\s+/gm, '')
+      .replace(/(\*\*|__)(.*?)\1/g, '$2')
+      .replace(/(\*|_)(.*?)\1/g, '$2')
+      .replace(/^>\s?/gm, '')
+      .replace(/^[-*+]\s+/gm, '')
+      .replace(/^\d+\.\s+/gm, '')
+      .trim();
+  }
+
+  function stripRtf(rtf){
+    // best-effort only — RTF's full spec is far more complex than this covers
+    return rtf
+      .replace(/\\par[d]?/g, '\n')
+      .replace(/\\[a-zA-Z]+-?\d* ?/g, '')
+      .replace(/[{}]/g, '')
+      .replace(/\\'[0-9a-fA-F]{2}/g, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  function resolvePath(basePath, relativeHref){
+    // resolve a relative href against the directory of the .opf file
+    const baseParts = basePath.split('/');
+    baseParts.pop(); // drop filename, keep directory segments
+    const relParts = relativeHref.split('/');
+    for(const part of relParts){
+      if(part === '.' || part === '') continue;
+      if(part === '..') baseParts.pop();
+      else baseParts.push(part);
+    }
+    return baseParts.join('/');
+  }
+
+  function htmlToText(html){
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    doc.querySelectorAll('script, style').forEach(el => el.remove());
+    return doc.body ? doc.body.innerText.replace(/\n{3,}/g, '\n\n').trim() : '';
+  }
+
+  async function parseEpub(arrayBuffer){
+    try{
+      const zip = await JSZip.loadAsync(arrayBuffer);
+
+      const containerXml = await zip.file('META-INF/container.xml').async('string');
+      const containerDoc = new DOMParser().parseFromString(containerXml, 'application/xml');
+      const opfPath = containerDoc.querySelector('rootfile').getAttribute('full-path');
+
+      const opfXml = await zip.file(opfPath).async('string');
+      const opfDoc = new DOMParser().parseFromString(opfXml, 'application/xml');
+
+      const manifest = {};
+      opfDoc.querySelectorAll('manifest > item').forEach(item => {
+        manifest[item.getAttribute('id')] = item.getAttribute('href');
+      });
+
+      const spineIds = Array.from(opfDoc.querySelectorAll('spine > itemref'))
+        .map(el => el.getAttribute('idref'));
+
+      epubStatus.textContent = 'reading ' + spineIds.length + ' sections…';
+
+      chapters = [];
+      for(let i = 0; i < spineIds.length; i++){
+        const href = manifest[spineIds[i]];
+        if(!href) continue;
+        const fullPath = resolvePath(opfPath, href);
+        const fileObj = zip.file(fullPath);
+        if(!fileObj) continue;
+        const html = await fileObj.async('string');
+        const text = htmlToText(html);
+        if(text.length < 20) continue; // skip near-empty sections (cover pages, nav, etc.)
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const h = doc.querySelector('h1, h2, title');
+        const title = (h && h.textContent.trim()) || ('Section ' + (chapters.length + 1));
+        chapters.push({ title, text });
+      }
+
+      if(chapters.length === 0){
+        epubStatus.textContent = 'no readable sections found';
+        return;
+      }
+
+      chapterSelect.innerHTML = chapters.map((c, i) =>
+        `<option value="${i}">${escapeHtml(c.title)}</option>`
+      ).join('');
+      chapterRow.style.display = 'flex';
+      epubStatus.textContent = chapters.length + ' chapters loaded';
+      loadText(chapters[0].text);
+    } catch(err){
+      console.error(err);
+      epubStatus.textContent = 'could not parse this EPUB (' + err.message + ')';
+    }
+  }
+
+  chapterSelect.addEventListener('change', () => {
+    const idx = parseInt(chapterSelect.value, 10);
+    if(chapters[idx]) loadText(chapters[idx].text);
+  });
+
+  function loadText(text){
+    stopPlayback();
+    currentText = text;
+    currentTextId++;
+    words = tokenize(text);
+    startWordIndex = 0;
+    renderReader();
+    statusText.textContent = words.length + ' words loaded';
+  }
+
+  reader.addEventListener('click', (e) => {
+    const span = e.target.closest('.w');
+    if(!span) return;
+    const idx = parseInt(span.dataset.i, 10);
+    if(isNeuralMode()) playNeuralFromWord(idx);
+    else playFromWord(idx);
+  });
+
+  playBtn.addEventListener('click', () => {
+    if(isNeuralMode()){
+      if(neuralAudio && !neuralAudio.paused){
+        neuralAudio.pause();
+        isPlaying = false;
+        playBtn.textContent = '▶';
+        statusText.textContent = 'paused';
+        cancelAnimationFrame(neuralRAF);
+      } else if(neuralAudio){
+        neuralAudio.play();
+        isPlaying = true;
+        playBtn.textContent = '❚❚';
+        statusText.textContent = 'reading…';
+      } else {
+        playNeuralFromWord(startWordIndex);
+      }
+      return;
+    }
+    if(isPlaying){
+      window.speechSynthesis.pause();
+      isPlaying = false;
+      playBtn.textContent = '▶';
+      statusText.textContent = 'paused';
+    } else if(window.speechSynthesis.paused){
+      window.speechSynthesis.resume();
+      isPlaying = true;
+      playBtn.textContent = '❚❚';
+      statusText.textContent = 'reading…';
+    } else {
+      playFromWord(startWordIndex);
+    }
+  });
+
+  stopBtn.addEventListener('click', stopPlayback);
+
+  function stopPlayback(){
+    stopNeuralPlayback();
+    window.speechSynthesis.cancel();
+    isPlaying = false;
+    startWordIndex = 0;
+    playBtn.textContent = '▶';
+    statusText.textContent = words.length ? 'idle' : 'idle';
+    clearHighlight();
+  }
+
+  function clearHighlight(){
+    reader.querySelectorAll('.w.active').forEach(el => el.classList.remove('active'));
+    lastHighlightedIndex = -1;
+  }
+
+  function playFromWord(index){
+    if(words.length === 0) return;
+    window.speechSynthesis.cancel();
+    startWordIndex = index;
+    const substring = currentText.slice(words[index].start);
+    const utter = new SpeechSynthesisUtterance(substring);
+    const vIdx = voiceSelect.value;
+    if(voices[vIdx]) utter.voice = voices[vIdx];
+    utter.rate = parseFloat(rateSlider.value);
+
+    utter.onboundary = (event) => {
+      if(event.name && event.name !== 'word') return;
+      // event.charIndex is relative to `substring`; map back to global offset
+      const globalCharIndex = words[index].start + event.charIndex;
+      const wordIdx = findWordAtOffset(globalCharIndex);
+      if(wordIdx !== -1) highlightWord(wordIdx);
+    };
+    utter.onstart = () => {
+      isPlaying = true;
+      playBtn.textContent = '❚❚';
+      statusText.textContent = 'reading…';
+    };
+    utter.onend = () => {
+      isPlaying = false;
+      playBtn.textContent = '▶';
+      statusText.textContent = 'finished';
+      startWordIndex = 0;
+      clearHighlight();
+    };
+    currentUtterance = utter;
+    window.speechSynthesis.speak(utter);
+  }
+
+  function findWordAtOffset(offset){
+    // linear scan is fine at prototype scale; a real build would binary-search
+    for(let i = 0; i < words.length; i++){
+      if(offset >= words[i].start && offset < words[i].end) return i;
+    }
+    return -1;
+  }
+
+  let lastHighlightedIndex = -1;
+
+  function highlightWord(index){
+    if(index === lastHighlightedIndex) return; // avoid redundant work + scroll fighting every frame
+    lastHighlightedIndex = index;
+    clearHighlight();
+    const el = reader.querySelector(`.w[data-i="${index}"]`);
+    if(el){
+      el.classList.add('active');
+      const rect = el.getBoundingClientRect();
+      const inView = rect.top >= 80 && rect.bottom <= window.innerHeight - 160;
+      if(!inView){
+        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
+    }
+  }
+
+  rateSlider.addEventListener('input', () => {
+    rateLabel.textContent = parseFloat(rateSlider.value).toFixed(1) + 'x';
+    const rate = parseFloat(rateSlider.value);
+    if(currentUtterance) currentUtterance.rate = rate;
+    if(neuralAudio) neuralAudio.playbackRate = rate;
+  });
+
+  // initial load of the sample text
+  loadText(textInput.value.trim());
+</script>
+
+</body>
+</html>
