@@ -100,7 +100,6 @@
       display: flex;
       align-items: center;
       gap: 0.75rem;
-      text-decoration: none;
       color: var(--text-main);
     }
 
@@ -140,11 +139,6 @@
       transition: border-color var(--transition);
     }
 
-    select option {
-      background: var(--panel-bg);
-      color: var(--text-main);
-    }
-
     button:hover, select:hover, label.btn-ui:hover { border-color: var(--accent); }
     button.primary {
       background: var(--accent);
@@ -154,7 +148,7 @@
     }
     button.primary:hover { background: var(--accent-active); }
 
-    /* ENGINE & VOICE BAR */
+    /* ENGINE & VOICE CONTROLS */
     .controls-panel {
       max-width: 860px;
       width: 100%;
@@ -230,7 +224,7 @@
       cursor: pointer;
     }
 
-    /* READING CANVAS */
+    /* READING AREA */
     main {
       flex: 1;
       display: flex;
@@ -262,7 +256,7 @@
       user-select: text;
     }
 
-    /* CLEAN HIGHLIGHTER (NO UNDERLINES) */
+    /* SOFT HIGHLIGHT (NO UNDERLINE) */
     .sentence {
       padding: 2px 4px;
       border-radius: 4px;
@@ -325,13 +319,13 @@
     </div>
 
     <div class="header-actions">
-      <!-- Open File -->
+      <!-- File Picker -->
       <label class="btn-ui" for="fileInput">
         📁 Open Document
       </label>
-      <input type="file" id="fileInput" accept=".txt,.md,.pdf,.docx,.epub,.html" style="display:none;" />
+      <input type="file" id="fileInput" accept=".txt,.md,.pdf,.docx,.epub,.html,.htm" style="display:none;" />
 
-      <!-- Theme -->
+      <!-- Theme Switcher -->
       <select id="themeSelect">
         <option value="light">Clean Light</option>
         <option value="sepia">Sepia Paper</option>
@@ -345,9 +339,9 @@
   </header>
 
   <main>
-    <!-- CONTROL PANEL (ENGINES & VOICES) -->
+    <!-- CONTROLS PANEL -->
     <div class="controls-panel">
-      <!-- Engine Switcher Pills -->
+      <!-- Engine Selector Pills -->
       <div class="engine-tabs-group">
         <button class="engine-tab active" data-engine="browser">Browser / Native</button>
         <button class="engine-tab" data-engine="elevenlabs">ElevenLabs</button>
@@ -357,7 +351,7 @@
       </div>
 
       <div class="settings-sub-bar">
-        <!-- Voice Dropdown -->
+        <!-- Voice Picker -->
         <div class="setting-group">
           <span>Voice:</span>
           <select id="voicePicker" style="min-width: 190px;"></select>
@@ -372,7 +366,7 @@
           </div>
         </div>
 
-        <!-- Continuous Autoplay Toggle -->
+        <!-- Autoplay -->
         <label class="setting-group" style="cursor:pointer;">
           <input type="checkbox" id="autoFlipCheck" checked style="accent-color: var(--accent);" />
           <span>Auto-turn page</span>
@@ -403,7 +397,7 @@
   <script>
     // PRESET ENGINE VOICES
     const voicePresets = {
-      browser: [], // Populated dynamically via browser speech engine
+      browser: [],
       elevenlabs: [
         { id: '21m00Tcm4TlvDq8ikWAM', name: 'Rachel (Calm & Natural)' },
         { id: 'AZnzlk1XvdvUeBnXmlld', name: 'Domi (Empathetic)' },
@@ -436,7 +430,7 @@
       [
         "Welcome to your updated Marginalia reader workspace.",
         "Each reading engine is clickable above, and your voice options populate automatically.",
-        "Adjusting the speed slider now updates the speed badge in real time.",
+        "Adjusting the speed slider updates the speed badge in real time.",
         "Text highlights cleanly with a soft highlighter tint and no underlines.",
         "Open any EPUB, PDF, Word, or text file to start reading."
       ]
@@ -466,7 +460,7 @@
     const speedDisplay = document.getElementById('speedDisplay');
     const fileInput = document.getElementById('fileInput');
 
-    // --- POPULATE VOICES FOR ACTIVE ENGINE ---
+    // --- POPULATE VOICES ---
     function populateVoices() {
       voicePicker.innerHTML = '';
 
@@ -496,7 +490,6 @@
       }
     }
 
-    // Handle asynchronous voice loading in Chrome / Edge
     if (typeof speechSynthesis !== 'undefined') {
       speechSynthesis.onvoiceschanged = () => {
         if (activeEngine === 'browser') populateVoices();
@@ -506,7 +499,7 @@
       if (activeEngine === 'browser') populateVoices();
     }, 250);
 
-    // --- ENGINE TAB CLICKS ---
+    // --- ENGINE SELECTION ---
     document.querySelectorAll('.engine-tab').forEach(tab => {
       tab.addEventListener('click', () => {
         document.querySelectorAll('.engine-tab').forEach(t => t.classList.remove('active'));
@@ -522,19 +515,156 @@
       });
     });
 
-    // --- SPEED SLIDER LISTENER ---
+    // --- SPEED CONTROL ---
     speedSlider.addEventListener('input', (e) => {
       playbackSpeed = parseFloat(e.target.value);
       speedDisplay.textContent = `${playbackSpeed.toFixed(1)}x`;
 
       if (isPlaying) {
         if (activeEngine === 'browser') {
-          // Restart utterance at new speed
           browserSpeech.cancel();
           playCurrentSentence();
         } else {
           audioElement.playbackRate = playbackSpeed;
         }
+      }
+    });
+
+    // --- HIGH-PERFORMANCE SENTENCE SEGMENTER ---
+    function splitIntoSentences(text) {
+      if (!text || !text.trim()) return [];
+
+      // 1. Browser Native Intl.Segmenter (Standard sentence tokenizer)
+      if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+        try {
+          const segmenter = new Intl.Segmenter('en', { granularity: 'sentence' });
+          const segments = Array.from(segmenter.segment(text));
+          const sentences = segments
+            .map(s => s.segment.replace(/\s+/g, ' ').trim())
+            .filter(s => s.length > 0);
+          if (sentences.length > 0) return sentences;
+        } catch (e) {
+          console.warn("Intl.Segmenter fallback:", e);
+        }
+      }
+
+      // 2. Safe, non-backtracking fallback
+      const rawSentences = text
+        .replace(/([.?!]+)(\s+)/g, "$1\n---BREAK---\n")
+        .split("\n---BREAK---\n");
+
+      let cleaned = rawSentences
+        .map(s => s.replace(/\s+/g, ' ').trim())
+        .filter(s => s.length > 0);
+
+      // 3. Fallback for text blocks without standard punctuation marks
+      if (cleaned.length === 0 && text.trim().length > 0) {
+        const words = text.trim().replace(/\s+/g, ' ').split(' ');
+        cleaned = [];
+        for (let i = 0; i < words.length; i += 25) {
+          cleaned.push(words.slice(i, i + 25).join(' '));
+        }
+      }
+      return cleaned;
+    }
+
+    // --- ROBUST FILE PARSER ---
+    fileInput.addEventListener('change', async (event) => {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      stopAudio();
+      contentPane.innerHTML = `<div style="text-align:center; padding:3rem; color:var(--text-muted); font-style:italic;">Processing document: ${file.name}...</div>`;
+
+      try {
+        const ext = file.name.split('.').pop().toLowerCase();
+        let extractedText = "";
+
+        if (ext === 'txt' || ext === 'md') {
+          extractedText = await file.text();
+        } 
+        else if (ext === 'html' || ext === 'htm') {
+          const raw = await file.text();
+          const doc = new DOMParser().parseFromString(raw, 'text/html');
+          extractedText = (doc.body ? doc.body.textContent : doc.documentElement.textContent) || raw.replace(/<[^>]+>/g, ' ');
+        } 
+        else if (ext === 'docx') {
+          const buf = await file.arrayBuffer();
+          const res = await mammoth.extractRawText({ arrayBuffer: buf });
+          extractedText = res.value || "";
+        } 
+        else if (ext === 'pdf') {
+          const buf = await file.arrayBuffer();
+          const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+          let pages = [];
+          for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const content = await page.getTextContent();
+            const pageStr = content.items.map(it => it.str).join(' ');
+            if (pageStr.trim()) pages.push(pageStr.trim());
+          }
+          extractedText = pages.join('\n\n');
+
+          if (!extractedText.trim()) {
+            throw new Error("This PDF appears to be a scanned image or has no selectable digital text.");
+          }
+        } 
+        else if (ext === 'epub') {
+          const buf = await file.arrayBuffer();
+          const zip = await JSZip.loadAsync(buf);
+
+          // Find chapter files (.xhtml, .html, .htm)
+          const fileNames = Object.keys(zip.files).filter(name => {
+            const lower = name.toLowerCase();
+            return (lower.endsWith('.xhtml') || lower.endsWith('.html') || lower.endsWith('.htm')) &&
+                   !lower.includes('toc') &&
+                   !lower.endsWith('.ncx');
+          }).sort();
+
+          let chapters = [];
+          for (const name of fileNames) {
+            const rawHtml = await zip.files[name].async("text");
+            const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
+            // Use textContent (preserves text in detached memory)
+            const text = (doc.body ? doc.body.textContent : doc.documentElement.textContent) || '';
+            const clean = text.replace(/\s+/g, ' ').trim();
+            if (clean.length > 25) {
+              chapters.push(clean);
+            }
+          }
+
+          if (chapters.length === 0) {
+            // Fallback: sweep through all files in archive
+            for (const name of Object.keys(zip.files)) {
+              if (/\.(xhtml|html|htm|txt|xml)$/i.test(name) && !name.includes('META-INF')) {
+                const raw = await zip.files[name].async("text");
+                const stripped = raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+                if (stripped.length > 50) chapters.push(stripped);
+              }
+            }
+          }
+          extractedText = chapters.join('\n\n');
+        }
+
+        // Tokenize into clean sentences
+        const sentences = splitIntoSentences(extractedText);
+        if (sentences.length === 0) {
+          throw new Error("No readable text detected in this document.");
+        }
+
+        // Paginate: 5 sentences per page
+        bookPages = [];
+        const perPage = 5;
+        for (let i = 0; i < sentences.length; i += perPage) {
+          bookPages.push(sentences.slice(i, i + perPage));
+        }
+
+        currentPage = 0;
+        currentSentenceIdx = 0;
+        renderPage(0);
+      } catch (err) {
+        alert("Failed to parse file: " + err.message);
+        renderPage(currentPage);
       }
     });
 
@@ -690,74 +820,6 @@
       audioElement.pause();
       audioElement.currentTime = 0;
     }
-
-    // --- UNIVERSAL FILE PARSER ---
-    fileInput.addEventListener('change', async (event) => {
-      const file = event.target.files[0];
-      if (!file) return;
-
-      stopAudio();
-      contentPane.innerHTML = `<div style="text-align:center; padding:3rem; color:var(--text-muted); font-style:italic;">Processing document...</div>`;
-
-      try {
-        const ext = file.name.split('.').pop().toLowerCase();
-        let extractedText = "";
-
-        if (ext === 'txt' || ext === 'md') {
-          extractedText = await file.text();
-        } else if (ext === 'html') {
-          const raw = await file.text();
-          const doc = new DOMParser().parseFromString(raw, 'text/html');
-          extractedText = doc.body.innerText || "";
-        } else if (ext === 'docx') {
-          const buf = await file.arrayBuffer();
-          const res = await mammoth.extractRawText({ arrayBuffer: buf });
-          extractedText = res.value;
-        } else if (ext === 'pdf') {
-          const buf = await file.arrayBuffer();
-          const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-          let acc = [];
-          for (let i = 1; i <= pdf.numPages; i++) {
-            const page = await pdf.getPage(i);
-            const content = await page.getTextContent();
-            acc.push(content.items.map(it => it.str).join(' '));
-          }
-          extractedText = acc.join('\n\n');
-        } else if (ext === 'epub') {
-          const buf = await file.arrayBuffer();
-          const zip = await JSZip.loadAsync(buf);
-          const chapters = Object.keys(zip.files).filter(name => 
-            (name.endsWith('.xhtml') || name.endsWith('.html')) && !name.toLowerCase().includes('toc')
-          ).sort();
-
-          let acc = [];
-          for (const chap of chapters) {
-            const raw = await zip.files[chap].async("text");
-            const doc = new DOMParser().parseFromString(raw, 'text/html');
-            acc.push(doc.body.innerText || "");
-          }
-          extractedText = acc.join('\n\n');
-        }
-
-        const sanitized = extractedText.replace(/\s+/g, ' ').trim();
-        const sentences = sanitized.match(/[^.!?]+[.!?]+(?:\s|$)\vert{}[^.!?]+$/g)?.map(s => s.trim()).filter(s => s.length > 0) || [];
-
-        if (sentences.length === 0) throw new Error("No readable text detected.");
-
-        bookPages = [];
-        const perPage = 5;
-        for (let i = 0; i < sentences.length; i += perPage) {
-          bookPages.push(sentences.slice(i, i + perPage));
-        }
-
-        currentPage = 0;
-        currentSentenceIdx = 0;
-        renderPage(0);
-      } catch (err) {
-        alert("Failed to parse file: " + err.message);
-        renderPage(currentPage);
-      }
-    });
 
     // --- CONTROLS SETUP ---
     playBtn.addEventListener('click', () => {
