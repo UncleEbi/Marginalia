@@ -278,7 +278,7 @@
       text-decoration: none !important;
     }
 
-    /* FOOTER */
+    /* FOOTER & CLEAN PAGE SELECTOR */
     .footer-bar {
       margin-top: 3rem;
       display: flex;
@@ -296,10 +296,24 @@
       color: var(--text-muted);
     }
 
+    /* Remove browser arrows and center page number cleanly */
+    .page-jump-input::-webkit-outer-spin-button,
+    .page-jump-input::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+
     .page-jump-input {
-      width: 55px;
-      padding: 0.3rem;
+      -moz-appearance: textfield;
+      appearance: textfield;
+      width: 72px;
+      min-width: 72px;
+      padding: 0.35rem 0.5rem;
       text-align: center;
+      font-weight: 600;
+      font-size: 0.95rem;
+      line-height: 1.2;
+      border-radius: 6px;
     }
   </style>
 </head>
@@ -530,11 +544,10 @@
       }
     });
 
-    // --- HIGH-PERFORMANCE SENTENCE SEGMENTER ---
+    // --- SENTENCE SEGMENTER ---
     function splitIntoSentences(text) {
       if (!text || !text.trim()) return [];
 
-      // 1. Browser Native Intl.Segmenter (Standard sentence tokenizer)
       if (typeof Intl !== 'undefined' && Intl.Segmenter) {
         try {
           const segmenter = new Intl.Segmenter('en', { granularity: 'sentence' });
@@ -548,7 +561,6 @@
         }
       }
 
-      // 2. Safe, non-backtracking fallback
       const rawSentences = text
         .replace(/([.?!]+)(\s+)/g, "$1\n---BREAK---\n")
         .split("\n---BREAK---\n");
@@ -557,7 +569,6 @@
         .map(s => s.replace(/\s+/g, ' ').trim())
         .filter(s => s.length > 0);
 
-      // 3. Fallback for text blocks without standard punctuation marks
       if (cleaned.length === 0 && text.trim().length > 0) {
         const words = text.trim().replace(/\s+/g, ' ').split(' ');
         cleaned = [];
@@ -568,7 +579,7 @@
       return cleaned;
     }
 
-    // --- ROBUST FILE PARSER ---
+    // --- FILE PARSER ---
     fileInput.addEventListener('change', async (event) => {
       const file = event.target.files[0];
       if (!file) return;
@@ -613,7 +624,6 @@
           const buf = await file.arrayBuffer();
           const zip = await JSZip.loadAsync(buf);
 
-          // Find chapter files (.xhtml, .html, .htm)
           const fileNames = Object.keys(zip.files).filter(name => {
             const lower = name.toLowerCase();
             return (lower.endsWith('.xhtml') || lower.endsWith('.html') || lower.endsWith('.htm')) &&
@@ -625,7 +635,6 @@
           for (const name of fileNames) {
             const rawHtml = await zip.files[name].async("text");
             const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
-            // Use textContent (preserves text in detached memory)
             const text = (doc.body ? doc.body.textContent : doc.documentElement.textContent) || '';
             const clean = text.replace(/\s+/g, ' ').trim();
             if (clean.length > 25) {
@@ -634,7 +643,6 @@
           }
 
           if (chapters.length === 0) {
-            // Fallback: sweep through all files in archive
             for (const name of Object.keys(zip.files)) {
               if (/\.(xhtml|html|htm|txt|xml)$/i.test(name) && !name.includes('META-INF')) {
                 const raw = await zip.files[name].async("text");
@@ -646,13 +654,11 @@
           extractedText = chapters.join('\n\n');
         }
 
-        // Tokenize into clean sentences
         const sentences = splitIntoSentences(extractedText);
         if (sentences.length === 0) {
           throw new Error("No readable text detected in this document.");
         }
 
-        // Paginate: 5 sentences per page
         bookPages = [];
         const perPage = 5;
         for (let i = 0; i < sentences.length; i += perPage) {
