@@ -4,13 +4,26 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Marginalia — Read-Along Reader</title>
+
+  <!-- Client-Side Document Parsers -->
+  <!-- 1. PDF Parser -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <!-- 2. Word (.docx) Parser -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+  <!-- 3. EPUB (.epub) Container Unzipper -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+  <script>
+    // Configure PDF.js worker
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  </script>
+
   <style>
     :root {
       --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Georgia, serif;
       --transition: 0.25s ease;
     }
 
-    /* THEMES DEFINITION */
     [data-theme="light"] {
       --bg-color: #f8fafc;
       --panel-bg: #ffffff;
@@ -67,7 +80,7 @@
     }
 
     header {
-      padding: 1rem 2rem;
+      padding: 0.85rem 1.75rem;
       background: var(--panel-bg);
       border-bottom: 1px solid var(--border-color);
       display: flex;
@@ -82,22 +95,26 @@
     .controls-row {
       display: flex;
       align-items: center;
-      gap: 0.75rem;
+      gap: 0.65rem;
       flex-wrap: wrap;
     }
 
-    select, button {
+    select, button, label.btn-upload {
       background: var(--bg-color);
       color: var(--text-color);
       border: 1px solid var(--border-color);
-      padding: 0.5rem 0.75rem;
+      padding: 0.45rem 0.75rem;
       border-radius: 6px;
-      font-size: 0.9rem;
+      font-size: 0.85rem;
       cursor: pointer;
       outline: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      user-select: none;
     }
 
-    button:hover, select:hover { border-color: var(--accent-color); }
+    button:hover, select:hover, label.btn-upload:hover { border-color: var(--accent-color); }
     button.primary {
       background: var(--accent-color);
       color: #fff;
@@ -113,7 +130,7 @@
     }
 
     .reader-card {
-      max-width: 760px;
+      max-width: 780px;
       width: 100%;
       background: var(--panel-bg);
       border: 1px solid var(--border-color);
@@ -123,12 +140,20 @@
       display: flex;
       flex-direction: column;
       justify-content: space-between;
+      min-height: 480px;
     }
 
     .book-content {
       font-size: 1.25rem;
-      line-height: 2;
+      line-height: 2.1;
       user-select: text;
+    }
+
+    .status-msg {
+      text-align: center;
+      color: var(--text-muted);
+      font-style: italic;
+      padding: 2rem 0;
     }
 
     .sentence {
@@ -167,6 +192,12 @@
     <div class="brand">Marginalia</div>
 
     <div class="controls-row">
+      <!-- Universal File Upload -->
+      <label class="btn-upload" for="fileInput">
+        📁 Open File
+      </label>
+      <input type="file" id="fileInput" accept=".txt,.md,.rtf,.pdf,.docx,.epub,.html,.htm" style="display:none;" />
+
       <!-- Theme Selection -->
       <label for="themeSelect">Theme:</label>
       <select id="themeSelect">
@@ -184,7 +215,7 @@
       </select>
 
       <!-- Autoplay Toggle -->
-      <label style="display:flex; align-items:center; gap:0.3rem; font-size:0.9rem; cursor:pointer;">
+      <label style="display:flex; align-items:center; gap:0.3rem; font-size:0.85rem; cursor:pointer;">
         <input type="checkbox" id="autoFlipCheck" checked />
         Auto-turn page
       </label>
@@ -200,7 +231,7 @@
 
       <div class="footer-bar">
         <button id="prevPageBtn">← Previous Page</button>
-        <span id="pageIndicator" class="page-indicator">Page 1 of 3</span>
+        <span id="pageIndicator" class="page-indicator">Page 1 of 1</span>
         <button id="nextPageBtn">Next Page →</button>
       </div>
     </div>
@@ -209,35 +240,24 @@
   <audio id="neuralAudio" style="display:none;"></audio>
 
   <script>
-    // Sample Book Data Structure
-    const bookPages = [
+    let bookPages = [
       [
-        "Welcome to the high-performance read-along experience.",
-        "This reader handles continuous synthesis across arbitrary documents.",
-        "When the speech player finishes this paragraph, it will automatically advance the page.",
-        "You do not need to pause or touch the screen to keep listening."
-      ],
-      [
-        "You are now on page two.",
-        "Notice how the reader kept playing seamlessly without interruption.",
-        "You can switch between Sepia, Light, Dark, or OLED themes anytime in the top bar.",
-        "All visual settings persist even if you reload the page."
-      ],
-      [
-        "This is the third and final page in this demo chapter.",
-        "Once this final sentence ends, the audio will complete smoothly.",
-        "You can tap on any individual sentence directly to jump the reading position."
+        "Welcome to Marginalia.",
+        "Click 'Open File' in the toolbar to import your books and documents.",
+        "Supported formats include EPUB, PDF, DOCX, Markdown, HTML, and TXT.",
+        "Your reading progress and audio continue automatically across pages."
       ]
     ];
 
     let currentPage = 0;
     let currentSentenceIdx = 0;
     let isPlaying = false;
-    let browserSpeech = window.speechSynthesis;
+    const browserSpeech = window.speechSynthesis;
     let currentUtterance = null;
     const audioElement = document.getElementById('neuralAudio');
 
-    // DOM References
+    // DOM Elements
+    const fileInput = document.getElementById('fileInput');
     const contentPane = document.getElementById('contentPane');
     const playBtn = document.getElementById('playBtn');
     const pauseBtn = document.getElementById('pauseBtn');
@@ -247,6 +267,104 @@
     const autoFlipCheck = document.getElementById('autoFlipCheck');
     const themeSelect = document.getElementById('themeSelect');
     const engineSelect = document.getElementById('engineSelect');
+
+    // --- UNIVERSAL FILE LOADER ---
+    fileInput.addEventListener('change', async (event) => {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      stopAudio();
+      contentPane.innerHTML = `<div class="status-msg">Extracting text from "${file.name}"...</div>`;
+
+      try {
+        const ext = file.name.split('.').pop().toLowerCase();
+        let extractedText = "";
+
+        if (ext === 'txt' || ext === 'md' || ext === 'rtf') {
+          extractedText = await file.text();
+        } 
+        else if (ext === 'html' || ext === 'htm') {
+          const rawHtml = await file.text();
+          const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
+          extractedText = doc.body.innerText || doc.body.textContent || "";
+        } 
+        else if (ext === 'docx') {
+          const arrayBuffer = await file.arrayBuffer();
+          const result = await mammoth.extractRawText({ arrayBuffer });
+          extractedText = result.value;
+        } 
+        else if (ext === 'pdf') {
+          const arrayBuffer = await file.arrayBuffer();
+          const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+          let pagesText = [];
+          for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const content = await page.getTextContent();
+            const text = content.items.map(item => item.str).join(' ');
+            pagesText.push(text);
+          }
+          extractedText = pagesText.join('\n\n');
+        } 
+        else if (ext === 'epub') {
+          const arrayBuffer = await file.arrayBuffer();
+          const zip = await JSZip.loadAsync(arrayBuffer);
+          
+          // Locate and extract all XHTML/HTML chapter contents in the EPUB archive
+          const chapterFiles = Object.keys(zip.files).filter(name => 
+            (name.endsWith('.xhtml') || name.endsWith('.html') || name.endsWith('.htm')) && 
+            !name.toLowerCase().includes('toc')
+          ).sort();
+
+          let fullEpub = [];
+          for (const chap of chapterFiles) {
+            const rawContent = await zip.files[chap].async("text");
+            const doc = new DOMParser().parseFromString(rawContent, 'text/html');
+            const cleanText = doc.body.innerText || doc.body.textContent || "";
+            if (cleanText.trim()) fullEpub.push(cleanText.trim());
+          }
+          extractedText = fullEpub.join('\n\n');
+        } 
+        else {
+          alert(`Unsupported file format: .${ext}`);
+          renderPage(currentPage);
+          return;
+        }
+
+        paginateRawText(extractedText);
+      } catch (err) {
+        console.error("File parsing error:", err);
+        alert(`Failed to load document: ${err.message}`);
+        renderPage(currentPage);
+      }
+    });
+
+    // Split text into coherent sentences and chunk into clean 5-sentence pages
+    function paginateRawText(rawText) {
+      const sanitized = rawText
+        .replace(/\r\n/g, ' ')
+        .replace(/\n+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      const sentenceRegex = /[^.!?]+[.!?]+(?:\s|$)\vert{}[^.!?]+$/g;
+      const matches = sanitized.match(sentenceRegex) || [sanitized];
+      const cleaned = matches.map(s => s.trim()).filter(s => s.length > 0);
+
+      if (cleaned.length === 0) {
+        alert("No readable text found in document.");
+        return;
+      }
+
+      bookPages = [];
+      const sentencesPerPage = 5;
+      for (let i = 0; i < cleaned.length; i += sentencesPerPage) {
+        bookPages.push(cleaned.slice(i, i + sentencesPerPage));
+      }
+
+      currentPage = 0;
+      currentSentenceIdx = 0;
+      renderPage(currentPage);
+    }
 
     // --- THEME MANAGEMENT ---
     function initTheme() {
@@ -264,7 +382,7 @@
     // --- PAGE RENDERING ---
     function renderPage(pageIdx) {
       contentPane.innerHTML = '';
-      const sentences = bookPages[pageIdx];
+      const sentences = bookPages[pageIdx] || [];
 
       sentences.forEach((txt, idx) => {
         const span = document.createElement('span');
@@ -285,7 +403,7 @@
 
       pageIndicator.textContent = `Page ${pageIdx + 1} of ${bookPages.length}`;
       prevPageBtn.disabled = pageIdx === 0;
-      nextPageBtn.disabled = pageIdx === bookPages.length - 1;
+      nextPageBtn.disabled = pageIdx >= bookPages.length - 1;
       updateSentenceHighlight();
     }
 
@@ -298,11 +416,12 @@
       }
     }
 
-    // --- PLAYBACK ENGINE ---
+    // --- SPEECH ENGINE ---
     async function playCurrentSentence() {
       const pageSentences = bookPages[currentPage];
+      if (!pageSentences || pageSentences.length === 0) return;
 
-      // End of Page Condition
+      // Auto-page progression
       if (currentSentenceIdx >= pageSentences.length) {
         if (autoFlipCheck.checked && currentPage < bookPages.length - 1) {
           currentPage++;
@@ -338,7 +457,7 @@
       };
 
       currentUtterance.onerror = (e) => {
-        console.error("Browser speech error:", e);
+        console.error("SpeechSynthesis error:", e);
         stopAudio();
       };
 
@@ -357,7 +476,7 @@
           },
           body: JSON.stringify({
             text: text,
-            voiceId: '21m00Tcm4TlvDq8ikWAM', // Standard ElevenLabs Rachel
+            voiceId: '21m00Tcm4TlvDq8ikWAM',
             engine: 'elevenlabs'
           })
         });
@@ -369,10 +488,9 @@
           return;
         }
 
-        if (!res.ok) throw new Error(`Proxy error ${res.status}`);
+        if (!res.ok) throw new Error(`Proxy error: ${res.status}`);
         const data = await res.json();
 
-        // Support base64 payloads
         const audioSrc = data.audio_base64 
           ? `data:audio/mp3;base64,${data.audio_base64}`
           : (data.audioUrl || '');
@@ -387,7 +505,7 @@
         };
 
       } catch (err) {
-        console.warn("Neural backend unavailable, falling back to local voice:", err);
+        console.warn("Neural backend unavailable, falling back to native voice:", err);
         speakNative(text);
       }
     }
@@ -399,7 +517,7 @@
       audioElement.currentTime = 0;
     }
 
-    // --- EVENT HANDLERS ---
+    // --- CONTROLS ---
     playBtn.addEventListener('click', () => {
       isPlaying = true;
       playCurrentSentence();
@@ -437,7 +555,7 @@
       }
     });
 
-    // --- INIT ---
+    // Initialize
     initTheme();
     renderPage(currentPage);
   </script>
