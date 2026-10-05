@@ -482,7 +482,6 @@
       cursor: pointer;
     }
 
-    /* INTERACTIVE PAGE & CHAPTER PILL */
     .player-status-group {
       display: flex;
       flex-direction: column;
@@ -662,13 +661,17 @@
       border: 1px solid var(--border);
       background: var(--bg-main);
       cursor: pointer;
+      gap: 0.5rem;
+      transition: border-color var(--transition);
     }
+    .shelf-card:hover { border-color: var(--accent); }
 
     .shelf-card-info {
       display: flex;
       flex-direction: column;
       gap: 0.2rem;
-      max-width: 80%;
+      flex: 1;
+      min-width: 0;
     }
     .shelf-card-title {
       font-weight: 600;
@@ -678,6 +681,27 @@
       text-overflow: ellipsis;
     }
     .shelf-card-sub { font-size: 0.74rem; color: var(--text-muted); }
+
+    .shelf-action-group {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      flex-shrink: 0;
+    }
+
+    .shelf-delete-btn {
+      background: transparent;
+      border: none;
+      color: #ef4444;
+      font-size: 1.05rem;
+      padding: 0.25rem 0.45rem;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: background var(--transition);
+    }
+    .shelf-delete-btn:hover {
+      background: rgba(239, 68, 68, 0.12);
+    }
 
     .bookmark-ribbon-btn {
       background: transparent;
@@ -856,7 +880,7 @@
     </div>
   </main>
 
-  <!-- STICKY BOTTOM PLAYER WITH INTERACTIVE CHAPTER/PAGE TRIGGER -->
+  <!-- STICKY BOTTOM PLAYER WITH CHAPTER/PAGE TRIGGER -->
   <div class="mobile-player-bar">
     <div class="player-nav-group">
       <button id="prevPageBtn" class="player-btn-nav" title="Previous Page">←</button>
@@ -864,7 +888,6 @@
       <button id="nextPageBtn" class="player-btn-nav" title="Next Page">→</button>
     </div>
 
-    <!-- Tappable Status Pill: Opens Chapter & Page Jump Dialog -->
     <div class="player-status-group" id="openJumpModalBtn" title="Tap to jump to chapter or page">
       <span id="pageIndicatorText" style="font-weight:600; font-size:0.85rem; color:var(--text-main); display:flex; align-items:center; gap:0.2rem;">
         Page 1 of 1 <span style="font-size:0.68rem; opacity:0.7;">▾</span>
@@ -885,12 +908,10 @@
         <button id="tabPagesBtn" class="nav-tab-btn">🔢 By Page</button>
       </div>
 
-      <!-- Tab 1: Table of Contents -->
-      <div id="chapterListView" class="modal-scrollable-list">
-        <!-- Rendered dynamically -->
-      </div>
+      <!-- Tab 1: Chapters -->
+      <div id="chapterListView" class="modal-scrollable-list"></div>
 
-      <!-- Tab 2: Page Jump Slider & Input -->
+      <!-- Tab 2: Page Jump -->
       <div id="pageJumpView" style="display:none; flex-direction:column; gap:1.2rem; padding:0.5rem 0;">
         <div style="display:flex; justify-content:space-between; align-items:center;">
           <span style="font-size:0.88rem; color:var(--text-muted);">Select Page:</span>
@@ -912,12 +933,12 @@
     </div>
   </div>
 
-  <!-- MY SHELF / RECENT LIST MODAL -->
+  <!-- MY SHELF / RECENT LIST MODAL WITH DELETE OPTION -->
   <div id="shelfModal" class="modal-overlay">
     <div class="modal-card">
       <div class="modal-title" id="shelfModalTitle">📚 My Shelf</div>
       <p style="font-size:0.82rem; color:var(--text-muted);">
-        Saved locally in your device browser. Tap any title to resume reading.
+        Saved locally in your device browser. Tap a title to read, or tap 🗑️ to delete.
       </p>
       <div id="shelfModalList" class="modal-scrollable-list"></div>
       <div style="display:flex; justify-content:flex-end;">
@@ -1096,7 +1117,7 @@
       toggleCaret.textContent = isCollapsed ? 'Settings ▾' : 'Hide ▴';
     });
 
-    // --- INDEXEDDB STORAGE ---
+    // --- INDEXEDDB STORAGE (WITH DELETE SUPPORT) ---
     const DB_NAME = "MarginaliaBookDB";
     const DB_VERSION = 1;
     let dbInstance = null;
@@ -1164,6 +1185,18 @@
           resolve(list);
         };
         req.onerror = () => resolve([]);
+      });
+    }
+
+    async function deleteBookFromShelf(bookId) {
+      if (!dbInstance) await initIndexedDB();
+      if (!dbInstance) return;
+      return new Promise((resolve) => {
+        const tx = dbInstance.transaction(["books"], "readwrite");
+        const store = tx.objectStore("books");
+        store.delete(bookId);
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
       });
     }
 
@@ -1316,7 +1349,7 @@
     closeDrawerBtn.addEventListener('click', closeDrawer);
     drawerOverlay.addEventListener('click', closeDrawer);
 
-    // --- SHELF & RECENT MODALS ---
+    // --- SHELF & RECENT MODALS (WITH DELETE) ---
     async function showShelfModal(mode = "shelf") {
       closeDrawer();
       const books = await getAllBooksFromShelf();
@@ -1335,8 +1368,23 @@
               <span class="shelf-card-title">${b.title}</span>
               <span class="shelf-card-sub">Page ${(b.currentPage || 0) + 1} of ${b.pages.length}</span>
             </div>
-            <span style="font-size:0.8rem; color:var(--accent); font-weight:600;">Open →</span>
+            <div class="shelf-action-group">
+              <button class="shelf-delete-btn" title="Delete document">🗑️</button>
+              <span style="font-size:0.8rem; color:var(--accent); font-weight:600; padding:0.2rem 0.4rem;">Open →</span>
+            </div>
           `;
+
+          // Delete click listener
+          const delBtn = card.querySelector('.shelf-delete-btn');
+          delBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (confirm(`Remove "${b.title}" from My Shelf?`)) {
+              await deleteBookFromShelf(b.id);
+              showShelfModal(mode);
+            }
+          });
+
+          // Open click listener
           card.addEventListener('click', () => {
             stopAudio();
             bookPages = b.pages;
@@ -1348,6 +1396,7 @@
             shelfModal.style.display = 'none';
             renderPage(currentPage);
           });
+
           shelfModalList.appendChild(card);
         });
       }
@@ -1417,14 +1466,12 @@
     }
 
     openJumpModalBtn.addEventListener('click', () => {
-      // Setup Page Slider
       pageJumpSlider.max = bookPages.length;
       pageJumpSlider.value = currentPage + 1;
       pageDirectInput.max = bookPages.length;
       pageDirectInput.value = currentPage + 1;
       sliderValueDisplay.textContent = `Page ${currentPage + 1} of ${bookPages.length}`;
 
-      // Render Chapters List
       chapterListView.innerHTML = '';
       if (!bookChapters || bookChapters.length === 0) {
         chapterListView.innerHTML = '<div style="text-align:center; padding:1.5rem; color:var(--text-muted);">No separate chapters found.</div>';
@@ -1773,6 +1820,7 @@
       }
     }
 
+    // NATIVE BROWSER SPEECH SYNTHESIS ENGINE
     function speakBrowser(text) {
       browserSpeech.cancel();
       if (wordTimerInterval) clearInterval(wordTimerInterval);
@@ -1781,8 +1829,14 @@
       currentUtterance.rate = playbackSpeed;
 
       const voices = browserSpeech.getVoices();
-      if (voices.length > 0 && voicePicker.value !== "" && voicePicker.value !== "default") {
-        currentUtterance.voice = voices[parseInt(voicePicker.value, 10)] || voices[0];
+      if (voices.length > 0 && voicePicker.value && voicePicker.value !== "default") {
+        // Match exact selected voice by unique URI or composite identifier
+        const selectedVoice = voices.find(v => (v.voiceURI === voicePicker.value) || (`${v.name}:::${v.lang}` === voicePicker.value));
+        if (selectedVoice) {
+          currentUtterance.voice = selectedVoice;
+          // CRITICAL: Explicitly set lang to force Android TTS engine to load correct accent/voice
+          currentUtterance.lang = selectedVoice.lang;
+        }
       }
 
       const wordsArr = text.trim().split(/\s+/).filter(w => w.length > 0);
@@ -2003,16 +2057,17 @@
           opt.value = "default";
           opt.textContent = "System Default Voice";
           voicePicker.appendChild(opt);
-          activeVoiceBadge.textContent = "🎙️ System Default";
+          activeVoiceBadge.textContent = "🎙️️ System Default";
           return;
         }
 
         const userLang = (navigator.language || 'en').toLowerCase().split('-')[0];
-        const indexed = voices.map((v, i) => ({ v, i }));
+        const indexed = voices.map(v => v);
 
+        // Sort voices: device language first, then English, then alphabetical
         indexed.sort((a, b) => {
-          const aL = a.v.lang.toLowerCase();
-          const bL = b.v.lang.toLowerCase();
+          const aL = a.lang.toLowerCase();
+          const bL = b.lang.toLowerCase();
           const aU = aL.startsWith(userLang);
           const bU = bL.startsWith(userLang);
           const aE = aL.startsWith('en');
@@ -2021,19 +2076,23 @@
           if (!aU && bU) return 1;
           if (aE && !bE) return -1;
           if (!aE && bE) return 1;
-          return a.v.name.localeCompare(b.v.name);
+          return a.name.localeCompare(b.name);
         });
 
-        let defIdx = indexed[0].i;
-        const enV = indexed.find(item => item.v.lang.toLowerCase().startsWith('en'));
-        if (enV) defIdx = enV.i;
+        const defVoice = indexed.find(v => v.lang.toLowerCase().startsWith('en')) || indexed[0];
 
-        indexed.forEach(item => {
+        indexed.forEach(v => {
           const opt = document.createElement('option');
-          opt.value = item.i;
-          opt.textContent = `${item.v.name} (${item.v.lang})`;
-          if (prevChoice && item.i.toString() === prevChoice) opt.selected = true;
-          else if (!prevChoice && item.i === defIdx) opt.selected = true;
+          // Key by voiceURI or fallback signature to ensure unique mapping
+          const vKey = v.voiceURI || `${v.name}:::${v.lang}`;
+          opt.value = vKey;
+          opt.textContent = `${v.name} (${v.lang})`;
+
+          if (prevChoice && vKey === prevChoice) {
+            opt.selected = true;
+          } else if (!prevChoice && defVoice && vKey === (defVoice.voiceURI || `${defVoice.name}:::${defVoice.lang}`)) {
+            opt.selected = true;
+          }
           voicePicker.appendChild(opt);
         });
 
@@ -2065,11 +2124,15 @@
     voicePicker.addEventListener('change', () => {
       audioPreloadCache.clear();
       const selectedOption = voicePicker.options[voicePicker.selectedIndex];
-      activeVoiceBadge.textContent = `${activeEngine === 'browser' ? '🎙' : '⚡'} ${selectedOption ? selectedOption.text.split('(')[0].trim() : 'Voice'}`;
+      activeVoiceBadge.textContent = `${activeEngine === 'browser' ? '🎙️' : '⚡'} ${selectedOption ? selectedOption.text.split('(')[0].trim() : 'Voice'}`;
+      
+      // If audio is actively playing, smoothly restart with the new voice
       if (isPlaying) {
         stopAudio();
         isPlaying = true;
-        playCurrentSentence();
+        setTimeout(() => {
+          playCurrentSentence();
+        }, 60);
       }
     });
 
@@ -2318,7 +2381,7 @@
       return blocks.length > 0 ? blocks : splitIntoSentences(doc.body ? doc.body.textContent : '');
     }
 
-    // --- BULLETPROOF EPUB EXTRACTOR WITH TABLE OF CONTENTS ---
+    // --- EPUB EXTRACTOR WITH TABLE OF CONTENTS ---
     async function parseEpubArchive(zip) {
       const allKeys = Object.keys(zip.files);
       const containerKey = allKeys.find(k => k.toLowerCase().endsWith('container.xml'));
@@ -2335,9 +2398,7 @@
       if (!opfKey) opfKey = allKeys.find(k => k.toLowerCase().endsWith('.opf'));
 
       let orderedFiles = [];
-      let spineMap = {};
       let manifest = {};
-      let tocFile = null;
 
       if (opfKey && zip.files[opfKey]) {
         const opfXml = await zip.files[opfKey].async("text");
@@ -2354,9 +2415,6 @@
             const fullPath = (opfDir + rawHref).replace(/\/+/g, '/');
             const exact = allKeys.find(k => k.toLowerCase() === fullPath.toLowerCase()) || fullPath;
             manifest[idMatch[1]] = exact;
-            if (/toc\.ncx/i.test(rawHref) || /nav/i.test(tag)) {
-              tocFile = exact;
-            }
           }
         }
 
@@ -2377,7 +2435,6 @@
         }).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
       }
 
-      // Extract Chapter TOC Titles
       const chaptersList = [];
       const extractedPages = [];
       const perPage = 5;
@@ -2389,7 +2446,6 @@
         const rawHtml = await zip.files[chapterKey].async("text");
         const chapterDir = chapterKey.includes('/') ? chapterKey.substring(0, chapterKey.lastIndexOf('/') + 1) : '';
 
-        // Extract title or first header
         let chapTitle = "";
         const titleMatch = rawHtml.match(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/i) || rawHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
         if (titleMatch) {
@@ -2399,7 +2455,6 @@
           chapTitle = `Section ${fIdx + 1}`;
         }
 
-        // Inline all image references to Base64
         const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
         const images = Array.from(doc.querySelectorAll('img, image'));
 
@@ -2420,7 +2475,6 @@
 
         const chapterBlocks = parseHtmlToBlocks(doc.body ? doc.body.innerHTML : rawHtml);
         if (chapterBlocks.length > 0) {
-          // Record chapter page starting index
           const startPageIndex = extractedPages.length;
           chaptersList.push({ title: chapTitle, pageIndex: startPageIndex });
 
@@ -2442,16 +2496,13 @@
       const buffer = await file.arrayBuffer();
       const uint8 = new Uint8Array(buffer);
 
-      // Inspect Magic Bytes
       const isZip = uint8.length > 4 && uint8[0] === 0x50 && uint8[1] === 0x4B && (uint8[2] === 0x03 || uint8[2] === 0x05);
-      const isPdf = uint8.length > 4 && uint8[0] === 0x25 && uint8[1] === 0x50 && uint8[2] === 0x44 && uint8[3] === 0x46; // %PDF
+      const isPdf = uint8.length > 4 && uint8[0] === 0x25 && uint8[1] === 0x50 && uint8[2] === 0x44 && uint8[3] === 0x46;
       const lowerName = (file.name || "").toLowerCase();
 
-      // 1. ZIP ARCHIVE (EPUB or DOCX)
       if (isZip || lowerName.endsWith('.epub') || lowerName.endsWith('.docx')) {
         const zip = await JSZip.loadAsync(buffer);
 
-        // Word DOCX format
         if (zip.files['word/document.xml']) {
           if (typeof mammoth === 'undefined') throw new Error("Word reader engine is still loading. Please try again.");
           const res = await mammoth.convertToHtml(
@@ -2469,11 +2520,9 @@
           return { pages, chapters: [{ title: "Start of Document", pageIndex: 0 }] };
         }
 
-        // EPUB format
         return await parseEpubArchive(zip);
       }
 
-      // 2. PDF FORMAT
       if (isPdf || lowerName.endsWith('.pdf')) {
         if (typeof pdfjsLib === 'undefined') throw new Error("PDF engine is still loading. Please try again.");
         const pdf = await pdfjsLib.getDocument({ data: uint8 }).promise;
@@ -2498,7 +2547,6 @@
         return { pages, chapters };
       }
 
-      // 3. HTML FORMAT
       if (lowerName.endsWith('.html') || lowerName.endsWith('.htm')) {
         const raw = new TextDecoder('utf-8').decode(uint8);
         const blocks = parseHtmlToBlocks(raw);
@@ -2507,8 +2555,6 @@
         return { pages, chapters: [{ title: "HTML Document", pageIndex: 0 }] };
       }
 
-      // 4. PLAIN TEXT / MARKDOWN
-      // Enforce binary validation: reject raw zip/binary streams
       let nonPrintable = 0;
       const sampleLen = Math.min(uint8.length, 1000);
       for (let i = 0; i < sampleLen; i++) {
