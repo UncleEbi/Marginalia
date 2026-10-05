@@ -2,7 +2,7 @@
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Marginalia — Read-Along Reader</title>
 
   <!-- Client-Side Document Parsers -->
@@ -21,65 +21,70 @@
       --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       --font-reader: "Georgia", "Merriweather", "Charter", serif;
       --transition: 0.2s ease;
+      --safe-bottom: env(safe-area-inset-bottom, 16px);
     }
 
     [data-theme="light"] {
       --bg-main: #f8fafc;
       --panel-bg: #ffffff;
+      --panel-blur: rgba(255, 255, 255, 0.92);
       --text-main: #0f172a;
       --text-muted: #64748b;
       --border: #e2e8f0;
       --accent: #2563eb;
       --accent-active: #1d4ed8;
-      --highlight: rgba(254, 215, 10, 0.35);
-      --highlight-border: #f59e0b;
+      --highlight: rgba(254, 215, 10, 0.4);
+      --highlight-border: #d97706;
       --word-active: #0284c7;
       --word-text: #ffffff;
       --tab-active-bg: #f1f5f9;
-      --modal-overlay: rgba(15, 23, 42, 0.4);
+      --modal-overlay: rgba(15, 23, 42, 0.5);
     }
 
     [data-theme="sepia"] {
       --bg-main: #f4ecd8;
       --panel-bg: #eae0c8;
+      --panel-blur: rgba(234, 224, 200, 0.92);
       --text-main: #42321e;
       --text-muted: #7d674c;
       --border: #d4c4a8;
       --accent: #b45309;
       --accent-active: #92400e;
-      --highlight: rgba(217, 119, 6, 0.22);
-      --highlight-border: #d97706;
+      --highlight: rgba(217, 119, 6, 0.28);
+      --highlight-border: #b45309;
       --word-active: #78350f;
       --word-text: #ffffff;
       --tab-active-bg: #dfceb0;
-      --modal-overlay: rgba(66, 50, 30, 0.45);
+      --modal-overlay: rgba(66, 50, 30, 0.5);
     }
 
     [data-theme="dark"] {
       --bg-main: #0b1120;
       --panel-bg: #151e32;
+      --panel-blur: rgba(21, 30, 50, 0.92);
       --text-main: #f1f5f9;
       --text-muted: #94a3b8;
       --border: #23314e;
       --accent: #38bdf8;
       --accent-active: #0284c7;
-      --highlight: rgba(56, 189, 248, 0.16);
-      --highlight-border: #0284c7;
+      --highlight: rgba(56, 189, 248, 0.25);
+      --highlight-border: #38bdf8;
       --word-active: #38bdf8;
       --word-text: #0b1120;
       --tab-active-bg: #1e293b;
-      --modal-overlay: rgba(0, 0, 0, 0.65);
+      --modal-overlay: rgba(0, 0, 0, 0.7);
     }
 
     [data-theme="oled"] {
       --bg-main: #000000;
       --panel-bg: #0d0d0d;
+      --panel-blur: rgba(13, 13, 13, 0.94);
       --text-main: #ededed;
       --text-muted: #737373;
       --border: #262626;
       --accent: #10b981;
       --accent-active: #059669;
-      --highlight: rgba(16, 185, 129, 0.18);
+      --highlight: rgba(16, 185, 129, 0.28);
       --highlight-border: #10b981;
       --word-active: #10b981;
       --word-text: #000000;
@@ -87,130 +92,142 @@
       --modal-overlay: rgba(0, 0, 0, 0.85);
     }
 
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    * { 
+      box-sizing: border-box; 
+      margin: 0; 
+      padding: 0; 
+      touch-action: manipulation; /* Eliminates 300ms tap delay */
+    }
+
     body {
       background-color: var(--bg-main);
       color: var(--text-main);
       font-family: var(--font-ui);
-      min-height: 100vh;
+      min-height: 100dvh;
       display: flex;
       flex-direction: column;
       transition: background-color var(--transition), color var(--transition);
+      -webkit-tap-highlight-color: transparent;
+      padding-bottom: calc(90px + var(--safe-bottom)); /* Clearance for sticky player */
     }
 
+    /* TOP HEADER */
     header {
-      padding: 0.85rem 2rem;
+      padding: 0.75rem 1rem;
       background: var(--panel-bg);
       border-bottom: 1px solid var(--border);
       display: flex;
       justify-content: space-between;
       align-items: center;
-      gap: 1rem;
-      flex-wrap: wrap;
+      gap: 0.6rem;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      backdrop-filter: blur(8px);
     }
 
     .brand-group {
       display: flex;
       align-items: center;
-      gap: 0.75rem;
-      color: var(--text-main);
+      gap: 0.5rem;
       user-select: none;
     }
 
     .brand-logo {
-      width: 32px;
-      height: 32px;
+      width: 26px;
+      height: 26px;
       color: var(--accent);
       flex-shrink: 0;
     }
 
     .brand-title {
-      font-size: 1.35rem;
+      font-size: 1.15rem;
       font-weight: 700;
-      letter-spacing: -0.5px;
+      letter-spacing: -0.3px;
     }
 
     .header-actions {
       display: flex;
       align-items: center;
-      gap: 0.65rem;
-      flex-wrap: wrap;
+      gap: 0.5rem;
     }
 
     button, select, label.btn-ui, input[type="number"] {
       background: var(--bg-main);
       color: var(--text-main);
       border: 1px solid var(--border);
-      padding: 0.45rem 0.8rem;
+      padding: 0.45rem 0.65rem;
       border-radius: 6px;
-      font-size: 0.85rem;
+      font-size: 16px; /* Strictly 16px to prevent iOS Safari auto-zoom */
       cursor: pointer;
       outline: none;
       display: inline-flex;
       align-items: center;
-      gap: 0.4rem;
+      gap: 0.35rem;
       font-family: var(--font-ui);
       transition: border-color var(--transition);
     }
 
-    button:hover, select:hover, label.btn-ui:hover { border-color: var(--accent); }
-    button.primary {
-      background: var(--accent);
-      color: #fff;
-      border: none;
-      font-weight: 600;
+    @media (min-width: 641px) {
+      button, select, label.btn-ui, input[type="number"] {
+        font-size: 0.85rem;
+      }
     }
-    button.primary:hover { background: var(--accent-active); }
+
+    select option {
+      background: var(--panel-bg);
+      color: var(--text-main);
+    }
 
     .credit-badge {
-      font-size: 0.8rem;
-      padding: 0.4rem 0.75rem;
+      font-size: 0.78rem;
+      padding: 0.35rem 0.65rem;
       border-radius: 20px;
       background: rgba(56, 189, 248, 0.12);
       border: 1px solid var(--border);
       color: var(--accent);
       font-weight: 600;
-      display: flex;
-      align-items: center;
-      gap: 0.35rem;
       cursor: pointer;
+      white-space: nowrap;
     }
 
+    /* ENGINE & VOICE DRAWER */
     .controls-panel {
       max-width: 860px;
-      width: 100%;
-      margin: 1.25rem auto 0;
-      padding: 1rem 1.5rem;
+      width: calc(100% - 1.5rem);
+      margin: 0.75rem auto 0;
+      padding: 0.85rem 1rem;
       background: var(--panel-bg);
       border: 1px solid var(--border);
       border-radius: 10px;
       display: flex;
       flex-direction: column;
-      gap: 1rem;
+      gap: 0.75rem;
     }
 
     .engine-tabs-group {
       display: flex;
       align-items: center;
-      gap: 0.5rem;
-      flex-wrap: wrap;
+      gap: 0.4rem;
+      overflow-x: auto;
+      white-space: nowrap;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+      padding-bottom: 2px;
     }
+    .engine-tabs-group::-webkit-scrollbar { display: none; }
 
     .engine-tab {
       background: var(--bg-main);
       color: var(--text-muted);
       border: 1px solid var(--border);
-      padding: 0.45rem 0.9rem;
+      padding: 0.35rem 0.75rem;
       border-radius: 20px;
-      font-size: 0.82rem;
+      font-size: 0.8rem;
       font-weight: 500;
       cursor: pointer;
+      flex-shrink: 0;
       transition: all var(--transition);
-    }
-
-    .engine-tab:hover {
-      color: var(--text-main);
-      border-color: var(--accent);
     }
 
     .engine-tab.active {
@@ -225,38 +242,32 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 1.25rem;
+      gap: 0.75rem;
       flex-wrap: wrap;
-      padding-top: 0.75rem;
-      border-top: 1px solid var(--border);
     }
 
     .setting-group {
       display: flex;
       align-items: center;
-      gap: 0.6rem;
-      font-size: 0.85rem;
-      color: var(--text-muted);
-    }
-
-    .slider-container {
-      display: flex;
-      align-items: center;
       gap: 0.5rem;
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      flex: 1;
+      min-width: 130px;
     }
 
-    .slider-container input[type="range"] {
-      width: 85px;
-      accent-color: var(--accent);
-      cursor: pointer;
+    .setting-group select {
+      flex: 1;
+      width: 100%;
     }
 
+    /* READING CONTAINER */
     main {
       flex: 1;
       display: flex;
       flex-direction: column;
       align-items: center;
-      padding: 1rem 1rem 3rem;
+      padding: 0.75rem 0.75rem 2rem;
     }
 
     .reader-card {
@@ -265,46 +276,51 @@
       background: var(--panel-bg);
       border: 1px solid var(--border);
       border-radius: 12px;
-      padding: 3.5rem 3rem;
-      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      min-height: 480px;
-      margin-top: 1rem;
-      position: relative;
+      padding: 1.5rem 1.15rem;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+      min-height: calc(100dvh - 300px);
+    }
+
+    @media (min-width: 641px) {
+      .reader-card {
+        padding: 3rem 2.5rem;
+      }
     }
 
     .doc-meta {
-      font-size: 0.8rem;
+      font-size: 0.75rem;
       color: var(--text-muted);
-      margin-bottom: 1.5rem;
+      margin-bottom: 1.25rem;
       text-transform: uppercase;
       letter-spacing: 0.05em;
       border-bottom: 1px dashed var(--border);
-      padding-bottom: 0.5rem;
+      padding-bottom: 0.4rem;
       display: flex;
       justify-content: space-between;
     }
 
     .book-content {
       font-family: var(--font-reader);
-      font-size: 1.32rem;
-      line-height: 2.2;
+      font-size: 1.22rem;
+      line-height: 2.1;
       letter-spacing: 0.01rem;
       user-select: text;
     }
 
-    .sentence {
-      padding: 2px 4px;
-      border-radius: 4px;
-      transition: background-color 0.2s ease;
-      cursor: pointer;
-      text-decoration: none !important;
+    @media (min-width: 641px) {
+      .book-content {
+        font-size: 1.32rem;
+        line-height: 2.2;
+      }
     }
 
-    .sentence:hover {
-      background-color: rgba(255, 255, 255, 0.04);
+    /* SUBTLE HIGHLIGHTING */
+    .sentence {
+      padding: 2px 3px;
+      border-radius: 4px;
+      transition: background-color 0.15s ease;
+      cursor: pointer;
+      text-decoration: none !important;
     }
 
     .sentence.active-sentence {
@@ -326,67 +342,99 @@
       font-weight: 600;
     }
 
-    .footer-bar {
-      margin-top: 3rem;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
+    /* STICKY FLOATING BOTTOM PLAYER */
+    .mobile-player-bar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--panel-blur);
+      backdrop-filter: blur(14px);
       border-top: 1px solid var(--border);
-      padding-top: 1.5rem;
+      padding: 0.65rem 1rem calc(0.65rem + var(--safe-bottom));
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
     }
 
-    .page-nav {
+    .player-nav-group {
       display: flex;
       align-items: center;
-      gap: 0.75rem;
-      font-size: 0.9rem;
+      gap: 0.4rem;
+    }
+
+    .player-btn-main {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      font-size: 1.2rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+    }
+    .player-btn-main:active { transform: scale(0.95); }
+
+    .player-btn-nav {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.95rem;
+      padding: 0;
+    }
+
+    .player-status-group {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      font-size: 0.8rem;
       color: var(--text-muted);
     }
 
-    .page-jump-input::-webkit-outer-spin-button,
-    .page-jump-input::-webkit-inner-spin-button {
-      -webkit-appearance: none;
-      margin: 0;
-    }
-
-    .page-jump-input {
-      -moz-appearance: textfield;
-      appearance: textfield;
-      width: 72px;
-      min-width: 72px;
-      padding: 0.35rem 0.5rem;
-      text-align: center;
+    .speed-pill-btn {
+      font-size: 0.78rem;
       font-weight: 600;
-      font-size: 0.95rem;
-      line-height: 1.2;
-      border-radius: 6px;
+      padding: 0.3rem 0.55rem;
+      border-radius: 12px;
+      border: 1px solid var(--border);
     }
 
+    /* AUTH MODAL */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
       background: var(--modal-overlay);
-      backdrop-filter: blur(4px);
+      backdrop-filter: blur(6px);
       display: none;
       justify-content: center;
       align-items: center;
       z-index: 1000;
+      padding: 1rem;
     }
 
     .modal-card {
       background: var(--panel-bg);
       border: 1px solid var(--border);
       width: 100%;
-      max-width: 380px;
-      border-radius: 12px;
-      padding: 2rem;
-      box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+      max-width: 360px;
+      border-radius: 14px;
+      padding: 1.5rem;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.4);
       display: flex;
       flex-direction: column;
-      gap: 1.2rem;
+      gap: 1rem;
     }
 
-    .modal-title { font-size: 1.2rem; font-weight: 700; }
+    .modal-title { font-size: 1.15rem; font-weight: 700; }
     .input-field {
       width: 100%;
       padding: 0.65rem 0.85rem;
@@ -394,12 +442,13 @@
       border-radius: 6px;
       background: var(--bg-main);
       color: var(--text-main);
-      font-size: 0.9rem;
+      font-size: 16px;
     }
   </style>
 </head>
 <body>
 
+  <!-- TOP HEADER -->
   <header>
     <div class="brand-group">
       <svg class="brand-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -412,30 +461,27 @@
     </div>
 
     <div class="header-actions">
-      <!-- Credit Badge -->
       <div id="creditBadge" class="credit-badge">
         <span id="creditDisplay">Sign In</span>
       </div>
 
-      <label class="btn-ui" for="fileInput">📁 Open Document</label>
-      <input type="file" id="fileInput" accept=".txt,.md,.pdf,.docx,.epub,.html,.htm" style="display:none;" />
+      <label class="btn-ui" for="fileInput" style="padding:0.4rem 0.55rem;">📁 File</label>
+      <input type="file" id="fileInput" accept=".txt,.md,.pdf,.docx,.epub,.html,.htm,application/epub+zip,application/pdf" style="display:none;" />
 
-      <select id="themeSelect">
-        <option value="light">Clean Light</option>
-        <option value="sepia">Sepia Paper</option>
-        <option value="dark">Nord Dark</option>
-        <option value="oled">OLED Pitch Black</option>
+      <select id="themeSelect" style="padding:0.4rem 0.5rem;">
+        <option value="light">Light</option>
+        <option value="sepia">Sepia</option>
+        <option value="dark">Dark</option>
+        <option value="oled">OLED</option>
       </select>
-
-      <button id="playBtn" class="primary">▶ Play</button>
-      <button id="pauseBtn">⏸ Pause</button>
     </div>
   </header>
 
   <main>
+    <!-- VOICE & ENGINE SELECTOR DRAWER -->
     <div class="controls-panel">
       <div class="engine-tabs-group">
-        <button class="engine-tab active" data-engine="browser">Browser / Native</button>
+        <button class="engine-tab active" data-engine="browser">Browser Native</button>
         <button class="engine-tab" data-engine="elevenlabs">ElevenLabs</button>
         <button class="engine-tab" data-engine="openai">OpenAI Audio</button>
         <button class="engine-tab" data-engine="google">Google Cloud</button>
@@ -445,24 +491,17 @@
       <div class="settings-sub-bar">
         <div class="setting-group">
           <span>Voice:</span>
-          <select id="voicePicker" style="min-width: 190px;"></select>
+          <select id="voicePicker"></select>
         </div>
 
-        <div class="setting-group">
-          <span>Speed:</span>
-          <div class="slider-container">
-            <input type="range" id="speedSlider" min="0.5" max="2.0" step="0.1" value="1.0" />
-            <span id="speedDisplay" style="width: 32px; font-weight: 600; color:var(--text-main);">1.0x</span>
-          </div>
-        </div>
-
-        <label class="setting-group" style="cursor:pointer;">
+        <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.82rem; cursor:pointer; color:var(--text-muted);">
           <input type="checkbox" id="autoFlipCheck" checked style="accent-color: var(--accent);" />
           <span>Auto-turn page</span>
         </label>
       </div>
     </div>
 
+    <!-- BOOK CARD -->
     <div class="reader-card">
       <div class="doc-meta">
         <span id="docTitle">Marginalia Reader</span>
@@ -470,41 +509,44 @@
       </div>
 
       <div id="contentPane" class="book-content"></div>
-
-      <div class="footer-bar">
-        <button id="prevPageBtn">← Previous</button>
-
-        <div class="page-nav">
-          <span>Page</span>
-          <input type="number" id="pageJumpInput" class="page-jump-input" min="1" value="1" />
-          <span id="pageTotal">of 1</span>
-        </div>
-
-        <button id="nextPageBtn">Next →</button>
-      </div>
     </div>
   </main>
+
+  <!-- STICKY FLOATING BOTTOM PLAYER (ACCESSIBLE IN THUMB ZONE) -->
+  <div class="mobile-player-bar">
+    <div class="player-nav-group">
+      <button id="prevPageBtn" class="player-btn-nav" title="Previous Page">←</button>
+      <button id="mainPlayToggle" class="player-btn-main">▶</button>
+      <button id="nextPageBtn" class="player-btn-nav" title="Next Page">→</button>
+    </div>
+
+    <div class="player-status-group">
+      <span id="pageIndicatorText" style="font-weight:600; font-size:0.85rem; color:var(--text-main);">Page 1 of 1</span>
+      <span style="font-size:0.75rem;">Continuous Audio</span>
+    </div>
+
+    <button id="speedCycleBtn" class="speed-pill-btn">1.0x</button>
+  </div>
 
   <!-- AUTH MODAL -->
   <div id="authModal" class="modal-overlay">
     <div class="modal-card">
       <div class="modal-title">Account & Quota Access</div>
-      <p style="font-size:0.85rem; color:var(--text-muted);">Sign in to access your neural voice character quota.</p>
+      <p style="font-size:0.85rem; color:var(--text-muted);">Log in to use your neural cloud voices across devices.</p>
       <input type="email" id="authEmail" class="input-field" placeholder="Email address" />
       <input type="password" id="authPass" class="input-field" placeholder="Password" />
       <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
         <button id="authCloseBtn">Cancel</button>
         <button id="authSignUpBtn">Sign Up</button>
-        <button id="authSignInBtn" class="primary">Sign In</button>
+        <button id="authSignInBtn" style="background:var(--accent); color:#fff; border:none; font-weight:600;">Sign In</button>
       </div>
     </div>
   </div>
 
-  <audio id="neuralAudio" style="display:none;"></audio>
+  <audio id="neuralAudio" style="display:none;" playsinline></audio>
 
   <script>
     // --- SUPABASE CONFIGURATION ---
-    // (Keep your actual Supabase URL and public anon key here)
     const SUPABASE_PROJECT_URL = "https://nnxphilhkhvwnitxvzdi.supabase.co"; 
     const SUPABASE_ANON_KEY = "sb_publishable_ekzdgLR6FSDHnP2DZNklMQ_n3-k0ZLN";
 
@@ -513,7 +555,7 @@
       try {
         supabaseClient = supabase.createClient(SUPABASE_PROJECT_URL, SUPABASE_ANON_KEY);
       } catch (err) {
-        console.warn("Supabase initialization error:", err);
+        console.warn("Supabase client init:", err);
       }
     }
 
@@ -546,14 +588,13 @@
       ]
     };
 
-    let currentDocName = "Marginalia Quickstart";
+    let currentDocName = "Marginalia Mobile";
     let bookPages = [
       [
-        "Welcome to the commercial-grade Marginalia reading engine.",
-        "Audio pre-buffers automatically so playback transitions between sentences without gaps.",
-        "Karaoke tracking highlights individual words in sync with the speaker.",
-        "Your reading progress and playback settings save automatically to your browser.",
-        "Try locking your device screen: background audio and lock screen controls stay active."
+        "Welcome to Marginalia Mobile.",
+        "Notice the sticky control bar at the bottom: your thumbs can always reach Play, Pause, and Page flipping.",
+        "Your phone screen will stay awake automatically while listening.",
+        "Tap on any sentence directly to jump playback instantly."
       ]
     ];
 
@@ -562,23 +603,26 @@
     let isPlaying = false;
     let activeEngine = 'browser';
     let playbackSpeed = 1.0;
+    const speedSteps = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0];
+
     const browserSpeech = window.speechSynthesis;
     let currentUtterance = null;
     const audioElement = document.getElementById('neuralAudio');
     const audioPreloadCache = new Map();
+    let wordTimerInterval = null;
+    let wakeLock = null;
+    let iosWatchdogInterval = null;
 
+    // DOM Elements
     const contentPane = document.getElementById('contentPane');
-    const playBtn = document.getElementById('playBtn');
-    const pauseBtn = document.getElementById('pauseBtn');
+    const mainPlayToggle = document.getElementById('mainPlayToggle');
     const prevPageBtn = document.getElementById('prevPageBtn');
     const nextPageBtn = document.getElementById('nextPageBtn');
-    const pageJumpInput = document.getElementById('pageJumpInput');
-    const pageTotal = document.getElementById('pageTotal');
+    const pageIndicatorText = document.getElementById('pageIndicatorText');
+    const speedCycleBtn = document.getElementById('speedCycleBtn');
     const autoFlipCheck = document.getElementById('autoFlipCheck');
     const themeSelect = document.getElementById('themeSelect');
     const voicePicker = document.getElementById('voicePicker');
-    const speedSlider = document.getElementById('speedSlider');
-    const speedDisplay = document.getElementById('speedDisplay');
     const fileInput = document.getElementById('fileInput');
     const docTitle = document.getElementById('docTitle');
     const preloadStatus = document.getElementById('preloadStatus');
@@ -591,25 +635,45 @@
     const authSignUpBtn = document.getElementById('authSignUpBtn');
     const authCloseBtn = document.getElementById('authCloseBtn');
 
-    // --- GET AUTH TOKEN DIRECTLY ---
+    // --- SCREEN WAKE LOCK API ---
+    async function requestScreenWakeLock() {
+      try {
+        if ('wakeLock' in navigator && !wakeLock) {
+          wakeLock = await navigator.wakeLock.request('screen');
+        }
+      } catch (err) {}
+    }
+
+    function releaseScreenWakeLock() {
+      if (wakeLock) {
+        wakeLock.release().catch(() => {});
+        wakeLock = null;
+      }
+    }
+
+    // --- RE-ACQUIRE WAKE LOCK ON APP RESUME ---
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && isPlaying) {
+        requestScreenWakeLock();
+      }
+    });
+
+    // --- TOKEN & USER QUOTA ---
     async function getFreshAuthToken() {
       if (!supabaseClient) return null;
       const { data: { session } } = await supabaseClient.auth.getSession();
       return session?.access_token || null;
     }
 
-    // --- REFRESH CREDIT BADGE ---
     async function updateAuthBadge(explicitRemaining = null) {
       if (!supabaseClient) {
         creditDisplay.textContent = "⚡ Free Tier";
         return;
       }
-
       if (explicitRemaining !== null) {
         creditDisplay.textContent = `⚡ ${explicitRemaining.toLocaleString()} Chars`;
         return;
       }
-
       const { data: { session } } = await supabaseClient.auth.getSession();
       if (session && session.user) {
         const { data: profile } = await supabaseClient
@@ -625,86 +689,91 @@
       }
     }
 
-    // --- PRE-BUFFERING ENGINE ---
-    async function prebufferNextSentence() {
-      if (activeEngine === 'browser') return;
+    // --- MOBILE-RELIABLE VOICE POPULATION ---
+    function populateVoices() {
+      const prevChoice = voicePicker.value;
+      voicePicker.innerHTML = '';
 
-      let nextSentence = currentSentenceIdx + 1;
-      let targetPage = currentPage;
-
-      if (nextSentence >= bookPages[currentPage].length) {
-        if (currentPage < bookPages.length - 1) {
-          targetPage = currentPage + 1;
-          nextSentence = 0;
-        } else {
+      if (activeEngine === 'browser') {
+        const voices = browserSpeech.getVoices();
+        if (!voices || voices.length === 0) {
+          const opt = document.createElement('option');
+          opt.value = "default";
+          opt.textContent = "Default Mobile Voice";
+          voicePicker.appendChild(opt);
           return;
         }
-      }
-
-      const text = bookPages[targetPage][nextSentence];
-      const cacheKey = `${activeEngine}_${voicePicker.value}_${playbackSpeed}_${text}`;
-      if (audioPreloadCache.has(cacheKey)) return;
-
-      const token = await getFreshAuthToken();
-      if (!token) return;
-
-      preloadStatus.textContent = "Buffering next...";
-      try {
-        const res = await fetch('/api/tts', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({
-            text,
-            voiceId: voicePicker.value,
-            engine: activeEngine,
-            speed: playbackSpeed
-          })
+        voices.forEach((v, idx) => {
+          const opt = document.createElement('option');
+          opt.value = idx;
+          opt.textContent = `${v.name} (${v.lang})`;
+          if (idx.toString() === prevChoice) opt.selected = true;
+          voicePicker.appendChild(opt);
         });
+      } else {
+        const list = voicePresets[activeEngine] || [];
+        list.forEach(item => {
+          const opt = document.createElement('option');
+          opt.value = item.id;
+          opt.textContent = item.name;
+          if (item.id === prevChoice) opt.selected = true;
+          voicePicker.appendChild(opt);
+        });
+      }
+    }
 
-        if (res.ok) {
-          const data = await res.json();
-          const src = data.audio_base64 
-            ? `data:audio/mp3;base64,${data.audio_base64}`
-            : (data.audioUrl || '');
+    if (typeof speechSynthesis !== 'undefined') {
+      speechSynthesis.onvoiceschanged = populateVoices;
+    }
+    ['touchstart', 'click'].forEach(evt => {
+      document.body.addEventListener(evt, () => {
+        if (voicePicker.children.length <= 1) populateVoices();
+      }, { once: true });
+    });
 
-          if (src) {
-            const audioObj = new Audio();
-            audioObj.src = src;
-            audioObj.preload = 'auto';
-            audioPreloadCache.set(cacheKey, { src, remaining: data.remaining_chars });
-            preloadStatus.textContent = "Buffer Ready";
-          }
+    voicePicker.addEventListener('change', () => {
+      audioPreloadCache.clear();
+      if (isPlaying) {
+        stopAudio();
+        isPlaying = true;
+        playCurrentSentence();
+      }
+    });
+
+    document.querySelectorAll('.engine-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.engine-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        activeEngine = tab.dataset.engine;
+        audioPreloadCache.clear();
+        populateVoices();
+
+        if (isPlaying) {
+          stopAudio();
+          isPlaying = true;
+          playCurrentSentence();
         }
-      } catch (err) {
-        preloadStatus.textContent = "Buffer Idle";
-      }
-    }
+      });
+    });
 
-    // --- LOCK SCREEN CONTROLS ---
-    function syncMediaSession(sentenceText) {
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.metadata = new MediaMetadata({
-          title: currentDocName,
-          artist: `Page ${currentPage + 1} of ${bookPages.length}`,
-          album: 'Marginalia Reader'
-        });
-        navigator.mediaSession.setActionHandler('play', () => { isPlaying = true; playCurrentSentence(); });
-        navigator.mediaSession.setActionHandler('pause', stopAudio);
-        navigator.mediaSession.setActionHandler('previoustrack', () => {
-          if (currentSentenceIdx > 0) currentSentenceIdx--;
-          playCurrentSentence();
-        });
-        navigator.mediaSession.setActionHandler('nexttrack', () => {
-          currentSentenceIdx++;
-          playCurrentSentence();
-        });
-      }
-    }
+    // --- SPEED CYCLER (SINGLE MOBILE TAP BUTTON) ---
+    speedCycleBtn.addEventListener('click', () => {
+      let nextIdx = (speedSteps.indexOf(playbackSpeed) + 1) % speedSteps.length;
+      playbackSpeed = speedSteps[nextIdx];
+      speedCycleBtn.textContent = `${playbackSpeed.toFixed(1)}x`;
+      audioPreloadCache.clear();
 
-    // --- WORD HIGHLIGHTING & DOM ---
+      if (isPlaying) {
+        if (activeEngine === 'browser') {
+          browserSpeech.cancel();
+          playCurrentSentence();
+        } else {
+          audioElement.playbackRate = playbackSpeed;
+        }
+      }
+    });
+
+    // --- SENTENCE & WORD DOM ---
     function buildSentenceDOM(sentenceText, sIdx) {
       const sentenceSpan = document.createElement('span');
       sentenceSpan.className = 'sentence';
@@ -748,13 +817,13 @@
         contentPane.appendChild(buildSentenceDOM(txt, sIdx));
       });
 
-      pageJumpInput.value = idx + 1;
-      pageTotal.textContent = `of ${bookPages.length}`;
+      pageIndicatorText.textContent = `Page ${idx + 1} of ${bookPages.length}`;
       prevPageBtn.disabled = idx === 0;
       nextPageBtn.disabled = idx >= bookPages.length - 1;
       highlightActiveSentence();
     }
 
+    // Focal vertical auto-center: places reading target in comfortable view
     function highlightActiveSentence() {
       document.querySelectorAll('.sentence').forEach(el => el.classList.remove('active-sentence'));
       document.querySelectorAll('.word').forEach(el => el.classList.remove('active-word'));
@@ -762,7 +831,7 @@
       const target = document.getElementById(`sent-${currentSentenceIdx}`);
       if (target) {
         target.classList.add('active-sentence');
-        target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
     }
 
@@ -773,7 +842,7 @@
       });
     }
 
-    // --- PLAYBACK CONTROLLER ---
+    // --- SMART PLAYBACK & iOS WATCHDOG ---
     async function playCurrentSentence() {
       const pageSentences = bookPages[currentPage];
       if (!pageSentences || pageSentences.length === 0) return;
@@ -791,9 +860,11 @@
       }
 
       highlightActiveSentence();
+      mainPlayToggle.textContent = '⏸';
+      requestScreenWakeLock();
+
       const textToRead = pageSentences[currentSentenceIdx];
       syncMediaSession(textToRead);
-      prebufferNextSentence();
 
       if (activeEngine === 'browser') {
         speakBrowser(textToRead);
@@ -804,23 +875,56 @@
 
     function speakBrowser(text) {
       browserSpeech.cancel();
+      if (wordTimerInterval) clearInterval(wordTimerInterval);
+      if (iosWatchdogInterval) clearInterval(iosWatchdogInterval);
+
       currentUtterance = new SpeechSynthesisUtterance(text);
       currentUtterance.rate = playbackSpeed;
 
       const voices = browserSpeech.getVoices();
-      if (voices.length > 0 && voicePicker.value !== "") {
+      if (voices.length > 0 && voicePicker.value !== "" && voicePicker.value !== "default") {
         currentUtterance.voice = voices[parseInt(voicePicker.value, 10)] || voices[0];
       }
 
+      let nativeBoundaryFired = false;
       currentUtterance.onboundary = (e) => {
         if (e.name === 'word') {
+          nativeBoundaryFired = true;
+          if (wordTimerInterval) clearInterval(wordTimerInterval);
           const words = text.slice(0, e.charIndex).trim().split(/\s+/);
           const currentWordIdx = words[0] === "" ? 0 : words.length;
           highlightActiveWord(currentWordIdx);
         }
       };
 
+      // Fallback for mobile WebKit if onboundary is suppressed
+      const wordsArr = text.trim().split(/\s+/);
+      const totalWords = wordsArr.length;
+      let mobileWordIdx = 0;
+      const msPerWord = Math.max(120, (60000 / (180 * playbackSpeed)));
+
+      setTimeout(() => {
+        if (!nativeBoundaryFired && isPlaying) {
+          highlightActiveWord(0);
+          wordTimerInterval = setInterval(() => {
+            if (mobileWordIdx < totalWords - 1) {
+              mobileWordIdx++;
+              highlightActiveWord(mobileWordIdx);
+            } else {
+              clearInterval(wordTimerInterval);
+            }
+          }, msPerWord);
+        }
+      }, 200);
+
+      // Safari background keepalive: prevents iOS from killing playback
+      iosWatchdogInterval = setInterval(() => {
+        if (browserSpeech.speaking) browserSpeech.resume();
+      }, 5000);
+
       currentUtterance.onend = () => {
+        if (wordTimerInterval) clearInterval(wordTimerInterval);
+        if (iosWatchdogInterval) clearInterval(iosWatchdogInterval);
         if (!isPlaying) return;
         currentSentenceIdx++;
         playCurrentSentence();
@@ -835,7 +939,7 @@
         const token = await getFreshAuthToken();
         if (!token) {
           stopAudio();
-          alert("Please sign in first to use neural cloud voices.");
+          alert("Please sign in to access cloud voices.");
           authModal.style.display = 'flex';
           return;
         }
@@ -845,7 +949,7 @@
         let audioSrc = cached?.src;
 
         if (!audioSrc) {
-          preloadStatus.textContent = "Connecting to voice engine...";
+          preloadStatus.textContent = "Connecting...";
           const res = await fetch('/api/tts', {
             method: 'POST',
             headers: {
@@ -861,19 +965,13 @@
           });
 
           const data = await res.json().catch(() => ({}));
-          if (!res.ok) {
-            throw new Error(data.error || `Voice engine returned error ${res.status}`);
-          }
+          if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
 
           audioSrc = data.audio_base64 
             ? `data:audio/mp3;base64,${data.audio_base64}`
             : (data.audioUrl || '');
 
-          if (data.remaining_chars !== undefined) {
-            updateAuthBadge(data.remaining_chars);
-          }
-        } else if (cached?.remaining !== undefined) {
-          updateAuthBadge(cached.remaining);
+          if (data.remaining_chars !== undefined) updateAuthBadge(data.remaining_chars);
         }
 
         audioElement.src = audioSrc;
@@ -897,150 +995,187 @@
 
       } catch (err) {
         stopAudio();
-        console.error("Neural Speech Error:", err);
         alert(err.message);
       }
     }
 
     function stopAudio() {
       isPlaying = false;
+      mainPlayToggle.textContent = '▶';
+      releaseScreenWakeLock();
+      if (wordTimerInterval) clearInterval(wordTimerInterval);
+      if (iosWatchdogInterval) clearInterval(iosWatchdogInterval);
       browserSpeech.cancel();
       audioElement.pause();
       document.querySelectorAll('.word').forEach(el => el.classList.remove('active-word'));
     }
 
-    // --- AUTH MODAL HANDLERS ---
-    creditBadge.addEventListener('click', () => {
-      authModal.style.display = 'flex';
-    });
-    authCloseBtn.addEventListener('click', () => {
-      authModal.style.display = 'none';
-    });
-
-    authSignInBtn.addEventListener('click', async () => {
-      if (!supabaseClient) {
-        alert("Supabase credentials not configured in index.html.");
-        authModal.style.display = 'none';
-        return;
-      }
-      const { data, error } = await supabaseClient.auth.signInWithPassword({
-        email: authEmail.value,
-        password: authPass.value
-      });
-      if (error) {
-        alert(error.message);
-      } else {
-        authModal.style.display = 'none';
-        updateAuthBadge();
-      }
-    });
-
-    authSignUpBtn.addEventListener('click', async () => {
-      if (!supabaseClient) {
-        alert("Supabase credentials not configured in index.html.");
-        authModal.style.display = 'none';
-        return;
-      }
-      const { data, error } = await supabaseClient.auth.signUp({
-        email: authEmail.value,
-        password: authPass.value
-      });
-      if (error) {
-        alert(error.message);
-      } else {
-        authModal.style.display = 'none';
-        updateAuthBadge();
-      }
-    });
-
-    // --- VOICES & ENGINE SELECTION ---
-    function populateVoices() {
-      voicePicker.innerHTML = '';
-      if (activeEngine === 'browser') {
-        const voices = browserSpeech.getVoices();
-        if (!voices || voices.length === 0) {
-          const opt = document.createElement('option');
-          opt.value = "";
-          opt.textContent = "Loading browser voices...";
-          voicePicker.appendChild(opt);
-          return;
-        }
-        voices.forEach((v, idx) => {
-          const opt = document.createElement('option');
-          opt.value = idx;
-          opt.textContent = `${v.name} (${v.lang})`;
-          voicePicker.appendChild(opt);
+    function syncMediaSession(sentenceText) {
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: currentDocName,
+          artist: `Page ${currentPage + 1} of ${bookPages.length}`,
+          album: 'Marginalia'
         });
-      } else {
-        const list = voicePresets[activeEngine] || [];
-        list.forEach(item => {
-          const opt = document.createElement('option');
-          opt.value = item.id;
-          opt.textContent = item.name;
-          voicePicker.appendChild(opt);
+        navigator.mediaSession.setActionHandler('play', () => { isPlaying = true; playCurrentSentence(); });
+        navigator.mediaSession.setActionHandler('pause', stopAudio);
+        navigator.mediaSession.setActionHandler('previoustrack', () => {
+          if (currentSentenceIdx > 0) currentSentenceIdx--;
+          playCurrentSentence();
+        });
+        navigator.mediaSession.setActionHandler('nexttrack', () => {
+          currentSentenceIdx++;
+          playCurrentSentence();
         });
       }
     }
 
-    if (typeof speechSynthesis !== 'undefined') {
-      speechSynthesis.onvoiceschanged = () => {
-        if (activeEngine === 'browser') populateVoices();
-      };
+    // --- UNIVERSAL FILE & EPUB PARSER ---
+    function htmlToCleanText(rawHtml) {
+      return rawHtml
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;/gi, "'")
+        .replace(/\s+/g, ' ')
+        .trim();
     }
 
-    document.querySelectorAll('.engine-tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        document.querySelectorAll('.engine-tab').forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-        activeEngine = tab.dataset.engine;
-        audioPreloadCache.clear();
-        populateVoices();
-
-        if (isPlaying) {
-          stopAudio();
-          isPlaying = true;
-          playCurrentSentence();
-        }
-      });
-    });
-
-    speedSlider.addEventListener('input', (e) => {
-      playbackSpeed = parseFloat(e.target.value);
-      speedDisplay.textContent = `${playbackSpeed.toFixed(1)}x`;
-      audioPreloadCache.clear();
-
-      if (isPlaying) {
-        if (activeEngine === 'browser') {
-          browserSpeech.cancel();
-          playCurrentSentence();
-        } else {
-          audioElement.playbackRate = playbackSpeed;
-        }
+    function splitIntoSentences(text) {
+      if (!text || !text.trim()) return [];
+      if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+        try {
+          const segmenter = new Intl.Segmenter('en', { granularity: 'sentence' });
+          const segments = Array.from(segmenter.segment(text));
+          const sentences = segments
+            .map(s => s.segment.replace(/\s+/g, ' ').trim())
+            .filter(s => s.length > 0);
+          if (sentences.length > 0) return sentences;
+        } catch (e) {}
       }
-    });
+      return text.replace(/([.?!]+)(\s+)/g, "$1\n---BREAK---\n")
+                 .split("\n---BREAK---\n")
+                 .map(s => s.replace(/\s+/g, ' ').trim())
+                 .filter(s => s.length > 0);
+    }
 
-    pageJumpInput.addEventListener('change', (e) => {
-      let pageNum = parseInt(e.target.value, 10);
-      if (isNaN(pageNum) || pageNum < 1) pageNum = 1;
-      if (pageNum > bookPages.length) pageNum = bookPages.length;
+    fileInput.addEventListener('change', async (event) => {
+      const file = event.target.files[0];
+      if (!file) return;
 
-      currentPage = pageNum - 1;
-      currentSentenceIdx = 0;
-      const wasPlaying = isPlaying;
       stopAudio();
-      renderPage(currentPage);
-      if (wasPlaying) {
+      audioPreloadCache.clear();
+      currentDocName = file.name;
+      docTitle.textContent = currentDocName;
+      contentPane.innerHTML = `<div style="text-align:center; padding:3rem; color:var(--text-muted); font-style:italic;">Opening ${file.name}...</div>`;
+
+      try {
+        const ext = file.name.split('.').pop().toLowerCase();
+        let extractedText = "";
+
+        if (ext === 'txt' || ext === 'md') {
+          extractedText = await file.text();
+        } 
+        else if (ext === 'html' || ext === 'htm') {
+          extractedText = htmlToCleanText(await file.text());
+        } 
+        else if (ext === 'docx') {
+          const buf = await file.arrayBuffer();
+          const res = await mammoth.extractRawText({ arrayBuffer: buf });
+          extractedText = res.value || "";
+        } 
+        else if (ext === 'pdf') {
+          const buf = await file.arrayBuffer();
+          const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+          let pages = [];
+          for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const content = await page.getTextContent();
+            pages.push(content.items.map(it => it.str).join(' '));
+          }
+          extractedText = pages.join('\n\n');
+        } 
+        else if (ext === 'epub' || file.type.includes('epub')) {
+          const buf = await file.arrayBuffer();
+          const zip = await JSZip.loadAsync(buf);
+
+          let opfPath = "";
+          const containerFile = zip.files["META-INF/container.xml"];
+          if (containerFile) {
+            const containerXml = await containerFile.async("text");
+            const match = containerXml.match(/full-path=["']([^"']+)["']/i);
+            if (match) opfPath = match[1];
+          }
+
+          let orderedFiles = [];
+          if (opfPath && zip.files[opfPath]) {
+            const opfXml = await zip.files[opfPath].async("text");
+            const basePath = opfPath.includes('/') ? opfPath.substring(0, opfPath.lastIndexOf('/') + 1) : '';
+
+            const manifestMap = {};
+            const itemMatches = opfXml.matchAll(/<item\s+[^>]*id=["']([^"']+)["'][^>]*href=["']([^"']+)["']/gi);
+            for (const m of itemMatches) {
+              manifestMap[m[1]] = basePath + decodeURI(m[2]);
+            }
+
+            const spineMatches = opfXml.matchAll(/<itemref\s+[^>]*idref=["']([^"']+)["']/gi);
+            for (const m of spineMatches) {
+              const fullHref = manifestMap[m[1]];
+              if (fullHref && zip.files[fullHref]) orderedFiles.push(fullHref);
+            }
+          }
+
+          if (orderedFiles.length === 0) {
+            orderedFiles = Object.keys(zip.files).filter(name => {
+              const lower = name.toLowerCase();
+              return (lower.endsWith('.xhtml') || lower.endsWith('.html') || lower.endsWith('.htm')) &&
+                     !lower.includes('toc') && !lower.endsWith('.ncx');
+            }).sort();
+          }
+
+          let chapters = [];
+          for (const chapFile of orderedFiles) {
+            if (zip.files[chapFile]) {
+              const clean = htmlToCleanText(await zip.files[chapFile].async("text"));
+              if (clean.length > 25) chapters.push(clean);
+            }
+          }
+          extractedText = chapters.join('\n\n');
+        }
+
+        const sentences = splitIntoSentences(extractedText);
+        if (sentences.length === 0) throw new Error("No readable text detected.");
+
+        bookPages = [];
+        const perPage = 5;
+        for (let i = 0; i < sentences.length; i += perPage) {
+          bookPages.push(sentences.slice(i, i + perPage));
+        }
+
+        currentPage = 0;
+        currentSentenceIdx = 0;
+        renderPage(0);
+      } catch (err) {
+        alert("Failed to read file: " + err.message);
+        renderPage(currentPage);
+      }
+    });
+
+    // --- CONTROLS HOOKS ---
+    mainPlayToggle.addEventListener('click', () => {
+      if (isPlaying) {
+        stopAudio();
+      } else {
+        populateVoices();
         isPlaying = true;
         playCurrentSentence();
       }
     });
-
-    playBtn.addEventListener('click', () => {
-      isPlaying = true;
-      playCurrentSentence();
-    });
-
-    pauseBtn.addEventListener('click', stopAudio);
 
     prevPageBtn.addEventListener('click', () => {
       if (currentPage > 0) {
@@ -1075,99 +1210,44 @@
       localStorage.setItem('marginalia_theme', e.target.value);
     });
 
-    // --- DOCUMENT PARSING ---
-    function splitIntoSentences(text) {
-      if (!text || !text.trim()) return [];
-      if (typeof Intl !== 'undefined' && Intl.Segmenter) {
-        try {
-          const segmenter = new Intl.Segmenter('en', { granularity: 'sentence' });
-          const segments = Array.from(segmenter.segment(text));
-          const sentences = segments
-            .map(s => s.segment.replace(/\s+/g, ' ').trim())
-            .filter(s => s.length > 0);
-          if (sentences.length > 0) return sentences;
-        } catch (e) {}
+    creditBadge.addEventListener('click', () => { authModal.style.display = 'flex'; });
+    authCloseBtn.addEventListener('click', () => { authModal.style.display = 'none'; });
+
+    authSignInBtn.addEventListener('click', async () => {
+      if (!supabaseClient) {
+        alert("Supabase credentials not configured in index.html.");
+        authModal.style.display = 'none';
+        return;
       }
-      const raw = text.replace(/([.?!]+)(\s+)/g, "$1\n---BREAK---\n").split("\n---BREAK---\n");
-      return raw.map(s => s.replace(/\s+/g, ' ').trim()).filter(s => s.length > 0);
-    }
-
-    fileInput.addEventListener('change', async (event) => {
-      const file = event.target.files[0];
-      if (!file) return;
-
-      stopAudio();
-      audioPreloadCache.clear();
-      currentDocName = file.name;
-      docTitle.textContent = currentDocName;
-      contentPane.innerHTML = `<div style="text-align:center; padding:3rem; color:var(--text-muted); font-style:italic;">Processing document: ${file.name}...</div>`;
-
-      try {
-        const ext = file.name.split('.').pop().toLowerCase();
-        let extractedText = "";
-
-        if (ext === 'txt' || ext === 'md') {
-          extractedText = await file.text();
-        } 
-        else if (ext === 'html' || ext === 'htm') {
-          const raw = await file.text();
-          const doc = new DOMParser().parseFromString(raw, 'text/html');
-          extractedText = (doc.body ? doc.body.textContent : doc.documentElement.textContent) || "";
-        } 
-        else if (ext === 'docx') {
-          const buf = await file.arrayBuffer();
-          const res = await mammoth.extractRawText({ arrayBuffer: buf });
-          extractedText = res.value || "";
-        } 
-        else if (ext === 'pdf') {
-          const buf = await file.arrayBuffer();
-          const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-          let pages = [];
-          for (let i = 1; i <= pdf.numPages; i++) {
-            const page = await pdf.getPage(i);
-            const content = await page.getTextContent();
-            pages.push(content.items.map(it => it.str).join(' '));
-          }
-          extractedText = pages.join('\n\n');
-        } 
-        else if (ext === 'epub') {
-          const buf = await file.arrayBuffer();
-          const zip = await JSZip.loadAsync(buf);
-          const fileNames = Object.keys(zip.files).filter(name => {
-            const lower = name.toLowerCase();
-            return (lower.endsWith('.xhtml') || lower.endsWith('.html') || lower.endsWith('.htm')) &&
-                   !lower.includes('toc') && !lower.endsWith('.ncx');
-          }).sort();
-
-          let chapters = [];
-          for (const name of fileNames) {
-            const rawHtml = await zip.files[name].async("text");
-            const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
-            const clean = (doc.body ? doc.body.textContent : doc.documentElement.textContent || '').replace(/\s+/g, ' ').trim();
-            if (clean.length > 25) chapters.push(clean);
-          }
-          extractedText = chapters.join('\n\n');
-        }
-
-        const sentences = splitIntoSentences(extractedText);
-        if (sentences.length === 0) throw new Error("No readable text detected.");
-
-        bookPages = [];
-        const perPage = 5;
-        for (let i = 0; i < sentences.length; i += perPage) {
-          bookPages.push(sentences.slice(i, i + perPage));
-        }
-
-        currentPage = 0;
-        currentSentenceIdx = 0;
-        renderPage(0);
-      } catch (err) {
-        alert("Failed to parse file: " + err.message);
-        renderPage(currentPage);
+      const { error } = await supabaseClient.auth.signInWithPassword({
+        email: authEmail.value,
+        password: authPass.value
+      });
+      if (error) alert(error.message);
+      else {
+        authModal.style.display = 'none';
+        updateAuthBadge();
       }
     });
 
-    // Init
+    authSignUpBtn.addEventListener('click', async () => {
+      if (!supabaseClient) {
+        alert("Supabase credentials not configured in index.html.");
+        authModal.style.display = 'none';
+        return;
+      }
+      const { error } = await supabaseClient.auth.signUp({
+        email: authEmail.value,
+        password: authPass.value
+      });
+      if (error) alert(error.message);
+      else {
+        authModal.style.display = 'none';
+        updateAuthBadge();
+      }
+    });
+
+    // Initial Load
     const savedTheme = localStorage.getItem('marginalia_theme') || 'dark';
     document.documentElement.setAttribute('data-theme', savedTheme);
     themeSelect.value = savedTheme;
