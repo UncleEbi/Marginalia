@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Marginalia — Commercial Read-Along Platform</title>
+  <title>Marginalia — Read-Along Reader</title>
 
   <!-- Client-Side Document Parsers -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -98,7 +98,6 @@
       transition: background-color var(--transition), color var(--transition);
     }
 
-    /* TOP HEADER */
     header {
       padding: 0.85rem 2rem;
       background: var(--panel-bg);
@@ -114,7 +113,6 @@
       display: flex;
       align-items: center;
       gap: 0.75rem;
-      text-decoration: none;
       color: var(--text-main);
       user-select: none;
     }
@@ -164,7 +162,6 @@
     }
     button.primary:hover { background: var(--accent-active); }
 
-    /* AUTH & CREDITS BADGE */
     .credit-badge {
       font-size: 0.8rem;
       padding: 0.4rem 0.75rem;
@@ -179,7 +176,6 @@
       cursor: pointer;
     }
 
-    /* CONTROL PANEL */
     .controls-panel {
       max-width: 860px;
       width: 100%;
@@ -255,7 +251,6 @@
       cursor: pointer;
     }
 
-    /* READING CANVAS */
     main {
       flex: 1;
       display: flex;
@@ -300,7 +295,6 @@
       user-select: text;
     }
 
-    /* KARAOKE & HIGHLIGHTING */
     .sentence {
       padding: 2px 4px;
       border-radius: 4px;
@@ -332,7 +326,6 @@
       font-weight: 600;
     }
 
-    /* FOOTER */
     .footer-bar {
       margin-top: 3rem;
       display: flex;
@@ -369,7 +362,6 @@
       border-radius: 6px;
     }
 
-    /* AUTH MODAL */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -394,11 +386,7 @@
       gap: 1.2rem;
     }
 
-    .modal-title {
-      font-size: 1.2rem;
-      font-weight: 700;
-    }
-
+    .modal-title { font-size: 1.2rem; font-weight: 700; }
     .input-field {
       width: 100%;
       padding: 0.65rem 0.85rem;
@@ -408,121 +396,10 @@
       color: var(--text-main);
       font-size: 0.9rem;
     }
-/* =========================================
-       MOBILE OPTIMIZATIONS (< 640px)
-       ========================================= */
-    @media (max-width: 640px) {
-      header {
-        padding: 0.75rem 1rem;
-        gap: 0.6rem;
-      }
-
-      .brand-title {
-        font-size: 1.15rem;
-      }
-
-      /* Compact header buttons */
-      .header-actions {
-        width: 100%;
-        justify-content: space-between;
-        gap: 0.4rem;
-      }
-
-      .header-actions button,
-      .header-actions select,
-      .header-actions label.btn-ui {
-        padding: 0.4rem 0.55rem;
-        font-size: 0.8rem;
-      }
-
-      /* Controls panel padding and layout */
-      .controls-panel {
-        margin: 0.75rem 0.75rem 0;
-        padding: 0.85rem;
-        gap: 0.75rem;
-        width: calc(100% - 1.5rem);
-      }
-
-      /* Horizontal touch-scroll for engine tabs */
-      .engine-tabs-group {
-        display: flex;
-        flex-wrap: nowrap;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: none;
-        padding-bottom: 4px;
-      }
-      .engine-tabs-group::-webkit-scrollbar {
-        display: none;
-      }
-
-      .engine-tab {
-        flex-shrink: 0;
-        font-size: 0.78rem;
-        padding: 0.35rem 0.75rem;
-      }
-
-      /* Stack sub-controls cleanly */
-      .settings-sub-bar {
-        flex-direction: column;
-        align-items: stretch;
-        gap: 0.65rem;
-      }
-
-      .setting-group {
-        justify-content: space-between;
-        width: 100%;
-      }
-
-      .setting-group select {
-        flex: 1;
-        max-width: 65%;
-      }
-
-      /* Reader Card: expand width and reduce edge padding */
-      main {
-        padding: 0.75rem 0.5rem 2rem;
-      }
-
-      .reader-card {
-        padding: 1.75rem 1.1rem;
-        margin-top: 0.5rem;
-        border-radius: 8px;
-        min-height: calc(100vh - 280px);
-      }
-
-      .book-content {
-        font-size: 1.15rem;
-        line-height: 1.95;
-      }
-
-      /* Clean mobile footer */
-      .footer-bar {
-        margin-top: 2rem;
-        padding-top: 1rem;
-      }
-
-      .footer-bar button {
-        padding: 0.45rem 0.65rem;
-        font-size: 0.8rem;
-      }
-
-      .page-nav {
-        font-size: 0.8rem;
-        gap: 0.4rem;
-      }
-
-      .page-jump-input {
-        width: 54px;
-        min-width: 54px;
-        padding: 0.25rem;
-      }
-    }
   </style>
 </head>
 <body>
 
-  <!-- HEADER -->
   <header>
     <div class="brand-group">
       <svg class="brand-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -535,18 +412,14 @@
     </div>
 
     <div class="header-actions">
-      <!-- Live Credit Ledger Pill -->
+      <!-- Credit Badge -->
       <div id="creditBadge" class="credit-badge">
-        <span>⚡</span> <span id="creditDisplay">Sign In</span>
+        <span id="creditDisplay">Sign In</span>
       </div>
 
-      <!-- File Picker -->
-      <label class="btn-ui" for="fileInput">
-        📁 Open Document
-      </label>
+      <label class="btn-ui" for="fileInput">📁 Open Document</label>
       <input type="file" id="fileInput" accept=".txt,.md,.pdf,.docx,.epub,.html,.htm" style="display:none;" />
 
-      <!-- Theme Switcher -->
       <select id="themeSelect">
         <option value="light">Clean Light</option>
         <option value="sepia">Sepia Paper</option>
@@ -560,9 +433,7 @@
   </header>
 
   <main>
-    <!-- CONTROLS PANEL -->
     <div class="controls-panel">
-      <!-- Voice Engines -->
       <div class="engine-tabs-group">
         <button class="engine-tab active" data-engine="browser">Browser / Native</button>
         <button class="engine-tab" data-engine="elevenlabs">ElevenLabs</button>
@@ -592,11 +463,10 @@
       </div>
     </div>
 
-    <!-- MAIN READING CANVAS -->
     <div class="reader-card">
       <div class="doc-meta">
         <span id="docTitle">Marginalia Reader</span>
-        <span id="preloadStatus">Buffer Ready</span>
+        <span id="preloadStatus">Ready</span>
       </div>
 
       <div id="contentPane" class="book-content"></div>
@@ -619,7 +489,7 @@
   <div id="authModal" class="modal-overlay">
     <div class="modal-card">
       <div class="modal-title">Account & Quota Access</div>
-      <p style="font-size:0.85rem; color:var(--text-muted);">Log in to sync neural character allowances across devices.</p>
+      <p style="font-size:0.85rem; color:var(--text-muted);">Sign in to access your neural voice character quota.</p>
       <input type="email" id="authEmail" class="input-field" placeholder="Email address" />
       <input type="password" id="authPass" class="input-field" placeholder="Password" />
       <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
@@ -634,22 +504,19 @@
 
   <script>
     // --- SUPABASE CONFIGURATION ---
-    // If you wish to hardcode public credentials for your instance, paste them here:
+    // (Keep your actual Supabase URL and public anon key here)
     const SUPABASE_PROJECT_URL = "https://nnxphilhkhvwnitxvzdi.supabase.co"; 
     const SUPABASE_ANON_KEY = "sb_publishable_ekzdgLR6FSDHnP2DZNklMQ_n3-k0ZLN";
 
     let supabaseClient = null;
-    let currentUserSession = null;
-
     if (SUPABASE_PROJECT_URL && !SUPABASE_PROJECT_URL.includes("your-project")) {
       try {
         supabaseClient = supabase.createClient(SUPABASE_PROJECT_URL, SUPABASE_ANON_KEY);
       } catch (err) {
-        console.warn("Supabase initialization bypassed:", err);
+        console.warn("Supabase initialization error:", err);
       }
     }
 
-    // --- ENGINE PRESETS ---
     const voicePresets = {
       browser: [],
       elevenlabs: [
@@ -679,7 +546,6 @@
       ]
     };
 
-    // --- APPLICATION STATE ---
     let currentDocName = "Marginalia Quickstart";
     let bookPages = [
       [
@@ -699,11 +565,8 @@
     const browserSpeech = window.speechSynthesis;
     let currentUtterance = null;
     const audioElement = document.getElementById('neuralAudio');
-
-    // Pre-buffering storage cache
     const audioPreloadCache = new Map();
 
-    // DOM References
     const contentPane = document.getElementById('contentPane');
     const playBtn = document.getElementById('playBtn');
     const pauseBtn = document.getElementById('pauseBtn');
@@ -728,47 +591,43 @@
     const authSignUpBtn = document.getElementById('authSignUpBtn');
     const authCloseBtn = document.getElementById('authCloseBtn');
 
-    // --- PROGRESS PERSISTENCE ---
-    function saveSessionProgress() {
-      const state = {
-        docName: currentDocName,
-        bookPages: bookPages,
-        currentPage: currentPage,
-        currentSentenceIdx: currentSentenceIdx,
-        speed: playbackSpeed,
-        engine: activeEngine,
-        theme: document.documentElement.getAttribute('data-theme')
-      };
-      localStorage.setItem('marginalia_session', JSON.stringify(state));
+    // --- GET AUTH TOKEN DIRECTLY ---
+    async function getFreshAuthToken() {
+      if (!supabaseClient) return null;
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      return session?.access_token || null;
     }
 
-    function loadSessionProgress() {
-      const raw = localStorage.getItem('marginalia_session');
-      if (!raw) return false;
-      try {
-        const state = JSON.parse(raw);
-        if (state.bookPages && state.bookPages.length > 0) {
-          bookPages = state.bookPages;
-          currentPage = state.currentPage || 0;
-          currentSentenceIdx = state.currentSentenceIdx || 0;
-          currentDocName = state.docName || "Untitled";
-          docTitle.textContent = currentDocName;
-          if (state.speed) {
-            playbackSpeed = state.speed;
-            speedSlider.value = state.speed;
-            speedDisplay.textContent = `${playbackSpeed.toFixed(1)}x`;
-          }
-          return true;
-        }
-      } catch (e) {
-        console.warn("Unable to restore session:", e);
+    // --- REFRESH CREDIT BADGE ---
+    async function updateAuthBadge(explicitRemaining = null) {
+      if (!supabaseClient) {
+        creditDisplay.textContent = "⚡ Free Tier";
+        return;
       }
-      return false;
+
+      if (explicitRemaining !== null) {
+        creditDisplay.textContent = `⚡ ${explicitRemaining.toLocaleString()} Chars`;
+        return;
+      }
+
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      if (session && session.user) {
+        const { data: profile } = await supabaseClient
+          .from('profiles')
+          .select('neural_chars_remaining')
+          .eq('id', session.user.id)
+          .single();
+
+        const remaining = profile ? profile.neural_chars_remaining : 5000;
+        creditDisplay.textContent = `⚡ ${remaining.toLocaleString()} Chars`;
+      } else {
+        creditDisplay.textContent = "Sign In";
+      }
     }
 
-    // --- ZERO-LATENCY PRE-BUFFERING ENGINE ---
+    // --- PRE-BUFFERING ENGINE ---
     async function prebufferNextSentence() {
-      if (activeEngine === 'browser') return; // Browser native speech engine handles queueing in memory
+      if (activeEngine === 'browser') return;
 
       let nextSentence = currentSentenceIdx + 1;
       let targetPage = currentPage;
@@ -778,18 +637,19 @@
           targetPage = currentPage + 1;
           nextSentence = 0;
         } else {
-          return; // Document ended
+          return;
         }
       }
 
       const text = bookPages[targetPage][nextSentence];
       const cacheKey = `${activeEngine}_${voicePicker.value}_${playbackSpeed}_${text}`;
-
       if (audioPreloadCache.has(cacheKey)) return;
 
-      preloadStatus.textContent = "Pre-buffering next...";
+      const token = await getFreshAuthToken();
+      if (!token) return;
+
+      preloadStatus.textContent = "Buffering next...";
       try {
-        const token = currentUserSession?.access_token || localStorage.getItem('sb_access_token') || '';
         const res = await fetch('/api/tts', {
           method: 'POST',
           headers: {
@@ -797,7 +657,7 @@
             'Authorization': `Bearer ${token}`
           },
           body: JSON.stringify({
-            text: text,
+            text,
             voiceId: voicePicker.value,
             engine: activeEngine,
             speed: playbackSpeed
@@ -809,35 +669,29 @@
           const src = data.audio_base64 
             ? `data:audio/mp3;base64,${data.audio_base64}`
             : (data.audioUrl || '');
-          
+
           if (src) {
-            const preloadAudio = new Audio();
-            preloadAudio.src = src;
-            preloadAudio.preload = 'auto';
-            audioPreloadCache.set(cacheKey, src);
+            const audioObj = new Audio();
+            audioObj.src = src;
+            audioObj.preload = 'auto';
+            audioPreloadCache.set(cacheKey, { src, remaining: data.remaining_chars });
             preloadStatus.textContent = "Buffer Ready";
           }
         }
       } catch (err) {
-        console.warn("Preload error:", err);
         preloadStatus.textContent = "Buffer Idle";
       }
     }
 
-    // --- LOCK SCREEN & MEDIA SESSION API ---
+    // --- LOCK SCREEN CONTROLS ---
     function syncMediaSession(sentenceText) {
       if ('mediaSession' in navigator) {
         navigator.mediaSession.metadata = new MediaMetadata({
           title: currentDocName,
           artist: `Page ${currentPage + 1} of ${bookPages.length}`,
-          album: 'Marginalia Reader',
-          artwork: [{ src: 'https://cdn-icons-png.flaticon.com/512/3389/3389024.png', sizes: '512x512', type: 'image/png' }]
+          album: 'Marginalia Reader'
         });
-
-        navigator.mediaSession.setActionHandler('play', () => {
-          isPlaying = true;
-          playCurrentSentence();
-        });
+        navigator.mediaSession.setActionHandler('play', () => { isPlaying = true; playCurrentSentence(); });
         navigator.mediaSession.setActionHandler('pause', stopAudio);
         navigator.mediaSession.setActionHandler('previoustrack', () => {
           if (currentSentenceIdx > 0) currentSentenceIdx--;
@@ -850,13 +704,12 @@
       }
     }
 
-    // --- KARAOKE WORD SPLITTER & BUILDER ---
+    // --- WORD HIGHLIGHTING & DOM ---
     function buildSentenceDOM(sentenceText, sIdx) {
       const sentenceSpan = document.createElement('span');
       sentenceSpan.className = 'sentence';
       sentenceSpan.id = `sent-${sIdx}`;
 
-      // Tokenize sentence into individual word elements for karaoke highlighting
       const words = sentenceText.split(/(\s+)/);
       let wordCount = 0;
 
@@ -900,7 +753,6 @@
       prevPageBtn.disabled = idx === 0;
       nextPageBtn.disabled = idx >= bookPages.length - 1;
       highlightActiveSentence();
-      saveSessionProgress();
     }
 
     function highlightActiveSentence() {
@@ -921,7 +773,7 @@
       });
     }
 
-    // --- PLAYBACK ENGINE ---
+    // --- PLAYBACK CONTROLLER ---
     async function playCurrentSentence() {
       const pageSentences = bookPages[currentPage];
       if (!pageSentences || pageSentences.length === 0) return;
@@ -941,9 +793,6 @@
       highlightActiveSentence();
       const textToRead = pageSentences[currentSentenceIdx];
       syncMediaSession(textToRead);
-      saveSessionProgress();
-
-      // Trigger pre-buffer for sentence N+1
       prebufferNextSentence();
 
       if (activeEngine === 'browser') {
@@ -953,7 +802,6 @@
       }
     }
 
-    // Browser Speech Synthesis with Word Boundary Hook
     function speakBrowser(text) {
       browserSpeech.cancel();
       currentUtterance = new SpeechSynthesisUtterance(text);
@@ -964,7 +812,6 @@
         currentUtterance.voice = voices[parseInt(voicePicker.value, 10)] || voices[0];
       }
 
-      // Karaoke: Track character offsets and highlight matching words
       currentUtterance.onboundary = (e) => {
         if (e.name === 'word') {
           const words = text.slice(0, e.charIndex).trim().split(/\s+/);
@@ -983,15 +830,22 @@
       browserSpeech.speak(currentUtterance);
     }
 
-    // Neural Serverless Speech Synthesis with Zero-Latency Cache Injection
     async function speakServerless(text) {
       try {
+        const token = await getFreshAuthToken();
+        if (!token) {
+          stopAudio();
+          alert("Please sign in first to use neural cloud voices.");
+          authModal.style.display = 'flex';
+          return;
+        }
+
         const cacheKey = `${activeEngine}_${voicePicker.value}_${playbackSpeed}_${text}`;
-        let audioSrc = audioPreloadCache.get(cacheKey);
+        let cached = audioPreloadCache.get(cacheKey);
+        let audioSrc = cached?.src;
 
         if (!audioSrc) {
-          preloadStatus.textContent = "Fetching audio...";
-          const token = currentUserSession?.access_token || localStorage.getItem('sb_access_token') || '';
+          preloadStatus.textContent = "Connecting to voice engine...";
           const res = await fetch('/api/tts', {
             method: 'POST',
             headers: {
@@ -999,31 +853,33 @@
               'Authorization': `Bearer ${token}`
             },
             body: JSON.stringify({
-              text: text,
+              text,
               voiceId: voicePicker.value,
               engine: activeEngine,
               speed: playbackSpeed
             })
           });
 
-          if (res.status === 402) {
-            alert("Neural character quota depleted. Swapping to browser voice.");
-            document.querySelector('[data-engine="browser"]').click();
-            return;
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            throw new Error(data.error || `Voice engine returned error ${res.status}`);
           }
 
-          if (!res.ok) throw new Error(`Proxy error ${res.status}`);
-          const data = await res.json();
           audioSrc = data.audio_base64 
             ? `data:audio/mp3;base64,${data.audio_base64}`
             : (data.audioUrl || '');
+
+          if (data.remaining_chars !== undefined) {
+            updateAuthBadge(data.remaining_chars);
+          }
+        } else if (cached?.remaining !== undefined) {
+          updateAuthBadge(cached.remaining);
         }
 
         audioElement.src = audioSrc;
         audioElement.playbackRate = playbackSpeed;
         await audioElement.play();
 
-        // Fluid time-based Karaoke interpolation for Neural streams
         const totalWords = text.trim().split(/\s+/).length;
         audioElement.ontimeupdate = () => {
           if (audioElement.duration) {
@@ -1040,8 +896,9 @@
         };
 
       } catch (err) {
-        console.warn("Neural backend error, falling back to local voice:", err);
-        speakBrowser(text);
+        stopAudio();
+        console.error("Neural Speech Error:", err);
+        alert(err.message);
       }
     }
 
@@ -1052,30 +909,7 @@
       document.querySelectorAll('.word').forEach(el => el.classList.remove('active-word'));
     }
 
-    // --- SUPABASE AUTHENTICATION CONTROLLER ---
-    async function updateAuthBadge() {
-      if (!supabaseClient) {
-        creditDisplay.textContent = "⚡ Free Tier";
-        return;
-      }
-
-      const { data: { session } } = await supabaseClient.auth.getSession();
-      currentUserSession = session;
-
-      if (session && session.user) {
-        const { data: profile } = await supabaseClient
-          .from('profiles')
-          .select('neural_chars_remaining, tier')
-          .eq('id', session.user.id)
-          .single();
-
-        const remaining = profile ? profile.neural_chars_remaining.toLocaleString() : '5,000';
-        creditDisplay.textContent = `⚡ ${remaining} Chars`;
-      } else {
-        creditDisplay.textContent = "Sign In";
-      }
-    }
-
+    // --- AUTH MODAL HANDLERS ---
     creditBadge.addEventListener('click', () => {
       authModal.style.display = 'flex';
     });
@@ -1093,8 +927,9 @@
         email: authEmail.value,
         password: authPass.value
       });
-      if (error) alert(error.message);
-      else {
+      if (error) {
+        alert(error.message);
+      } else {
         authModal.style.display = 'none';
         updateAuthBadge();
       }
@@ -1110,17 +945,139 @@
         email: authEmail.value,
         password: authPass.value
       });
-      if (error) alert(error.message);
-      else {
-        alert("Account created. Check your inbox for confirmation.");
+      if (error) {
+        alert(error.message);
+      } else {
         authModal.style.display = 'none';
+        updateAuthBadge();
       }
     });
 
-    // --- UNIVERSAL DOCUMENT PARSER ---
+    // --- VOICES & ENGINE SELECTION ---
+    function populateVoices() {
+      voicePicker.innerHTML = '';
+      if (activeEngine === 'browser') {
+        const voices = browserSpeech.getVoices();
+        if (!voices || voices.length === 0) {
+          const opt = document.createElement('option');
+          opt.value = "";
+          opt.textContent = "Loading browser voices...";
+          voicePicker.appendChild(opt);
+          return;
+        }
+        voices.forEach((v, idx) => {
+          const opt = document.createElement('option');
+          opt.value = idx;
+          opt.textContent = `${v.name} (${v.lang})`;
+          voicePicker.appendChild(opt);
+        });
+      } else {
+        const list = voicePresets[activeEngine] || [];
+        list.forEach(item => {
+          const opt = document.createElement('option');
+          opt.value = item.id;
+          opt.textContent = item.name;
+          voicePicker.appendChild(opt);
+        });
+      }
+    }
+
+    if (typeof speechSynthesis !== 'undefined') {
+      speechSynthesis.onvoiceschanged = () => {
+        if (activeEngine === 'browser') populateVoices();
+      };
+    }
+
+    document.querySelectorAll('.engine-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.engine-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        activeEngine = tab.dataset.engine;
+        audioPreloadCache.clear();
+        populateVoices();
+
+        if (isPlaying) {
+          stopAudio();
+          isPlaying = true;
+          playCurrentSentence();
+        }
+      });
+    });
+
+    speedSlider.addEventListener('input', (e) => {
+      playbackSpeed = parseFloat(e.target.value);
+      speedDisplay.textContent = `${playbackSpeed.toFixed(1)}x`;
+      audioPreloadCache.clear();
+
+      if (isPlaying) {
+        if (activeEngine === 'browser') {
+          browserSpeech.cancel();
+          playCurrentSentence();
+        } else {
+          audioElement.playbackRate = playbackSpeed;
+        }
+      }
+    });
+
+    pageJumpInput.addEventListener('change', (e) => {
+      let pageNum = parseInt(e.target.value, 10);
+      if (isNaN(pageNum) || pageNum < 1) pageNum = 1;
+      if (pageNum > bookPages.length) pageNum = bookPages.length;
+
+      currentPage = pageNum - 1;
+      currentSentenceIdx = 0;
+      const wasPlaying = isPlaying;
+      stopAudio();
+      renderPage(currentPage);
+      if (wasPlaying) {
+        isPlaying = true;
+        playCurrentSentence();
+      }
+    });
+
+    playBtn.addEventListener('click', () => {
+      isPlaying = true;
+      playCurrentSentence();
+    });
+
+    pauseBtn.addEventListener('click', stopAudio);
+
+    prevPageBtn.addEventListener('click', () => {
+      if (currentPage > 0) {
+        currentPage--;
+        currentSentenceIdx = 0;
+        const wasPlaying = isPlaying;
+        stopAudio();
+        renderPage(currentPage);
+        if (wasPlaying) {
+          isPlaying = true;
+          playCurrentSentence();
+        }
+      }
+    });
+
+    nextPageBtn.addEventListener('click', () => {
+      if (currentPage < bookPages.length - 1) {
+        currentPage++;
+        currentSentenceIdx = 0;
+        const wasPlaying = isPlaying;
+        stopAudio();
+        renderPage(currentPage);
+        if (wasPlaying) {
+          isPlaying = true;
+          playCurrentSentence();
+        }
+      }
+    });
+
+    themeSelect.addEventListener('change', (e) => {
+      document.documentElement.setAttribute('data-theme', e.target.value);
+      localStorage.setItem('marginalia_theme', e.target.value);
+    });
+
+    // --- DOCUMENT PARSING ---
     function splitIntoSentences(text) {
       if (!text || !text.trim()) return [];
-
       if (typeof Intl !== 'undefined' && Intl.Segmenter) {
         try {
           const segmenter = new Intl.Segmenter('en', { granularity: 'sentence' });
@@ -1129,11 +1086,8 @@
             .map(s => s.segment.replace(/\s+/g, ' ').trim())
             .filter(s => s.length > 0);
           if (sentences.length > 0) return sentences;
-        } catch (e) {
-          console.warn("Segmenter fallback:", e);
-        }
+        } catch (e) {}
       }
-
       const raw = text.replace(/([.?!]+)(\s+)/g, "$1\n---BREAK---\n").split("\n---BREAK---\n");
       return raw.map(s => s.replace(/\s+/g, ' ').trim()).filter(s => s.length > 0);
     }
@@ -1213,138 +1167,13 @@
       }
     });
 
-    // --- CONTROLS INITIALIZATION ---
-    function populateVoices() {
-      voicePicker.innerHTML = '';
-      if (activeEngine === 'browser') {
-        const voices = browserSpeech.getVoices();
-        if (!voices || voices.length === 0) {
-          const opt = document.createElement('option');
-          opt.value = "";
-          opt.textContent = "Loading system voices...";
-          voicePicker.appendChild(opt);
-          return;
-        }
-        voices.forEach((v, idx) => {
-          const opt = document.createElement('option');
-          opt.value = idx;
-          opt.textContent = `${v.name} (${v.lang})`;
-          voicePicker.appendChild(opt);
-        });
-      } else {
-        const list = voicePresets[activeEngine] || [];
-        list.forEach(item => {
-          const opt = document.createElement('option');
-          opt.value = item.id;
-          opt.textContent = item.name;
-          voicePicker.appendChild(opt);
-        });
-      }
-    }
-
-    if (typeof speechSynthesis !== 'undefined') {
-      speechSynthesis.onvoiceschanged = () => {
-        if (activeEngine === 'browser') populateVoices();
-      };
-    }
-
-    document.querySelectorAll('.engine-tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        document.querySelectorAll('.engine-tab').forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-        activeEngine = tab.dataset.engine;
-        audioPreloadCache.clear();
-        populateVoices();
-
-        if (isPlaying) {
-          stopAudio();
-          isPlaying = true;
-          playCurrentSentence();
-        }
-      });
-    });
-
-    speedSlider.addEventListener('input', (e) => {
-      playbackSpeed = parseFloat(e.target.value);
-      speedDisplay.textContent = `${playbackSpeed.toFixed(1)}x`;
-      audioPreloadCache.clear();
-
-      if (isPlaying) {
-        if (activeEngine === 'browser') {
-          browserSpeech.cancel();
-          playCurrentSentence();
-        } else {
-          audioElement.playbackRate = playbackSpeed;
-        }
-      }
-      saveSessionProgress();
-    });
-
-    pageJumpInput.addEventListener('change', (e) => {
-      let pageNum = parseInt(e.target.value, 10);
-      if (isNaN(pageNum) || pageNum < 1) pageNum = 1;
-      if (pageNum > bookPages.length) pageNum = bookPages.length;
-
-      currentPage = pageNum - 1;
-      currentSentenceIdx = 0;
-      const wasPlaying = isPlaying;
-      stopAudio();
-      renderPage(currentPage);
-      if (wasPlaying) {
-        isPlaying = true;
-        playCurrentSentence();
-      }
-    });
-
-    playBtn.addEventListener('click', () => {
-      isPlaying = true;
-      playCurrentSentence();
-    });
-
-    pauseBtn.addEventListener('click', stopAudio);
-
-    prevPageBtn.addEventListener('click', () => {
-      if (currentPage > 0) {
-        currentPage--;
-        currentSentenceIdx = 0;
-        const wasPlaying = isPlaying;
-        stopAudio();
-        renderPage(currentPage);
-        if (wasPlaying) {
-          isPlaying = true;
-          playCurrentSentence();
-        }
-      }
-    });
-
-    nextPageBtn.addEventListener('click', () => {
-      if (currentPage < bookPages.length - 1) {
-        currentPage++;
-        currentSentenceIdx = 0;
-        const wasPlaying = isPlaying;
-        stopAudio();
-        renderPage(currentPage);
-        if (wasPlaying) {
-          isPlaying = true;
-          playCurrentSentence();
-        }
-      }
-    });
-
-    themeSelect.addEventListener('change', (e) => {
-      document.documentElement.setAttribute('data-theme', e.target.value);
-      localStorage.setItem('marginalia_theme', e.target.value);
-      saveSessionProgress();
-    });
-
-    // --- APPLICATION STARTUP ---
+    // Init
     const savedTheme = localStorage.getItem('marginalia_theme') || 'dark';
     document.documentElement.setAttribute('data-theme', savedTheme);
     themeSelect.value = savedTheme;
 
-    loadSessionProgress();
     populateVoices();
-    renderPage(currentPage);
+    renderPage(0);
     updateAuthBadge();
   </script>
 </body>
