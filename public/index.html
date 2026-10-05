@@ -97,12 +97,7 @@
       --modal-overlay: rgba(0, 0, 0, 0.88);
     }
 
-    * { 
-      box-sizing: border-box; 
-      margin: 0; 
-      padding: 0; 
-      touch-action: manipulation;
-    }
+    * { box-sizing: border-box; margin: 0; padding: 0; touch-action: manipulation; }
 
     body {
       background-color: var(--bg-main);
@@ -117,7 +112,6 @@
       overflow-x: hidden;
     }
 
-    /* TOP HEADER */
     header {
       padding: 0.65rem 1rem;
       background: var(--panel-bg);
@@ -208,7 +202,6 @@
       font-weight: 600;
     }
 
-    /* ENGINE TABS */
     .controls-panel {
       max-width: 860px;
       width: calc(100% - 1.5rem);
@@ -274,12 +267,8 @@
       min-width: 140px;
     }
 
-    .setting-group select {
-      flex: 1;
-      width: 100%;
-    }
+    .setting-group select { flex: 1; width: 100%; }
 
-    /* READING CONTAINER */
     main {
       flex: 1;
       display: flex;
@@ -353,7 +342,6 @@
       border-radius: 3px;
     }
 
-    /* STICKY BOTTOM PLAYER */
     .mobile-player-bar {
       position: fixed;
       bottom: 0; left: 0; right: 0;
@@ -417,7 +405,6 @@
       border: 1px solid var(--border);
     }
 
-    /* MOON+ READER SLIDE-OUT DRAWER */
     .drawer-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -546,7 +533,6 @@
       color: var(--text-main);
     }
 
-    /* ALL MODALS */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -648,7 +634,7 @@
     </div>
   </header>
 
-  <!-- MOON+ READER INSPIRED NAVIGATION DRAWER -->
+  <!-- NAVIGATION DRAWER -->
   <div id="drawerOverlay" class="drawer-overlay"></div>
   <aside id="sideDrawer" class="side-drawer">
     <div class="drawer-header">
@@ -915,13 +901,12 @@
       }
     }
 
-    // --- UNIVERSAL MODAL SYSTEM (RELIABLE CLOSING) ---
+    // --- UNIVERSAL MODAL CONTROLLER ---
     function closeModalById(id) {
       const modal = document.getElementById(id);
       if (modal) modal.style.display = 'none';
     }
 
-    // 1. Hook up all close buttons via data-close
     document.querySelectorAll('[data-close]').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -929,7 +914,6 @@
       });
     });
 
-    // 2. Click outside modal card to close
     document.querySelectorAll('.modal-overlay').forEach(modal => {
       modal.addEventListener('click', (e) => {
         if (e.target === modal) modal.style.display = 'none';
@@ -1054,7 +1038,7 @@
         "Welcome to Marginalia Mobile Reader.",
         "Your reading controls are pinned at the bottom of the screen within easy reach.",
         "Tap the menu button in the top-left to access your saved bookshelf, recent books, and bookmarks.",
-        "All uploaded documents are stored directly in your browser."
+        "Notice how each word highlights in precise sync with the voice."
       ]
     ];
 
@@ -1345,6 +1329,42 @@
       }
     }
 
+    // --- WEIGHTED PHONETIC CADENCE TIMELINE ENGINE ---
+    function computeWordTimeline(words, speed, totalDuration = null) {
+      const baseMsPerChar = 68 / speed;
+      const timeline = [];
+      let totalEst = 0;
+
+      words.forEach((word) => {
+        const clean = word.trim();
+        const charCount = Math.max(1, clean.replace(/[^a-zA-Z0-9]/g, '').length);
+        let duration = Math.max(160 / speed, charCount * baseMsPerChar);
+
+        // Account for breath & punctuation pauses
+        if (/[,;:\-]/.test(clean)) {
+          duration += 280 / speed;
+        } else if (/[.!?]/.test(clean)) {
+          duration += 420 / speed;
+        }
+
+        timeline.push({ duration });
+        totalEst += duration;
+      });
+
+      // Normalize if audio has an exact duration
+      if (totalDuration && totalDuration > 0) {
+        const ratio = (totalDuration * 1000) / totalEst;
+        timeline.forEach(item => { item.duration *= ratio; });
+      }
+
+      let accum = 0;
+      return timeline.map(item => {
+        const start = accum;
+        accum += item.duration;
+        return { start: start / 1000, end: accum / 1000 };
+      });
+    }
+
     // --- PLAYBACK CONTROLLER ---
     function buildSentenceDOM(sentenceText, sIdx) {
       const span = document.createElement('span');
@@ -1455,34 +1475,53 @@
         currentUtterance.voice = voices[parseInt(voicePicker.value, 10)] || voices[0];
       }
 
-      let nativeBoundaryFired = false;
+      const wordsArr = text.trim().split(/\s+/).filter(w => w.length > 0);
+      const timeline = computeWordTimeline(wordsArr, playbackSpeed);
+
+      let boundaryCount = 0;
+      let lastBoundaryTime = 0;
+      let usingNativeBoundaries = false;
+
+      // Handle Android Chrome burst anomaly vs true boundary
       currentUtterance.onboundary = (e) => {
         if (e.name === 'word') {
-          nativeBoundaryFired = true;
-          if (wordTimerInterval) clearInterval(wordTimerInterval);
+          const now = performance.now();
+          if (lastBoundaryTime && (now - lastBoundaryTime < 75)) {
+            // Burst anomaly detected: Ignore buggy rapid event stream
+            return;
+          }
+          lastBoundaryTime = now;
+          boundaryCount++;
+          if (boundaryCount > 1) {
+            usingNativeBoundaries = true;
+            if (wordTimerInterval) {
+              clearInterval(wordTimerInterval);
+              wordTimerInterval = null;
+            }
+          }
           const words = text.slice(0, e.charIndex).trim().split(/\s+/);
           highlightActiveWord(words[0] === "" ? 0 : words.length);
         }
       };
 
-      const wordsArr = text.trim().split(/\s+/);
-      const totalWords = wordsArr.length;
-      let mobileWordIdx = 0;
-      const msPerWord = Math.max(120, (60000 / (180 * playbackSpeed)));
+      currentUtterance.onstart = () => {
+        highlightActiveWord(0);
+        const startTime = performance.now();
 
-      setTimeout(() => {
-        if (!nativeBoundaryFired && isPlaying) {
-          highlightActiveWord(0);
-          wordTimerInterval = setInterval(() => {
-            if (mobileWordIdx < totalWords - 1) {
-              mobileWordIdx++;
-              highlightActiveWord(mobileWordIdx);
+        wordTimerInterval = setInterval(() => {
+          if (usingNativeBoundaries) return;
+          const elapsedSec = (performance.now() - startTime) / 1000;
+          let activeIdx = 0;
+          for (let i = 0; i < timeline.length; i++) {
+            if (elapsedSec >= timeline[i].start) {
+              activeIdx = i;
             } else {
-              clearInterval(wordTimerInterval);
+              break;
             }
-          }, msPerWord);
-        }
-      }, 200);
+          }
+          highlightActiveWord(activeIdx);
+        }, 50);
+      };
 
       currentUtterance.onend = () => {
         if (wordTimerInterval) clearInterval(wordTimerInterval);
@@ -1539,12 +1578,24 @@
         audioElement.playbackRate = playbackSpeed;
         await audioElement.play();
 
-        const totalWords = text.trim().split(/\s+/).length;
+        const wordsArr = text.trim().split(/\s+/).filter(w => w.length > 0);
+        let timeline = null;
+
         audioElement.ontimeupdate = () => {
-          if (audioElement.duration) {
-            const fraction = audioElement.currentTime / audioElement.duration;
-            const targetWord = Math.min(totalWords - 1, Math.floor(fraction * totalWords));
-            highlightActiveWord(targetWord);
+          if (!timeline && audioElement.duration) {
+            timeline = computeWordTimeline(wordsArr, playbackSpeed, audioElement.duration);
+          }
+          if (timeline) {
+            const cur = audioElement.currentTime;
+            let activeIdx = 0;
+            for (let i = 0; i < timeline.length; i++) {
+              if (cur >= timeline[i].start) {
+                activeIdx = i;
+              } else {
+                break;
+              }
+            }
+            highlightActiveWord(activeIdx);
           }
         };
 
@@ -1841,7 +1892,7 @@
       }
     });
 
-    // --- FILE PARSER ---
+    // --- ROBUST FILE & EPUB PARSER ---
     function normalizeZipPath(basePath, relativePath) {
       const combined = basePath ? `${basePath}/${relativePath}` : relativePath;
       const parts = combined.replace(/\\/g, '/').split('/');
