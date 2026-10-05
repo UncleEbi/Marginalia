@@ -374,7 +374,7 @@
       border-radius: 3px;
     }
 
-    /* RESPONSIVE INLINE DIAGRAM CARDS */
+    /* INLINE DIAGRAM CARDS */
     .reader-diagram {
       margin: 1.4rem auto;
       max-width: 100%;
@@ -385,10 +385,6 @@
       display: flex;
       flex-direction: column;
       position: relative;
-      transition: box-shadow var(--transition);
-    }
-    .reader-diagram.active-diagram {
-      box-shadow: 0 0 0 2px var(--accent);
     }
 
     .reader-diagram img {
@@ -486,12 +482,20 @@
       cursor: pointer;
     }
 
+    /* INTERACTIVE PAGE & CHAPTER PILL */
     .player-status-group {
       display: flex;
       flex-direction: column;
       align-items: center;
-      font-size: 0.78rem;
-      color: var(--text-muted);
+      cursor: pointer;
+      user-select: none;
+      padding: 0.2rem 0.6rem;
+      border-radius: 8px;
+      transition: background-color 0.15s ease;
+      max-width: 42%;
+    }
+    .player-status-group:hover, .player-status-group:active {
+      background: rgba(56, 189, 248, 0.12);
     }
 
     .speed-pill-btn {
@@ -612,7 +616,7 @@
     }
     .drawer-quick-btn span.icon { font-size: 1.15rem; color: var(--text-main); }
 
-    /* MODALS */
+    /* ALL MODALS */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -683,6 +687,44 @@
       font-size: 1rem;
       padding: 0.2rem;
     }
+
+    /* CHAPTER / PAGE SELECTOR TABS */
+    .nav-tab-group {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 0.5rem;
+    }
+    .nav-tab-btn {
+      flex: 1;
+      padding: 0.6rem;
+      font-size: 0.88rem;
+      font-weight: 600;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      border-bottom: 2px solid transparent;
+      cursor: pointer;
+    }
+    .nav-tab-btn.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    .chapter-item {
+      padding: 0.75rem 0.85rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg-main);
+      font-size: 0.88rem;
+      font-weight: 500;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+    }
+    .chapter-item:hover, .chapter-item.active {
+      border-color: var(--accent);
+      background: rgba(56, 189, 248, 0.08);
+    }
   </style>
 </head>
 <body>
@@ -696,9 +738,9 @@
       </div>
 
       <div class="header-actions">
-        <!-- Always Visible Direct Open Button -->
+        <!-- Direct File Open Button -->
         <label class="btn-header btn-open-doc" for="fileInput">📁 Open</label>
-        <input type="file" id="fileInput" accept=".epub,.pdf,.docx,.txt,.md,.html,.htm,application/epub+zip,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" style="display:none;" />
+        <input type="file" id="fileInput" accept=".epub,.pdf,.docx,.txt,.md,.html,.htm,*/*" style="display:none;" />
 
         <button id="summarizeBtn" class="btn-header btn-summarize">✨ AI</button>
 
@@ -709,7 +751,7 @@
     </div>
   </header>
 
-  <!-- MOON+ READER NAVIGATION DRAWER -->
+  <!-- NAVIGATION DRAWER -->
   <div id="drawerOverlay" class="drawer-overlay"></div>
   <aside id="sideDrawer" class="side-drawer">
     <div class="drawer-header">
@@ -767,7 +809,7 @@
   </aside>
 
   <main>
-    <!-- COLLAPSIBLE VOICE & ENGINE CONTROL BAR -->
+    <!-- COLLAPSIBLE VOICE BAR -->
     <div class="controls-panel">
       <div class="controls-toggle-bar" id="controlsToggleBar">
         <span id="activeVoiceBadge" style="font-weight:600; color:var(--accent);">🎙️ Native Voice</span>
@@ -814,7 +856,7 @@
     </div>
   </main>
 
-  <!-- STICKY BOTTOM PLAYER -->
+  <!-- STICKY BOTTOM PLAYER WITH INTERACTIVE CHAPTER/PAGE TRIGGER -->
   <div class="mobile-player-bar">
     <div class="player-nav-group">
       <button id="prevPageBtn" class="player-btn-nav" title="Previous Page">←</button>
@@ -822,12 +864,52 @@
       <button id="nextPageBtn" class="player-btn-nav" title="Next Page">→</button>
     </div>
 
-    <div class="player-status-group">
-      <span id="pageIndicatorText" style="font-weight:600; font-size:0.85rem; color:var(--text-main);">Page 1 of 1</span>
-      <span style="font-size:0.72rem;">Read-Along Narration</span>
+    <!-- Tappable Status Pill: Opens Chapter & Page Jump Dialog -->
+    <div class="player-status-group" id="openJumpModalBtn" title="Tap to jump to chapter or page">
+      <span id="pageIndicatorText" style="font-weight:600; font-size:0.85rem; color:var(--text-main); display:flex; align-items:center; gap:0.2rem;">
+        Page 1 of 1 <span style="font-size:0.68rem; opacity:0.7;">▾</span>
+      </span>
+      <span id="chapterIndicatorText" style="font-size:0.72rem; color:var(--accent); max-width:145px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Chapter 1</span>
     </div>
 
     <button id="speedCycleBtn" class="speed-pill-btn">1.0x</button>
+  </div>
+
+  <!-- JUMP & CHAPTER SELECTOR MODAL -->
+  <div id="jumpModal" class="modal-overlay">
+    <div class="modal-card">
+      <div class="modal-title">📖 Jump to Section</div>
+      
+      <div class="nav-tab-group">
+        <button id="tabChaptersBtn" class="nav-tab-btn active">📑 Chapters</button>
+        <button id="tabPagesBtn" class="nav-tab-btn">🔢 By Page</button>
+      </div>
+
+      <!-- Tab 1: Table of Contents -->
+      <div id="chapterListView" class="modal-scrollable-list">
+        <!-- Rendered dynamically -->
+      </div>
+
+      <!-- Tab 2: Page Jump Slider & Input -->
+      <div id="pageJumpView" style="display:none; flex-direction:column; gap:1.2rem; padding:0.5rem 0;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <span style="font-size:0.88rem; color:var(--text-muted);">Select Page:</span>
+          <span id="sliderValueDisplay" style="font-weight:700; font-size:1.1rem; color:var(--accent);">Page 1</span>
+        </div>
+
+        <input type="range" id="pageJumpSlider" min="1" max="1" value="1" style="width:100%; accent-color:var(--accent); cursor:pointer;" />
+
+        <div style="display:flex; align-items:center; justify-content:center; gap:0.6rem;">
+          <span>Go to page:</span>
+          <input type="number" id="pageDirectInput" min="1" max="1" value="1" style="width:75px; text-align:center; padding:0.4rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:16px;" />
+          <button id="btnExecuteDirectJump" style="padding:0.4rem 0.85rem; background:var(--accent); color:#fff; border:none; border-radius:6px; font-weight:600;">Go</button>
+        </div>
+      </div>
+
+      <div style="display:flex; justify-content:flex-end;">
+        <button id="closeJumpModalBtn" data-close="jumpModal" style="padding:0.4rem 0.8rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border);">Close</button>
+      </div>
+    </div>
   </div>
 
   <!-- MY SHELF / RECENT LIST MODAL -->
@@ -900,10 +982,10 @@
     <div class="modal-card">
       <div class="modal-title">ℹ️ About Marginalia</div>
       <p style="font-size:0.85rem; color:var(--text-muted); line-height:1.6;">
-        Marginalia is an adaptive read-along reader featuring synchronized karaoke narration, local IndexedDB book persistence, and AI summaries.
+        Marginalia is an adaptive read-along platform combining client-side EPUB/PDF processing, synchronized karaoke TTS, and executive AI summaries.
       </p>
       <div style="font-size:0.8rem; background:var(--bg-main); padding:0.75rem; border-radius:8px; border:1px solid var(--border);">
-        <div style="margin-bottom:0.3rem;"><strong>Version:</strong> 2.5.0 (Multimodal Mobile Edition)</div>
+        <div style="margin-bottom:0.3rem;"><strong>Version:</strong> 2.6.0 (Multimodal Mobile Edition)</div>
         <div><strong>Storage:</strong> IndexedDB Offline Bookshelf</div>
       </div>
       <div style="display:flex; justify-content:flex-end;">
@@ -1039,7 +1121,7 @@
       });
     }
 
-    async function saveBookToShelf(title, pages) {
+    async function saveBookToShelf(title, pages, chapters = []) {
       try {
         if (!dbInstance) await initIndexedDB();
         if (!dbInstance) return;
@@ -1050,12 +1132,14 @@
           const existing = (req.result || []).find(b => b.title === title);
           if (existing) {
             existing.pages = pages;
+            existing.chapters = chapters;
             existing.updatedAt = Date.now();
             store.put(existing);
           } else {
             store.add({
               title,
               pages,
+              chapters,
               currentPage: 0,
               currentSentenceIdx: 0,
               updatedAt: Date.now()
@@ -1127,9 +1211,12 @@
       [
         "Welcome to Marginalia Mobile Reader.",
         "Tap the Open button above to import any EPUB, PDF, Word, or text file.",
-        "Your books and diagrams are automatically preserved on your device so you never lose your spot.",
-        "Notice how the words highlight smoothly in real time with the voice."
+        "Tap the page indicator at the bottom to jump to any page or chapter instantly.",
+        "Your books and diagrams are saved automatically in your browser."
       ]
+    ];
+    let bookChapters = [
+      { title: "Introduction", pageIndex: 0 }
     ];
 
     let originalBookPages = null;
@@ -1148,7 +1235,6 @@
     const audioElement = document.getElementById('neuralAudio');
     const audioPreloadCache = new Map();
     let wordTimerInterval = null;
-    let wakeLock = null;
 
     // DOM Elements
     const contentPane = document.getElementById('contentPane');
@@ -1156,6 +1242,8 @@
     const prevPageBtn = document.getElementById('prevPageBtn');
     const nextPageBtn = document.getElementById('nextPageBtn');
     const pageIndicatorText = document.getElementById('pageIndicatorText');
+    const chapterIndicatorText = document.getElementById('chapterIndicatorText');
+    const openJumpModalBtn = document.getElementById('openJumpModalBtn');
     const speedCycleBtn = document.getElementById('speedCycleBtn');
     const autoFlipCheck = document.getElementById('autoFlipCheck');
     const voicePicker = document.getElementById('voicePicker');
@@ -1183,6 +1271,16 @@
     const btnDrawerAbout = document.getElementById('btnDrawerAbout');
 
     // Modals
+    const jumpModal = document.getElementById('jumpModal');
+    const tabChaptersBtn = document.getElementById('tabChaptersBtn');
+    const tabPagesBtn = document.getElementById('tabPagesBtn');
+    const chapterListView = document.getElementById('chapterListView');
+    const pageJumpView = document.getElementById('pageJumpView');
+    const pageJumpSlider = document.getElementById('pageJumpSlider');
+    const sliderValueDisplay = document.getElementById('sliderValueDisplay');
+    const pageDirectInput = document.getElementById('pageDirectInput');
+    const btnExecuteDirectJump = document.getElementById('btnExecuteDirectJump');
+
     const shelfModal = document.getElementById('shelfModal');
     const shelfModalTitle = document.getElementById('shelfModalTitle');
     const shelfModalList = document.getElementById('shelfModalList');
@@ -1242,6 +1340,7 @@
           card.addEventListener('click', () => {
             stopAudio();
             bookPages = b.pages;
+            bookChapters = b.chapters || [{ title: "Beginning", pageIndex: 0 }];
             currentDocName = b.title;
             currentPage = b.currentPage || 0;
             currentSentenceIdx = b.currentSentenceIdx || 0;
@@ -1306,7 +1405,84 @@
       bookmarksModal.style.display = 'flex';
     });
 
-    // --- DRAWER QUICK ACTIONS ---
+    // --- CHAPTER & PAGE JUMP MODAL HANDLERS ---
+    function getCurrentChapter() {
+      if (!bookChapters || bookChapters.length === 0) return { title: "Chapter 1", pageIndex: 0 };
+      let active = bookChapters[0];
+      for (const ch of bookChapters) {
+        if (currentPage >= ch.pageIndex) active = ch;
+        else break;
+      }
+      return active;
+    }
+
+    openJumpModalBtn.addEventListener('click', () => {
+      // Setup Page Slider
+      pageJumpSlider.max = bookPages.length;
+      pageJumpSlider.value = currentPage + 1;
+      pageDirectInput.max = bookPages.length;
+      pageDirectInput.value = currentPage + 1;
+      sliderValueDisplay.textContent = `Page ${currentPage + 1} of ${bookPages.length}`;
+
+      // Render Chapters List
+      chapterListView.innerHTML = '';
+      if (!bookChapters || bookChapters.length === 0) {
+        chapterListView.innerHTML = '<div style="text-align:center; padding:1.5rem; color:var(--text-muted);">No separate chapters found.</div>';
+      } else {
+        const currentCh = getCurrentChapter();
+        bookChapters.forEach((ch, idx) => {
+          const item = document.createElement('div');
+          item.className = `chapter-item ${ch.pageIndex === currentCh.pageIndex ? 'active' : ''}`;
+          item.innerHTML = `
+            <span>${ch.title}</span>
+            <span style="font-size:0.75rem; color:var(--text-muted);">Pg ${ch.pageIndex + 1}</span>
+          `;
+          item.addEventListener('click', () => {
+            stopAudio();
+            currentPage = ch.pageIndex;
+            currentSentenceIdx = 0;
+            jumpModal.style.display = 'none';
+            renderPage(currentPage);
+          });
+          chapterListView.appendChild(item);
+        });
+      }
+
+      jumpModal.style.display = 'flex';
+    });
+
+    tabChaptersBtn.addEventListener('click', () => {
+      tabChaptersBtn.classList.add('active');
+      tabPagesBtn.classList.remove('active');
+      chapterListView.style.display = 'flex';
+      pageJumpView.style.display = 'none';
+    });
+
+    tabPagesBtn.addEventListener('click', () => {
+      tabPagesBtn.classList.add('active');
+      tabChaptersBtn.classList.remove('active');
+      chapterListView.style.display = 'none';
+      pageJumpView.style.display = 'flex';
+    });
+
+    pageJumpSlider.addEventListener('input', (e) => {
+      const val = parseInt(e.target.value, 10);
+      sliderValueDisplay.textContent = `Page ${val} of ${bookPages.length}`;
+      pageDirectInput.value = val;
+    });
+
+    btnExecuteDirectJump.addEventListener('click', () => {
+      let target = parseInt(pageDirectInput.value, 10);
+      if (isNaN(target) || target < 1) target = 1;
+      if (target > bookPages.length) target = bookPages.length;
+      stopAudio();
+      currentPage = target - 1;
+      currentSentenceIdx = 0;
+      jumpModal.style.display = 'none';
+      renderPage(currentPage);
+    });
+
+    // --- QUICK DRAWER THEME & OPTIONS ---
     btnDrawerNightToggle.addEventListener('click', () => {
       const current = document.documentElement.getAttribute('data-theme');
       const nextTheme = current === 'dark' ? 'oled' : (current === 'oled' ? 'sepia' : (current === 'sepia' ? 'light' : 'dark'));
@@ -1406,7 +1582,7 @@
       }
     });
 
-    // --- CADENCE TIMING ENGINE ---
+    // --- CADENCE TIMELINE ENGINE ---
     function computeWordTimeline(words, speed, totalDuration = null) {
       const baseMsPerChar = 68 / speed;
       const timeline = [];
@@ -1437,7 +1613,7 @@
       });
     }
 
-    // --- DOM BUILDERS FOR TEXT & DIAGRAMS ---
+    // --- DOM BUILDERS ---
     function buildSentenceDOM(sentenceText, sIdx) {
       const span = document.createElement('span');
       span.className = 'sentence';
@@ -1523,7 +1699,10 @@
         }
       });
 
-      pageIndicatorText.textContent = `Page ${idx + 1} of ${bookPages.length}`;
+      pageIndicatorText.innerHTML = `Page ${idx + 1} of ${bookPages.length} <span style="font-size:0.68rem; opacity:0.7;">▾</span>`;
+      const currentCh = getCurrentChapter();
+      chapterIndicatorText.textContent = currentCh.title;
+
       prevPageBtn.disabled = idx === 0;
       nextPageBtn.disabled = idx >= bookPages.length - 1;
       highlightActiveSentence();
@@ -1575,14 +1754,12 @@
 
       const currentItem = pageItems[currentSentenceIdx];
 
-      // Handle Diagrams: speak caption if available, or skip smoothly to next paragraph
       if (typeof currentItem === 'object' && currentItem.type === 'image') {
         if (currentItem.caption && currentItem.caption.trim().length > 3) {
           const captionText = `Figure: ${currentItem.caption}`;
           if (activeEngine === 'browser') speakBrowser(captionText);
           else await speakServerless(captionText);
         } else {
-          // No text in diagram: seamlessly proceed to next sentence without audio gap
           currentSentenceIdx++;
           playCurrentSentence();
         }
@@ -1888,7 +2065,7 @@
     voicePicker.addEventListener('change', () => {
       audioPreloadCache.clear();
       const selectedOption = voicePicker.options[voicePicker.selectedIndex];
-      activeVoiceBadge.textContent = `${activeEngine === 'browser' ? '🎙️️' : '⚡'} ${selectedOption ? selectedOption.text.split('(')[0].trim() : 'Voice'}`;
+      activeVoiceBadge.textContent = `${activeEngine === 'browser' ? '🎙' : '⚡'} ${selectedOption ? selectedOption.text.split('(')[0].trim() : 'Voice'}`;
       if (isPlaying) {
         stopAudio();
         isPlaying = true;
@@ -2082,7 +2259,7 @@
       }
     });
 
-    // --- MULTIMODAL PARSERS ---
+    // --- MULTIMODAL UTILITIES ---
     function normalizeZipPath(basePath, relativePath) {
       const combined = basePath ? `${basePath}/${relativePath}` : relativePath;
       const parts = combined.replace(/\\/g, '/').split('/');
@@ -2107,7 +2284,6 @@
       return text.replace(/([.?!]+)(\s+)/g, "$1\n---BREAK---\n").split("\n---BREAK---\n").map(s => s.replace(/\s+/g, ' ').trim()).filter(s => s.length > 0);
     }
 
-    // Unpacks HTML content into text sentences and inline diagram cards
     function parseHtmlToBlocks(htmlString) {
       const doc = new DOMParser().parseFromString(htmlString, 'text/html');
       doc.querySelectorAll('script, style, head, nav, [role="doc-toc"]').forEach(el => el.remove());
@@ -2121,7 +2297,6 @@
       }
 
       elements.forEach(el => {
-        // Find Diagrams / Images
         const imgs = el.querySelectorAll('img, image');
         if (el.tagName.toLowerCase() === 'img' || imgs.length > 0) {
           const imgEl = el.tagName.toLowerCase() === 'img' ? el : imgs[0];
@@ -2133,7 +2308,6 @@
           }
         }
 
-        // Text elements
         const txt = el.textContent.replace(/\s+/g, ' ').trim();
         if (txt.length > 0) {
           const sents = splitIntoSentences(txt);
@@ -2144,12 +2318,9 @@
       return blocks.length > 0 ? blocks : splitIntoSentences(doc.body ? doc.body.textContent : '');
     }
 
-    // EPUB Archive Extractor with Embedded Image Support
-    async function parseEpubArchive(arrayBuffer) {
-      const zip = await JSZip.loadAsync(arrayBuffer);
+    // --- BULLETPROOF EPUB EXTRACTOR WITH TABLE OF CONTENTS ---
+    async function parseEpubArchive(zip) {
       const allKeys = Object.keys(zip.files);
-
-      // Locate container.xml
       const containerKey = allKeys.find(k => k.toLowerCase().endsWith('container.xml'));
       let opfKey = null;
 
@@ -2164,11 +2335,14 @@
       if (!opfKey) opfKey = allKeys.find(k => k.toLowerCase().endsWith('.opf'));
 
       let orderedFiles = [];
+      let spineMap = {};
+      let manifest = {};
+      let tocFile = null;
+
       if (opfKey && zip.files[opfKey]) {
         const opfXml = await zip.files[opfKey].async("text");
         const opfDir = opfKey.includes('/') ? opfKey.substring(0, opfKey.lastIndexOf('/') + 1) : '';
 
-        const manifest = {};
         const itemRegex = /<item\b[^>]*>/gi;
         let match;
         while ((match = itemRegex.exec(opfXml)) !== null) {
@@ -2180,6 +2354,9 @@
             const fullPath = (opfDir + rawHref).replace(/\/+/g, '/');
             const exact = allKeys.find(k => k.toLowerCase() === fullPath.toLowerCase()) || fullPath;
             manifest[idMatch[1]] = exact;
+            if (/toc\.ncx/i.test(rawHref) || /nav/i.test(tag)) {
+              tocFile = exact;
+            }
           }
         }
 
@@ -2200,13 +2377,29 @@
         }).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
       }
 
-      const allBlocks = [];
-      for (const chapterKey of orderedFiles) {
+      // Extract Chapter TOC Titles
+      const chaptersList = [];
+      const extractedPages = [];
+      const perPage = 5;
+
+      for (let fIdx = 0; fIdx < orderedFiles.length; fIdx++) {
+        const chapterKey = orderedFiles[fIdx];
         if (!zip.files[chapterKey] || zip.files[chapterKey].dir) continue;
+
         const rawHtml = await zip.files[chapterKey].async("text");
         const chapterDir = chapterKey.includes('/') ? chapterKey.substring(0, chapterKey.lastIndexOf('/') + 1) : '';
 
-        // Inline all image references to Base64 data URIs
+        // Extract title or first header
+        let chapTitle = "";
+        const titleMatch = rawHtml.match(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/i) || rawHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+        if (titleMatch) {
+          chapTitle = titleMatch[1].replace(/<[^>]+>/g, '').trim();
+        }
+        if (!chapTitle || chapTitle.length < 2) {
+          chapTitle = `Section ${fIdx + 1}`;
+        }
+
+        // Inline all image references to Base64
         const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
         const images = Array.from(doc.querySelectorAll('img, image'));
 
@@ -2226,16 +2419,116 @@
         }
 
         const chapterBlocks = parseHtmlToBlocks(doc.body ? doc.body.innerHTML : rawHtml);
-        chapterBlocks.forEach(b => allBlocks.push(b));
+        if (chapterBlocks.length > 0) {
+          // Record chapter page starting index
+          const startPageIndex = extractedPages.length;
+          chaptersList.push({ title: chapTitle, pageIndex: startPageIndex });
+
+          for (let i = 0; i < chapterBlocks.length; i += perPage) {
+            extractedPages.push(chapterBlocks.slice(i, i + perPage));
+          }
+        }
       }
 
-      if (allBlocks.length === 0) {
+      if (extractedPages.length === 0) {
         throw new Error("No readable text found in EPUB.");
       }
-      return allBlocks;
+
+      return { pages: extractedPages, chapters: chaptersList };
     }
 
-    // PRIMARY FILE IMPORT HANDLER
+    // --- SECURE MULTI-FORMAT DOCUMENT DISPATCHER ---
+    async function processUploadedDocument(file) {
+      const buffer = await file.arrayBuffer();
+      const uint8 = new Uint8Array(buffer);
+
+      // Inspect Magic Bytes
+      const isZip = uint8.length > 4 && uint8[0] === 0x50 && uint8[1] === 0x4B && (uint8[2] === 0x03 || uint8[2] === 0x05);
+      const isPdf = uint8.length > 4 && uint8[0] === 0x25 && uint8[1] === 0x50 && uint8[2] === 0x44 && uint8[3] === 0x46; // %PDF
+      const lowerName = (file.name || "").toLowerCase();
+
+      // 1. ZIP ARCHIVE (EPUB or DOCX)
+      if (isZip || lowerName.endsWith('.epub') || lowerName.endsWith('.docx')) {
+        const zip = await JSZip.loadAsync(buffer);
+
+        // Word DOCX format
+        if (zip.files['word/document.xml']) {
+          if (typeof mammoth === 'undefined') throw new Error("Word reader engine is still loading. Please try again.");
+          const res = await mammoth.convertToHtml(
+            { arrayBuffer: buffer },
+            {
+              convertImage: mammoth.images.imgElement(async (img) => {
+                const b64 = await img.read("base64");
+                return { src: `data:${img.contentType};base64,${b64}` };
+              })
+            }
+          );
+          const blocks = parseHtmlToBlocks(res.value || "");
+          const pages = [];
+          for (let i = 0; i < blocks.length; i += 5) pages.push(blocks.slice(i, i + 5));
+          return { pages, chapters: [{ title: "Start of Document", pageIndex: 0 }] };
+        }
+
+        // EPUB format
+        return await parseEpubArchive(zip);
+      }
+
+      // 2. PDF FORMAT
+      if (isPdf || lowerName.endsWith('.pdf')) {
+        if (typeof pdfjsLib === 'undefined') throw new Error("PDF engine is still loading. Please try again.");
+        const pdf = await pdfjsLib.getDocument({ data: uint8 }).promise;
+        const pages = [];
+        const chapters = [];
+
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const content = await page.getTextContent();
+          const pageStr = content.items.map(it => it.str).join(' ');
+          if (pageStr.trim().length > 0) {
+            const sents = splitIntoSentences(pageStr);
+            if (sents.length > 0) {
+              chapters.push({ title: `PDF Page ${i}`, pageIndex: pages.length });
+              for (let s = 0; s < sents.length; s += 5) {
+                pages.push(sents.slice(s, s + 5));
+              }
+            }
+          }
+        }
+        if (pages.length === 0) throw new Error("No readable digital text found. This PDF may be a flat image scan.");
+        return { pages, chapters };
+      }
+
+      // 3. HTML FORMAT
+      if (lowerName.endsWith('.html') || lowerName.endsWith('.htm')) {
+        const raw = new TextDecoder('utf-8').decode(uint8);
+        const blocks = parseHtmlToBlocks(raw);
+        const pages = [];
+        for (let i = 0; i < blocks.length; i += 5) pages.push(blocks.slice(i, i + 5));
+        return { pages, chapters: [{ title: "HTML Document", pageIndex: 0 }] };
+      }
+
+      // 4. PLAIN TEXT / MARKDOWN
+      // Enforce binary validation: reject raw zip/binary streams
+      let nonPrintable = 0;
+      const sampleLen = Math.min(uint8.length, 1000);
+      for (let i = 0; i < sampleLen; i++) {
+        if (uint8[i] === 0 || (uint8[i] < 32 && uint8[i] !== 9 && uint8[i] !== 10 && uint8[i] !== 13)) {
+          nonPrintable++;
+        }
+      }
+      if (nonPrintable > 15) {
+        throw new Error("Unable to read file: The file contains binary or DRM-protected data. Please ensure it is an unlocked EPUB, PDF, Word, or TXT file.");
+      }
+
+      const raw = new TextDecoder('utf-8').decode(uint8);
+      const sents = splitIntoSentences(raw);
+      if (sents.length === 0) throw new Error("Document is empty.");
+      const pages = [];
+      for (let i = 0; i < sents.length; i += 5) pages.push(sents.slice(i, i + 5));
+      return { pages, chapters: [{ title: "Beginning", pageIndex: 0 }] };
+    }
+
+    // PRIMARY FILE IMPORT LISTENER
     fileInput.addEventListener('change', async (event) => {
       const file = event.target.files && event.target.files[0];
       if (!file) return;
@@ -2244,66 +2537,22 @@
       currentDocName = file.name;
       docTitle.textContent = currentDocName;
       preloadStatus.textContent = "Opening...";
-      contentPane.innerHTML = `<div style="text-align:center; padding:3rem; color:var(--text-muted); font-style:italic;">Processing document (${(file.size / 1024).toFixed(0)} KB)...</div>`;
+      contentPane.innerHTML = `<div style="text-align:center; padding:3rem; color:var(--text-muted); font-style:italic;">Processing "${file.name}"...</div>`;
 
       try {
-        const lowerName = file.name.toLowerCase();
-        let parsedBlocks = [];
-
-        if (lowerName.endsWith('.epub') || file.type.includes('epub')) {
-          const buf = await file.arrayBuffer();
-          parsedBlocks = await parseEpubArchive(buf);
-        } else if (lowerName.endsWith('.docx')) {
-          if (typeof mammoth === 'undefined') throw new Error("Word parser still loading. Please tap Open again.");
-          const buf = await file.arrayBuffer();
-          const res = await mammoth.convertToHtml(
-            { arrayBuffer: buf },
-            {
-              convertImage: mammoth.images.imgElement(async (image) => {
-                const buffer = await image.read("base64");
-                return { src: `data:${image.contentType};base64,${buffer}` };
-              })
-            }
-          );
-          parsedBlocks = parseHtmlToBlocks(res.value || "");
-        } else if (lowerName.endsWith('.html') || lowerName.endsWith('.htm')) {
-          const raw = await file.text();
-          parsedBlocks = parseHtmlToBlocks(raw);
-        } else if (lowerName.endsWith('.pdf') || file.type.includes('pdf')) {
-          if (typeof pdfjsLib === 'undefined') throw new Error("PDF parser loading. Please tap Open again.");
-          const buf = await file.arrayBuffer();
-          const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
-          const pagesArr = [];
-          for (let i = 1; i <= pdf.numPages; i++) {
-            const page = await pdf.getPage(i);
-            const content = await page.getTextContent();
-            const pageStr = content.items.map(it => it.str).join(' ');
-            if (pageStr.trim().length > 0) pagesArr.push(pageStr);
-          }
-          parsedBlocks = splitIntoSentences(pagesArr.join('\n\n'));
-        } else {
-          // Plain Text / Markdown
-          const raw = await file.text();
-          parsedBlocks = splitIntoSentences(raw);
-        }
-
-        if (parsedBlocks.length === 0) throw new Error("No readable text detected in this file.");
-
-        bookPages = [];
-        const perPage = 5;
-        for (let i = 0; i < parsedBlocks.length; i += perPage) {
-          bookPages.push(parsedBlocks.slice(i, i + perPage));
-        }
+        const result = await processUploadedDocument(file);
+        bookPages = result.pages;
+        bookChapters = result.chapters || [{ title: "Beginning", pageIndex: 0 }];
 
         currentPage = 0;
         currentSentenceIdx = 0;
         preloadStatus.textContent = "Ready";
         renderPage(0);
-        saveBookToShelf(currentDocName, bookPages);
+        saveBookToShelf(currentDocName, bookPages, bookChapters);
 
       } catch (err) {
         preloadStatus.textContent = "Error";
-        alert("Could not open file: " + err.message);
+        alert(err.message);
         renderPage(currentPage);
       } finally {
         fileInput.value = '';
