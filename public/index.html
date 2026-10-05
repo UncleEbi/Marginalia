@@ -2523,3 +2523,437 @@ Replace the entire contents of **`public/index.html`** with this code:
       optionsModal.style.display = 'flex';
     });
     closeOptionsModalBtn.addEventListener('click', () => { optionsModal.style.display = 'none'; });
+
+    optionThemeSelect.addEventListener('change', (e) => {
+      document.documentElement.setAttribute('data-theme', e.target.value);
+      localStorage.setItem('marginalia_theme', e.target.value);
+    });
+
+    fontIncBtn.addEventListener('click', () => {
+      readerFontSize = Math.min(1.8, readerFontSize + 0.1);
+      document.documentElement.style.setProperty('--reader-font-size', `${readerFontSize}rem`);
+    });
+    fontDecBtn.addEventListener('click', () => {
+      readerFontSize = Math.max(0.9, readerFontSize - 0.1);
+      document.documentElement.style.setProperty('--reader-font-size', `${readerFontSize}rem`);
+    });
+
+    btnDrawerAbout.addEventListener('click', () => {
+      closeDrawer();
+      aboutModal.style.display = 'flex';
+    });
+    closeAboutModalBtn.addEventListener('click', () => { aboutModal.style.display = 'none'; });
+
+    // --- DOM BUILDER ---
+    function buildSentenceDOM(sentenceText, sIdx) {
+      const sentenceSpan = document.createElement('span');
+      sentenceSpan.className = 'sentence';
+      sentenceSpan.id = `sent-${sIdx}`;
+
+      const words = sentenceText.split(/(\s+)/);
+      let wordCount = 0;
+
+      words.forEach(chunk => {
+        if (chunk.trim().length > 0) {
+          const wordSpan = document.createElement('span');
+          wordSpan.className = 'word';
+          wordSpan.id = `w-${sIdx}-${wordCount}`;
+          wordSpan.textContent = chunk;
+          sentenceSpan.appendChild(wordSpan);
+          wordCount++;
+        } else {
+          sentenceSpan.appendChild(document.createTextNode(chunk));
+        }
+      });
+
+      sentenceSpan.addEventListener('click', () => {
+        currentSentenceIdx = sIdx;
+        if (isPlaying) {
+          stopAudio();
+          isPlaying = true;
+          playCurrentSentence();
+        } else {
+          highlightActiveSentence();
+        }
+      });
+
+      return sentenceSpan;
+    }
+
+    function renderPage(idx) {
+      contentPane.innerHTML = '';
+      const sentences = bookPages[idx] || [];
+
+      sentences.forEach((txt, sIdx) => {
+        contentPane.appendChild(buildSentenceDOM(txt, sIdx));
+      });
+
+      pageIndicatorText.textContent = `Page ${idx + 1} of ${bookPages.length}`;
+      prevPageBtn.disabled = idx === 0;
+      nextPageBtn.disabled = idx >= bookPages.length - 1;
+      highlightActiveSentence();
+      updateBookProgressInDB(currentDocName, currentPage, currentSentenceIdx);
+    }
+
+    function highlightActiveSentence() {
+      document.querySelectorAll('.sentence').forEach(el => el.classList.remove('active-sentence'));
+      document.querySelectorAll('.word').forEach(el => el.classList.remove('active-word'));
+
+      const target = document.getElementById(`sent-${currentSentenceIdx}`);
+      if (target) {
+        target.classList.add('active-sentence');
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+
+    function highlightActiveWord(wIdx) {
+      document.querySelectorAll(`#sent-${currentSentenceIdx} .word`).forEach((el, index) => {
+        if (index === wIdx) el.classList.add('active-word');
+        else el.classList.remove('active-word');
+      });
+    }
+
+    // --- VOICE SETUP ---
+    function populateVoices() {
+      const prevChoice = voicePicker.value;
+      voicePicker.innerHTML = '';
+
+      if (activeEngine === 'browser') {
+        const voices = browserSpeech.getVoices();
+        if (!voices || voices.length === 0) {
+          const opt = document.createElement('option');
+          opt.value = "default";
+          opt.textContent = "Default System Voice";
+          voicePicker.appendChild(opt);
+          return;
+        }
+
+        const userLangPrefix = (navigator.language || 'en').toLowerCase().split('-')[0];
+        const indexedVoices = voices.map((v, i) => ({ voice: v, idx: i }));
+
+        indexedVoices.sort((a, b) => {
+          const aLang = a.voice.lang.toLowerCase();
+          const bLang = b.voice.lang.toLowerCase();
+          const aIsUser = aLang.startsWith(userLangPrefix);
+          const bIsUser = bLang.startsWith(userLangPrefix);
+          const aIsEn = aLang.startsWith('en');
+          const bIsEn = bLang.startsWith('en');
+
+          if (aIsUser && !bIsUser) return -1;
+          if (!aIsUser && bIsUser) return 1;
+          if (aIsEn && !bIsEn) return -1;
+          if (!aIsEn && bIsEn) return 1;
+          return a.voice.name.localeCompare(b.voice.name);
+        });
+
+        let defaultChoiceIdx = indexedVoices[0].idx;
+        const enVoice = indexedVoices.find(item => item.voice.lang.toLowerCase().startsWith('en'));
+        if (enVoice) defaultChoiceIdx = enVoice.idx;
+
+        indexedVoices.forEach(item => {
+          const opt = document.createElement('option');
+          opt.value = item.idx;
+          opt.textContent = `${item.voice.name} (${item.voice.lang})`;
+          if (prevChoice && item.idx.toString() === prevChoice) {
+            opt.selected = true;
+          } else if (!prevChoice && item.idx === defaultChoiceIdx) {
+            opt.selected = true;
+          }
+          voicePicker.appendChild(opt);
+        });
+      }
+    }
+
+    if (typeof speechSynthesis !== 'undefined') {
+      speechSynthesis.onvoiceschanged = populateVoices;
+    }
+    ['touchstart', 'click'].forEach(evt => {
+      document.body.addEventListener(evt, () => {
+        if (voicePicker.children.length <= 1) populateVoices();
+      }, { once: true });
+    });
+
+    speedCycleBtn.addEventListener('click', () => {
+      let nextIdx = (speedSteps.indexOf(playbackSpeed) + 1) % speedSteps.length;
+      playbackSpeed = speedSteps[nextIdx];
+      speedCycleBtn.textContent = `${playbackSpeed.toFixed(1)}x`;
+      if (isPlaying && activeEngine === 'browser') {
+        browserSpeech.cancel();
+        playCurrentSentence();
+      }
+    });
+
+    // --- PLAYBACK ENGINE ---
+    async function playCurrentSentence() {
+      const pageSentences = bookPages[currentPage];
+      if (!pageSentences || pageSentences.length === 0) return;
+
+      if (currentSentenceIdx >= pageSentences.length) {
+        if (autoFlipCheck.checked && currentPage < bookPages.length - 1) {
+          currentPage++;
+          currentSentenceIdx = 0;
+          renderPage(currentPage);
+          playCurrentSentence();
+        } else {
+          stopAudio();
+        }
+        return;
+      }
+
+      highlightActiveSentence();
+      mainPlayToggle.textContent = '⏸';
+
+      const textToRead = pageSentences[currentSentenceIdx];
+      speakBrowser(textToRead);
+    }
+
+    function speakBrowser(text) {
+      browserSpeech.cancel();
+      if (wordTimerInterval) clearInterval(wordTimerInterval);
+
+      currentUtterance = new SpeechSynthesisUtterance(text);
+      currentUtterance.rate = playbackSpeed;
+
+      const voices = browserSpeech.getVoices();
+      if (voices.length > 0 && voicePicker.value !== "" && voicePicker.value !== "default") {
+        currentUtterance.voice = voices[parseInt(voicePicker.value, 10)] || voices[0];
+      }
+
+      let nativeBoundaryFired = false;
+      currentUtterance.onboundary = (e) => {
+        if (e.name === 'word') {
+          nativeBoundaryFired = true;
+          if (wordTimerInterval) clearInterval(wordTimerInterval);
+          const words = text.slice(0, e.charIndex).trim().split(/\s+/);
+          highlightActiveWord(words[0] === "" ? 0 : words.length);
+        }
+      };
+
+      const wordsArr = text.trim().split(/\s+/);
+      const totalWords = wordsArr.length;
+      let mobileWordIdx = 0;
+      const msPerWord = Math.max(120, (60000 / (180 * playbackSpeed)));
+
+      setTimeout(() => {
+        if (!nativeBoundaryFired && isPlaying) {
+          highlightActiveWord(0);
+          wordTimerInterval = setInterval(() => {
+            if (mobileWordIdx < totalWords - 1) {
+              mobileWordIdx++;
+              highlightActiveWord(mobileWordIdx);
+            } else {
+              clearInterval(wordTimerInterval);
+            }
+          }, msPerWord);
+        }
+      }, 200);
+
+      currentUtterance.onend = () => {
+        if (wordTimerInterval) clearInterval(wordTimerInterval);
+        if (!isPlaying) return;
+        currentSentenceIdx++;
+        playCurrentSentence();
+      };
+
+      currentUtterance.onerror = () => stopAudio();
+      browserSpeech.speak(currentUtterance);
+    }
+
+    function stopAudio() {
+      isPlaying = false;
+      mainPlayToggle.textContent = '▶';
+      if (wordTimerInterval) clearInterval(wordTimerInterval);
+      browserSpeech.cancel();
+      document.querySelectorAll('.word').forEach(el => el.classList.remove('active-word'));
+    }
+
+    // --- ROBUST EPUB & FILE PARSER ---
+    function normalizeZipPath(basePath, relativePath) {
+      const combined = basePath ? `${basePath}/${relativePath}` : relativePath;
+      const parts = combined.replace(/\\/g, '/').split('/');
+      const stack = [];
+      for (const part of parts) {
+        if (part === '.' || part === '') continue;
+        if (part === '..') {
+          if (stack.length > 0) stack.pop();
+        } else {
+          stack.push(part);
+        }
+      }
+      return stack.join('/');
+    }
+
+    function extractCleanHtmlText(htmlStr) {
+      try {
+        const doc = new DOMParser().parseFromString(htmlStr, 'text/html');
+        doc.querySelectorAll('script, style, head, nav, [role="doc-toc"]').forEach(el => el.remove());
+        return (doc.body ? doc.body.textContent : doc.documentElement.textContent || '').replace(/\s+/g, ' ').trim();
+      } catch (e) {
+        return htmlStr.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      }
+    }
+
+    async function parseEpubArchive(arrayBuffer) {
+      const zip = await JSZip.loadAsync(arrayBuffer);
+      const allZipKeys = Object.keys(zip.files);
+      const containerKey = allZipKeys.find(k => /meta-inf\/container\.xml$/i.test(k));
+      let opfPath = "";
+
+      if (containerKey) {
+        const containerXml = await zip.files[containerKey].async("text");
+        const match = containerXml.match(/full-path=["']([^"']+)["']/i);
+        if (match) opfPath = match[1].trim();
+      }
+
+      let orderedFiles = [];
+      if (opfPath) {
+        const opfKey = allZipKeys.find(k => k.toLowerCase() === opfPath.toLowerCase()) || opfPath;
+        if (zip.files[opfKey]) {
+          const opfXml = await zip.files[opfKey].async("text");
+          const basePath = opfKey.includes('/') ? opfKey.substring(0, opfKey.lastIndexOf('/')) : '';
+          const manifestMap = {};
+          const itemTagRegex = /<item\b([^>]+)>/gi;
+          let itemMatch;
+
+          while ((itemMatch = itemTagRegex.exec(opfXml)) !== null) {
+            const attrs = itemMatch[1];
+            const idMatch = attrs.match(/\bid=["']([^"']+)["']/i);
+            const hrefMatch = attrs.match(/\bhref=["']([^"']+)["']/i);
+            if (idMatch && hrefMatch) {
+              const cleanHref = decodeURI(hrefMatch[1].split('#')[0]);
+              manifestMap[idMatch[1]] = normalizeZipPath(basePath, cleanHref);
+            }
+          }
+
+          const itemrefRegex = /<itemref\b[^>]*\bidref=["']([^"']+)["']/gi;
+          let refMatch;
+          while ((refMatch = itemrefRegex.exec(opfXml)) !== null) {
+            const target = manifestMap[refMatch[1]];
+            if (target) orderedFiles.push(target);
+          }
+        }
+      }
+
+      if (orderedFiles.length === 0) {
+        orderedFiles = allZipKeys.filter(k => /\.(xhtml|html|htm)$/i.test(k) && !k.toLowerCase().includes('toc')).sort();
+      }
+
+      let chapters = [];
+      for (const targetPath of orderedFiles) {
+        const matchedKey = allZipKeys.find(k => k.toLowerCase() === targetPath.toLowerCase()) || targetPath;
+        if (zip.files[matchedKey] && !zip.files[matchedKey].dir) {
+          const raw = await zip.files[matchedKey].async("text");
+          const clean = extractCleanHtmlText(raw);
+          if (clean.length > 25) chapters.push(clean);
+        }
+      }
+      return chapters.join('\n\n');
+    }
+
+    function splitIntoSentences(text) {
+      if (!text || !text.trim()) return [];
+      if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+        try {
+          const segmenter = new Intl.Segmenter('en', { granularity: 'sentence' });
+          const segments = Array.from(segmenter.segment(text));
+          return segments.map(s => s.segment.replace(/\s+/g, ' ').trim()).filter(s => s.length > 0);
+        } catch (e) {}
+      }
+      return text.replace(/([.?!]+)(\s+)/g, "$1\n---BREAK---\n").split("\n---BREAK---\n").map(s => s.replace(/\s+/g, ' ').trim()).filter(s => s.length > 0);
+    }
+
+    fileInput.addEventListener('change', async (event) => {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      stopAudio();
+      currentDocName = file.name;
+      docTitle.textContent = currentDocName;
+      contentPane.innerHTML = `<div style="text-align:center; padding:3rem; color:var(--text-muted); font-style:italic;">Opening ${file.name}...</div>`;
+
+      try {
+        const ext = file.name.split('.').pop().toLowerCase();
+        let extractedText = "";
+
+        if (ext === 'epub' || file.type.includes('epub')) {
+          const buf = await file.arrayBuffer();
+          extractedText = await parseEpubArchive(buf);
+        } else if (ext === 'txt' || ext === 'md') {
+          extractedText = await file.text();
+        } else if (ext === 'html' || ext === 'htm') {
+          extractedText = extractCleanHtmlText(await file.text());
+        } else if (ext === 'docx') {
+          const buf = await file.arrayBuffer();
+          const res = await mammoth.extractRawText({ arrayBuffer: buf });
+          extractedText = res.value || "";
+        } else if (ext === 'pdf') {
+          const buf = await file.arrayBuffer();
+          const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+          let pages = [];
+          for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const content = await page.getTextContent();
+            pages.push(content.items.map(it => it.str).join(' '));
+          }
+          extractedText = pages.join('\n\n');
+        }
+
+        const sentences = splitIntoSentences(extractedText);
+        if (sentences.length === 0) throw new Error("No readable text detected in this file.");
+
+        bookPages = [];
+        const perPage = 5;
+        for (let i = 0; i < sentences.length; i += perPage) {
+          bookPages.push(sentences.slice(i, i + perPage));
+        }
+
+        currentPage = 0;
+        currentSentenceIdx = 0;
+        renderPage(0);
+
+        // Save into IndexedDB Shelf
+        saveBookToShelf(currentDocName, bookPages);
+
+      } catch (err) {
+        alert("Failed to read file: " + err.message);
+        renderPage(currentPage);
+      }
+    });
+
+    // --- CONTROLS HOOKS ---
+    mainPlayToggle.addEventListener('click', () => {
+      if (isPlaying) stopAudio();
+      else {
+        populateVoices();
+        isPlaying = true;
+        playCurrentSentence();
+      }
+    });
+
+    prevPageBtn.addEventListener('click', () => {
+      if (currentPage > 0) {
+        currentPage--;
+        currentSentenceIdx = 0;
+        stopAudio();
+        renderPage(currentPage);
+      }
+    });
+
+    nextPageBtn.addEventListener('click', () => {
+      if (currentPage < bookPages.length - 1) {
+        currentPage++;
+        currentSentenceIdx = 0;
+        stopAudio();
+        renderPage(currentPage);
+      }
+    });
+
+    // Startup Initialization
+    const savedTheme = localStorage.getItem('marginalia_theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+    initIndexedDB();
+    populateVoices();
+    renderPage(0);
+  </script>
+</body>
+</html>
