@@ -22,1338 +22,6 @@
       --font-reader: "Georgia", "Merriweather", "Charter", serif;
       --transition: 0.22s ease;
       --safe-bottom: env(safe-area-inset-bottom, 16px);
-    }
-
-    [data-theme="light"] {
-      --bg-main: #f8fafc;
-      --panel-bg: #ffffff;
-      --panel-blur: rgba(255, 255, 255, 0.95);
-      --text-main: #0f172a;
-      --text-muted: #64748b;
-      --border: #e2e8f0;
-      --accent: #2563eb;
-      --accent-active: #1d4ed8;
-      --highlight: rgba(254, 215, 10, 0.35);
-      --word-active: #0284c7;
-      --word-text: #ffffff;
-      --tab-active-bg: #f1f5f9;
-      --drawer-bg: #e2eaf4;
-      --drawer-card: #ffffff;
-      --modal-overlay: rgba(15, 23, 42, 0.5);
-    }
-
-    [data-theme="sepia"] {
-      --bg-main: #f4ecd8;
-      --panel-bg: #eae0c8;
-      --panel-blur: rgba(234, 224, 200, 0.95);
-      --text-main: #42321e;
-      --text-muted: #7d674c;
-      --border: #d4c4a8;
-      --accent: #b45309;
-      --accent-active: #92400e;
-      --highlight: rgba(217, 119, 6, 0.25);
-      --word-active: #78350f;
-      --word-text: #ffffff;
-      --tab-active-bg: #dfceb0;
-      --drawer-bg: #e6dac1;
-      --drawer-card: #f4ecd8;
-      --modal-overlay: rgba(66, 50, 30, 0.5);
-    }
-
-    [data-theme="dark"] {
-      --bg-main: #0b1120;
-      --panel-bg: #151e32;
-      --panel-blur: rgba(21, 30, 50, 0.95);
-      --text-main: #f1f5f9;
-      --text-muted: #94a3b8;
-      --border: #23314e;
-      --accent: #38bdf8;
-      --accent-active: #0284c7;
-      --highlight: rgba(56, 189, 248, 0.22);
-      --word-active: #38bdf8;
-      --word-text: #0b1120;
-      --tab-active-bg: #1e293b;
-      --drawer-bg: #111a2e;
-      --drawer-card: #18233a;
-      --modal-overlay: rgba(0, 0, 0, 0.7);
-    }
-
-    [data-theme="oled"] {
-      --bg-main: #000000;
-      --panel-bg: #0d0d0d;
-      --panel-blur: rgba(13, 13, 13, 0.96);
-      --text-main: #ededed;
-      --text-muted: #737373;
-      --border: #262626;
-      --accent: #10b981;
-      --accent-active: #059669;
-      --highlight: rgba(16, 185, 129, 0.25);
-      --word-active: #10b981;
-      --word-text: #000000;
-      --tab-active-bg: #222222;
-      --drawer-bg: #0d0d0d;
-      --drawer-card: #141414;
-      --modal-overlay: rgba(0, 0, 0, 0.85);
-    }
-
-    * { box-sizing: border-box; margin: 0; padding: 0; touch-action: manipulation; }
-
-    body {
-      background-color: var(--bg-main);
-      color: var(--text-main);
-      font-family: var(--font-ui);
-      min-height: 100dvh;
-      display: flex;
-      flex-direction: column;
-      transition: background-color var(--transition), color var(--transition);
-      -webkit-tap-highlight-color: transparent;
-      padding-bottom: calc(90px + var(--safe-bottom));
-      overflow-x: hidden;
-    }
-
-    /* HEADER */
-    header {
-      padding: 0.65rem 1rem;
-      background: var(--panel-bg);
-      border-bottom: 1px solid var(--border);
-      position: sticky;
-      top: 0;
-      z-index: 50;
-      backdrop-filter: blur(8px);
-    }
-
-    .header-inner {
-      max-width: 900px;
-      margin: 0 auto;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 0.5rem;
-    }
-
-    .brand-group {
-      display: flex;
-      align-items: center;
-      gap: 0.6rem;
-      user-select: none;
-    }
-
-    .btn-hamburger {
-      background: none;
-      border: none;
-      padding: 0.35rem;
-      cursor: pointer;
-      color: var(--text-main);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .brand-title {
-      font-size: 1.15rem;
-      font-weight: 700;
-      letter-spacing: -0.3px;
-    }
-
-    .header-actions {
-      display: flex;
-      align-items: center;
-      gap: 0.4rem;
-    }
-
-    button, select, label.btn-ui {
-      background: var(--bg-main);
-      color: var(--text-main);
-      border: 1px solid var(--border);
-      padding: 0.4rem 0.65rem;
-      border-radius: 6px;
-      font-size: 16px;
-      cursor: pointer;
-      outline: none;
-      display: inline-flex;
-      align-items: center;
-      gap: 0.35rem;
-      font-family: var(--font-ui);
-      white-space: nowrap;
-      transition: border-color var(--transition);
-    }
-
-    @media (min-width: 641px) {
-      button, select, label.btn-ui { font-size: 0.85rem; }
-    }
-
-    .credit-badge {
-      font-size: 0.78rem;
-      padding: 0.35rem 0.6rem;
-      border-radius: 20px;
-      background: rgba(56, 189, 248, 0.12);
-      border: 1px solid var(--border);
-      color: var(--accent);
-      font-weight: 600;
-      cursor: pointer;
-      white-space: nowrap;
-    }
-
-    .btn-summarize {
-      background: linear-gradient(135deg, rgba(56, 189, 248, 0.15), rgba(168, 85, 247, 0.15));
-      border: 1px solid var(--accent);
-      color: var(--accent);
-      font-weight: 600;
-    }
-
-    /* ENGINE & VOICE TOOLBAR */
-    .controls-panel {
-      max-width: 860px;
-      width: calc(100% - 1.5rem);
-      margin: 0.75rem auto 0;
-      padding: 0.85rem 1rem;
-      background: var(--panel-bg);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      display: flex;
-      flex-direction: column;
-      gap: 0.75rem;
-    }
-
-    .engine-tabs-group {
-      display: flex;
-      align-items: center;
-      gap: 0.45rem;
-      overflow-x: auto;
-      white-space: nowrap;
-      -webkit-overflow-scrolling: touch;
-      scrollbar-width: none;
-      padding-bottom: 2px;
-    }
-    .engine-tabs-group::-webkit-scrollbar { display: none; }
-
-    .engine-tab {
-      background: var(--bg-main);
-      color: var(--text-muted);
-      border: 1px solid var(--border);
-      padding: 0.38rem 0.8rem;
-      border-radius: 20px;
-      font-size: 0.8rem;
-      font-weight: 500;
-      cursor: pointer;
-      flex-shrink: 0;
-      transition: all var(--transition);
-    }
-
-    .engine-tab.active {
-      background: var(--tab-active-bg);
-      color: var(--text-main);
-      border-color: var(--accent);
-      font-weight: 600;
-      box-shadow: 0 0 0 1px var(--accent);
-    }
-
-    .settings-sub-bar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 0.75rem;
-      flex-wrap: wrap;
-    }
-
-    .setting-group {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      font-size: 0.82rem;
-      color: var(--text-muted);
-      flex: 1;
-      min-width: 140px;
-    }
-
-    .setting-group select { flex: 1; width: 100%; }
-
-    /* READING AREA */
-    main {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 0.75rem 0.75rem 2rem;
-    }
-
-    .reader-card {
-      max-width: 860px;
-      width: 100%;
-      background: var(--panel-bg);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 1.5rem 1.15rem;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
-      min-height: calc(100dvh - 300px);
-    }
-
-    @media (min-width: 641px) {
-      .reader-card { padding: 3rem 2.5rem; }
-    }
-
-    .doc-meta {
-      font-size: 0.75rem;
-      color: var(--text-muted);
-      margin-bottom: 1.25rem;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      border-bottom: 1px dashed var(--border);
-      padding-bottom: 0.4rem;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 0.5rem;
-    }
-
-    .book-content {
-      font-family: var(--font-reader);
-      font-size: 1.22rem;
-      line-height: 2.1;
-      letter-spacing: 0.01rem;
-      user-select: text;
-    }
-
-    @media (min-width: 641px) {
-      .book-content { font-size: 1.32rem; line-height: 2.2; }
-    }
-
-    .sentence {
-      padding: 2px 4px;
-      border-radius: 4px;
-      transition: background-color 0.15s ease;
-      cursor: pointer;
-      text-decoration: none !important;
-    }
-
-    .sentence.active-sentence {
-      background-color: var(--highlight) !important;
-      color: inherit;
-    }
-
-    .word {
-      display: inline-block;
-      border-radius: 3px;
-      padding: 0 1px;
-      transition: background-color 0.08s ease, color 0.08s ease;
-    }
-
-    .word.active-word {
-      background-color: var(--word-active) !important;
-      color: var(--word-text) !important;
-      font-weight: 600;
-    }
-
-    /* STICKY BOTTOM PLAYER */
-    .mobile-player-bar {
-      position: fixed;
-      bottom: 0; left: 0; right: 0;
-      background: var(--panel-blur);
-      backdrop-filter: blur(14px);
-      border-top: 1px solid var(--border);
-      padding: 0.65rem 1rem calc(0.65rem + var(--safe-bottom));
-      z-index: 100;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 0.5rem;
-    }
-
-    .player-nav-group {
-      display: flex;
-      align-items: center;
-      gap: 0.4rem;
-    }
-
-    .player-btn-main {
-      background: var(--accent);
-      color: #fff;
-      border: none;
-      width: 48px;
-      height: 48px;
-      border-radius: 50%;
-      font-size: 1.2rem;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
-    }
-    .player-btn-main:active { transform: scale(0.95); }
-
-    .player-btn-nav {
-      width: 38px;
-      height: 38px;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 0.95rem;
-      padding: 0;
-    }
-
-    .player-status-group {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      font-size: 0.8rem;
-      color: var(--text-muted);
-    }
-
-    .speed-pill-btn {
-      font-size: 0.78rem;
-      font-weight: 600;
-      padding: 0.3rem 0.55rem;
-      border-radius: 12px;
-      border: 1px solid var(--border);
-    }
-
-    /* MOON+ READER SLIDE-OUT DRAWER */
-    .drawer-overlay {
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0, 0, 0, 0.6);
-      backdrop-filter: blur(4px);
-      z-index: 999;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.25s ease;
-    }
-    .drawer-overlay.active {
-      opacity: 1;
-      pointer-events: auto;
-    }
-
-    .moon-drawer {
-      position: fixed;
-      top: 0; left: 0; bottom: 0;
-      width: 290px;
-      max-width: 82vw;
-      background: var(--drawer-bg);
-      z-index: 1000;
-      transform: translateX(-100%);
-      transition: transform 0.28s cubic-bezier(0.1, 0.9, 0.2, 1);
-      display: flex;
-      flex-direction: column;
-      box-shadow: 4px 0 25px rgba(0, 0, 0, 0.35);
-      border-right: 1px solid var(--border);
-    }
-    .moon-drawer.active {
-      transform: translateX(0);
-    }
-
-    /* SCENIC NIGHT SKY HEADER */
-    .drawer-scenic-header {
-      height: 155px;
-      background: linear-gradient(170deg, #16243b 0%, #253b5a 50%, #3a577d 100%);
-      position: relative;
-      overflow: hidden;
-      display: flex;
-      align-items: flex-end;
-      padding: 1.25rem 1.15rem;
-    }
-
-    .scenic-stars {
-      position: absolute;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background-image: 
-        radial-gradient(1px 1px at 20px 30px, #ffffff, rgba(0,0,0,0)),
-        radial-gradient(1.5px 1.5px at 60px 70px, rgba(255,255,255,0.8), rgba(0,0,0,0)),
-        radial-gradient(1px 1px at 120px 40px, #ffffff, rgba(0,0,0,0)),
-        radial-gradient(1.2px 1.2px at 180px 20px, #ffffff, rgba(0,0,0,0)),
-        radial-gradient(1px 1px at 230px 80px, #ffffff, rgba(0,0,0,0)),
-        radial-gradient(1px 1px at 260px 45px, rgba(255,255,255,0.7), rgba(0,0,0,0));
-      opacity: 0.85;
-    }
-
-    .scenic-moon {
-      position: absolute;
-      top: 25px;
-      right: 32px;
-      width: 48px;
-      height: 48px;
-      border-radius: 50%;
-      box-shadow: -8px 8px 0 2px #fef08a; /* Clean crescent moon */
-      filter: drop-shadow(0 0 10px rgba(254, 240, 138, 0.45));
-    }
-
-    .drawer-user-info {
-      position: relative;
-      z-index: 2;
-      color: #ffffff;
-    }
-    .drawer-user-info .app-title {
-      font-size: 1.15rem;
-      font-weight: 700;
-      letter-spacing: -0.2px;
-    }
-    .drawer-user-info .app-sub {
-      font-size: 0.75rem;
-      opacity: 0.8;
-    }
-
-    /* DRAWER MENU ITEMS */
-    .drawer-menu-list {
-      flex: 1;
-      overflow-y: auto;
-      padding: 0.75rem 0.5rem;
-      display: flex;
-      flex-direction: column;
-      gap: 0.25rem;
-    }
-
-    .drawer-item {
-      display: flex;
-      align-items: center;
-      gap: 0.9rem;
-      padding: 0.75rem 0.95rem;
-      border-radius: 8px;
-      color: var(--text-main);
-      font-size: 0.92rem;
-      font-weight: 500;
-      cursor: pointer;
-      user-select: none;
-      transition: background-color 0.15s ease;
-    }
-    .drawer-item:hover, .drawer-item:active {
-      background: rgba(56, 189, 248, 0.1);
-      color: var(--accent);
-    }
-    .drawer-item svg {
-      width: 22px;
-      height: 22px;
-      flex-shrink: 0;
-      color: var(--accent);
-    }
-    .drawer-item .badge-count {
-      margin-left: auto;
-      font-size: 0.75rem;
-      padding: 0.15rem 0.45rem;
-      background: var(--border);
-      border-radius: 10px;
-      color: var(--text-muted);
-    }
-
-    /* DRAWER BOTTOM QUICK ACTION BAR */
-    .drawer-footer-bar {
-      padding: 0.75rem 0.5rem calc(0.75rem + var(--safe-bottom));
-      border-top: 1px solid var(--border);
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      text-align: center;
-      gap: 0.25rem;
-      background: var(--panel-bg);
-    }
-
-    .drawer-footer-btn {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 0.25rem;
-      font-size: 0.7rem;
-      color: var(--text-muted);
-      cursor: pointer;
-      padding: 0.35rem 0.1rem;
-      border-radius: 6px;
-      background: none;
-      border: none;
-    }
-    .drawer-footer-btn:active { color: var(--accent); }
-    .drawer-footer-btn svg { width: 18px; height: 18px; }
-
-    /* BOOKSHELF / RECENT LIST MODAL */
-    .shelf-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-      gap: 0.85rem;
-      max-height: 55vh;
-      overflow-y: auto;
-      padding: 0.25rem 0;
-    }
-
-    .shelf-card {
-      background: var(--drawer-card);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 0.75rem;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      gap: 0.5rem;
-      cursor: pointer;
-      transition: transform 0.15s ease, border-color 0.15s ease;
-    }
-    .shelf-card:hover {
-      border-color: var(--accent);
-      transform: translateY(-2px);
-    }
-    .shelf-card .book-icon {
-      font-size: 1.6rem;
-      color: var(--accent);
-    }
-    .shelf-card .book-name {
-      font-size: 0.82rem;
-      font-weight: 600;
-      line-height: 1.25;
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-    }
-    .shelf-card .book-meta-sub {
-      font-size: 0.72rem;
-      color: var(--text-muted);
-    }
-
-    /* MODAL OVERLAYS */
-    .modal-overlay {
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: var(--modal-overlay);
-      backdrop-filter: blur(6px);
-      display: none;
-      justify-content: center;
-      align-items: center;
-      z-index: 1050;
-      padding: 1rem;
-    }
-
-    .modal-card {
-      background: var(--panel-bg);
-      border: 1px solid var(--border);
-      width: 100%;
-      max-width: 440px;
-      border-radius: 14px;
-      padding: 1.5rem;
-      box-shadow: 0 10px 40px rgba(0,0,0,0.4);
-      display: flex;
-      flex-direction: column;
-      gap: 1rem;
-    }
-
-    .modal-title { font-size: 1.15rem; font-weight: 700; }
-    .input-field {
-      width: 100%;
-      padding: 0.65rem 0.85rem;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: var(--bg-main);
-      color: var(--text-main);
-      font-size: 16px;
-    }
-
-    .summary-choice-btn {
-      width: 100%;
-      padding: 0.85rem;
-      border-radius: 8px;
-      border: 1px solid var(--border);
-      background: var(--bg-main);
-      color: var(--text-main);
-      font-size: 0.9rem;
-      text-align: left;
-      cursor: pointer;
-      display: flex;
-      flex-direction: column;
-      gap: 0.2rem;
-    }
-  </style>
-</head>
-<body>
-
-  <!-- HEADER -->
-  <header>
-    <div class="header-inner">
-      <div class="brand-group">
-        <!-- Moon+ Reader Hamburger Drawer Trigger -->
-        <button id="openDrawerBtn" class="btn-hamburger" aria-label="Open Navigation Drawer">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="3" y1="12" x2="21" y2="12"></line>
-            <line x1="3" y1="6" x2="21" y2="6"></line>
-            <line x1="3" y1="18" x2="21" y2="18"></line>
-          </svg>
-        </button>
-        <span class="brand-title">Marginalia</span>
-      </div>
-
-      <div class="header-actions">
-        <button id="summarizeBtn" class="btn-summarize" style="padding:0.35rem 0.55rem; font-size:0.8rem;">✨ Summary</button>
-
-        <div id="creditBadge" class="credit-badge">
-          <span id="creditDisplay">Sign In</span>
-        </div>
-
-        <label class="btn-ui" for="fileInput" style="padding:0.35rem 0.55rem; font-size:0.8rem;">📁 Open</label>
-        <input type="file" id="fileInput" accept=".txt,.md,.pdf,.docx,.epub,.html,.htm,application/epub+zip,application/pdf" style="display:none;" />
-      </div>
-    </div>
-  </header>
-
-  <!-- MOON+ READER SLIDE-OUT DRAWER[cite: 9] -->
-  <div id="drawerOverlay" class="drawer-overlay"></div>
-  <aside id="moonDrawer" class="moon-drawer">
-    <!-- Scenic Night Sky Banner[cite: 9] -->
-    <div class="drawer-scenic-header">
-      <div class="scenic-stars"></div>
-      <div class="scenic-moon"></div>
-      <div class="drawer-user-info">
-        <div class="app-title">Marginalia</div>
-        <div class="app-sub">Universal Read-Along Bookshelf</div>
-      </div>
-    </div>
-
-    <!-- Menu Items[cite: 9] -->
-    <nav class="drawer-menu-list">
-      <!-- 1. Recent List[cite: 9] -->
-      <div class="drawer-item" id="drawerRecentBtn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="10"></circle>
-          <polyline points="12 6 12 12 16 14"></polyline>
-        </svg>
-        <span>Recent list</span>
-        <span id="recentCountBadge" class="badge-count">0</span>
-      </div>
-
-      <!-- 2. My Shelf[cite: 9] -->
-      <div class="drawer-item" id="drawerShelfBtn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-          <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-          <line x1="8" y1="6" x2="16" y2="6"></line>
-          <line x1="8" y1="10" x2="14" y2="10"></line>
-        </svg>
-        <span>My Shelf</span>
-        <span id="shelfCountBadge" class="badge-count">0</span>
-      </div>
-
-      <!-- 3. My Files[cite: 9] -->
-      <label class="drawer-item" for="fileInput" style="cursor:pointer; margin:0;">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-          <polyline points="14 2 14 8 20 8"></polyline>
-          <line x1="16" y1="13" x2="8" y2="13"></line>
-          <line x1="16" y1="17" x2="8" y2="17"></line>
-        </svg>
-        <span>My Files (Import)</span>
-      </label>
-
-      <!-- 4. Net Library[cite: 9] -->
-      <div class="drawer-item" id="drawerNetLibBtn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="10"></circle>
-          <line x1="2" y1="12" x2="22" y2="12"></line>
-          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
-        </svg>
-        <span>Net Library</span>
-        <span class="badge-count" style="color:var(--accent); font-weight:600;">Free</span>
-      </div>
-
-      <!-- 5. Bookmarks[cite: 9] -->
-      <div class="drawer-item" id="drawerBookmarksBtn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
-        </svg>
-        <span>Bookmarks</span>
-        <span id="bookmarkCountBadge" class="badge-count">0</span>
-      </div>
-    </nav>
-
-    <!-- Bottom Action Bar[cite: 9] -->
-    <div class="drawer-footer-bar">
-      <!-- Options[cite: 9] -->
-      <button class="drawer-footer-btn" id="drawerOptionsBtn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="3"></circle>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-        </svg>
-        <span>Options</span>
-      </button>
-
-      <!-- About[cite: 9] -->
-      <button class="drawer-footer-btn" id="drawerAboutBtn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="10"></circle>
-          <line x1="12" y1="16" x2="12" y2="12"></line>
-          <line x1="12" y1="8" x2="12.01" y2="8"></line>
-        </svg>
-        <span>About</span>
-      </button>
-
-      <!-- Night Theme[cite: 9] -->
-      <button class="drawer-footer-btn" id="drawerNightThemeBtn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
-        </svg>
-        <span>Theme</span>
-      </button>
-
-      <!-- Exit / Close[cite: 9] -->
-      <button class="drawer-footer-btn" id="drawerExitBtn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path>
-          <line x1="12" y1="2" x2="12" y2="12"></line>
-        </svg>
-        <span>Close</span>
-      </button>
-    </div>
-  </aside>
-
-  <main>
-    <div class="controls-panel">
-      <div class="engine-tabs-group">
-        <button class="engine-tab active" data-engine="browser">Browser Native</button>
-        <button class="engine-tab" data-engine="elevenlabs">ElevenLabs</button>
-        <button class="engine-tab" data-engine="openai">OpenAI Audio</button>
-        <button class="engine-tab" data-engine="google">Google Cloud</button>
-        <button class="engine-tab" data-engine="azure">Azure Speech</button>
-      </div>
-
-      <div class="settings-sub-bar">
-        <div class="setting-group">
-          <span>Voice:</span>
-          <select id="voicePicker"></select>
-        </div>
-
-        <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.82rem; cursor:pointer; color:var(--text-muted); white-space:nowrap;">
-          <input type="checkbox" id="autoFlipCheck" checked style="accent-color: var(--accent);" />
-          <span>Auto-turn page</span>
-        </label>
-      </div>
-    </div>
-
-    <div class="reader-card">
-      <div class="doc-meta">
-        <span id="docTitle" style="font-weight:600;">Marginalia Reader</span>
-        <div style="display:flex; align-items:center; gap:0.5rem;">
-          <button id="addBookmarkBtn" style="padding:0.2rem 0.5rem; font-size:0.75rem;">🔖 Bookmark</button>
-          <span id="summaryReturnSpan" style="display:none;">
-            <button id="exitSummaryBtn" style="padding:0.2rem 0.5rem; font-size:0.75rem;">← Back</button>
-          </span>
-          <span id="preloadStatus">Ready</span>
-        </div>
-      </div>
-
-      <div id="contentPane" class="book-content"></div>
-    </div>
-  </main>
-
-  <!-- STICKY BOTTOM PLAYER -->
-  <div class="mobile-player-bar">
-    <div class="player-nav-group">
-      <button id="prevPageBtn" class="player-btn-nav" title="Previous Page">←</button>
-      <button id="mainPlayToggle" class="player-btn-main">▶</button>
-      <button id="nextPageBtn" class="player-btn-nav" title="Next Page">→</button>
-    </div>
-
-    <div class="player-status-group">
-      <span id="pageIndicatorText" style="font-weight:600; font-size:0.85rem; color:var(--text-main);">Page 1 of 1</span>
-      <span style="font-size:0.75rem;">Continuous Audio</span>
-    </div>
-
-    <button id="speedCycleBtn" class="speed-pill-btn">1.0x</button>
-  </div>
-
-  <!-- BOOKSHELF / RECENT LIST MODAL[cite: 9] -->
-  <div id="shelfModal" class="modal-overlay">
-    <div class="modal-card">
-      <div class="modal-title" id="shelfModalTitle">📚 My Shelf</div>
-      <p style="font-size:0.85rem; color:var(--text-muted);">
-        Books and documents saved permanently in your browser storage. Tap any to resume reading immediately.
-      </p>
-      <div id="shelfGrid" class="shelf-grid"></div>
-      <div style="display:flex; justify-content:flex-end;">
-        <button id="closeShelfBtn">Close</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- NET LIBRARY MODAL (FREE PUBLIC DOMAIN STARTERS)[cite: 9] -->
-  <div id="netLibModal" class="modal-overlay">
-    <div class="modal-card">
-      <div class="modal-title">🌐 Net Library (Free Classics)</div>
-      <p style="font-size:0.85rem; color:var(--text-muted);">
-        Instant public domain titles ready to read and listen to without downloading files.
-      </p>
-      <div class="shelf-grid">
-        <div class="shelf-card" onclick="loadNetBook('art_of_war')">
-          <div class="book-icon">📜</div>
-          <div class="book-name">The Art of War</div>
-          <div class="book-meta-sub">Sun Tzu • Classic</div>
-        </div>
-        <div class="shelf-card" onclick="loadNetBook('sherlock')">
-          <div class="book-icon">🕵️</div>
-          <div class="book-name">A Scandal in Bohemia</div>
-          <div class="book-meta-sub">Arthur Conan Doyle</div>
-        </div>
-        <div class="shelf-card" onclick="loadNetBook('kafka')">
-          <div class="book-icon">🪲</div>
-          <div class="book-name">The Metamorphosis</div>
-          <div class="book-meta-sub">Franz Kafka • Classic</div>
-        </div>
-      </div>
-      <div style="display:flex; justify-content:flex-end;">
-        <button id="closeNetLibBtn">Close</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- BOOKMARKS MODAL[cite: 9] -->
-  <div id="bookmarksModal" class="modal-overlay">
-    <div class="modal-card">
-      <div class="modal-title">🔖 Saved Bookmarks</div>
-      <div id="bookmarksList" style="max-height: 50vh; overflow-y: auto; display:flex; flex-direction:column; gap:0.5rem;"></div>
-      <div style="display:flex; justify-content:flex-end;">
-        <button id="closeBookmarksBtn">Close</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- OPTIONS MODAL[cite: 9] -->
-  <div id="optionsModal" class="modal-overlay">
-    <div class="modal-card">
-      <div class="modal-title">⚙️ Reading Options</div>
-      <div style="display:flex; flex-direction:column; gap:0.75rem; font-size:0.9rem;">
-        <div>
-          <label style="display:block; margin-bottom:0.25rem;">Font Face</label>
-          <select id="fontSelect" style="width:100%;">
-            <option value="serif">Classic Serif (Georgia)</option>
-            <option value="sans-serif">Clean Sans-Serif (System UI)</option>
-            <option value="monospace">Monospace Reader</option>
-          </select>
-        </div>
-        <div>
-          <label style="display:block; margin-bottom:0.25rem;">Font Size</label>
-          <select id="fontSizeSelect" style="width:100%;">
-            <option value="1.1rem">Small</option>
-            <option value="1.22rem" selected>Standard Mobile</option>
-            <option value="1.45rem">Large Reading</option>
-          </select>
-        </div>
-      </div>
-      <div style="display:flex; justify-content:flex-end;">
-        <button id="closeOptionsBtn">Done</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ABOUT MODAL[cite: 9] -->
-  <div id="aboutModal" class="modal-overlay">
-    <div class="modal-card">
-      <div class="modal-title">ℹ️ About Marginalia</div>
-      <p style="font-size:0.85rem; color:var(--text-muted); line-height:1.6;">
-        Marginalia is an adaptive read-along platform combining client-side EPUB/PDF processing, synchronized karaoke TTS, and executive AI summaries.
-      </p>
-      <div style="font-size:0.8rem; background:var(--bg-main); padding:0.75rem; border-radius:8px;">
-        <div><strong>Version:</strong> 2.4.0 (Mobile Edition)</div>
-        <div><strong>Storage:</strong> IndexedDB Offline Bookshelf</div>
-      </div>
-      <div style="display:flex; justify-content:flex-end;">
-        <button id="closeAboutBtn">Close</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- AI SUMMARY MODAL -->
-  <div id="summaryModal" class="modal-overlay">
-    <div class="modal-card">
-      <div class="modal-title">✨ AI Document Summary</div>
-      <p style="font-size:0.85rem; color:var(--text-muted);">
-        Select summary type. You can listen to the resulting summary immediately.
-      </p>
-      <div id="summaryTrialNotice" style="font-size:0.8rem; color:var(--accent); font-weight:600;">
-        Trial Balance: Checking...
-      </div>
-      <button id="sumChapterBtn" class="summary-choice-btn">
-        <strong>Summarize Current Section</strong>
-        <span style="font-size:0.75rem; color:var(--text-muted);">Condenses active chapter or visible pages.</span>
-      </button>
-      <button id="sumKeyTakeawaysBtn" class="summary-choice-btn">
-        <strong>Key Takeaways of Document</strong>
-        <span style="font-size:0.75rem; color:var(--text-muted);">High-level core themes and key conclusions.</span>
-      </button>
-      <div style="display:flex; justify-content:flex-end;">
-        <button id="closeSummaryModalBtn">Cancel</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- PAYWALL MODAL -->
-  <div id="paywallModal" class="modal-overlay">
-    <div class="modal-card">
-      <div class="modal-title">🌟 Upgrade to Pro</div>
-      <p style="font-size:0.85rem; color:var(--text-muted);">
-        Your free trial summaries have been exhausted. Upgrade to Pro for unlimited AI document summaries and neural TTS engines.
-      </p>
-      <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
-        <button id="closePaywallBtn">Close</button>
-        <button id="upgradeProBtn" style="background:var(--accent); color:#fff; border:none; font-weight:600;">Upgrade to Pro ($9/mo)</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- AUTH MODAL -->
-  <div id="authModal" class="modal-overlay">
-    <div class="modal-card">
-      <div class="modal-title">Account & Quota Access</div>
-      <p style="font-size:0.85rem; color:var(--text-muted);">Sign in to access your free trial summaries and neural voice quota.</p>
-      <input type="email" id="authEmail" class="input-field" placeholder="Email address" />
-      <input type="password" id="authPass" class="input-field" placeholder="Password" />
-      <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
-        <button id="authCloseBtn">Cancel</button>
-        <button id="authSignUpBtn">Sign Up</button>
-        <button id="authSignInBtn" style="background:var(--accent); color:#fff; border:none; font-weight:600;">Sign In</button>
-      </div>
-    </div>
-  </div>
-
-  <audio id="neuralAudio" style="display:none;" playsinline></audio>
-
-  <script>
-    // --- SUPABASE CREDENTIALS ---
-    const SUPABASE_PROJECT_URL = "https://your-project.supabase.co"; 
-    const SUPABASE_ANON_KEY = "sb_publishable_or_anon_key";
-
-    let supabaseClient = null;
-    if (SUPABASE_PROJECT_URL && !SUPABASE_PROJECT_URL.includes("your-project")) {
-      try {
-        supabaseClient = supabase.createClient(SUPABASE_PROJECT_URL, SUPABASE_ANON_KEY);
-      } catch (err) {
-        console.warn("Supabase init error:", err);
-      }
-    }
-
-    // --- INDEXEDDB STORAGE (MY SHELF & BOOKMARKS)[cite: 9] ---
-    let db = null;
-    function initDatabase() {
-      return new Promise((resolve) => {
-        const req = indexedDB.open('MarginaliaLibraryDB', 1);
-        req.onupgradeneeded = (e) => {
-          const database = e.target.result;
-          if (!database.objectStoreNames.contains('books')) {
-            database.createObjectStore('books', { keyPath: 'id' });
-          }
-          if (!database.objectStoreNames.contains('bookmarks')) {
-            database.createObjectStore('bookmarks', { keyPath: 'id', autoIncrement: true });
-          }
-        };
-        req.onsuccess = (e) => {
-          db = e.target.result;
-          refreshDrawerCounters();
-          resolve(db);
-        };
-        req.onerror = () => resolve(null);
-      });
-    }
-
-    async function saveBookToShelf(bookRecord) {
-      if (!db) await initDatabase();
-      if (!db) return;
-      const tx = db.transaction('books', 'readwrite');
-      tx.objectStore('books').put(bookRecord);
-      refreshDrawerCounters();
-    }
-
-    async function getAllShelfBooks() {
-      if (!db) await initDatabase();
-      if (!db) return [];
-      return new Promise((resolve) => {
-        const tx = db.transaction('books', 'readonly');
-        const req = tx.objectStore('books').getAll();
-        req.onsuccess = () => resolve(req.result || []);
-        req.onerror = () => resolve([]);
-      });
-    }
-
-    async function refreshDrawerCounters() {
-      const books = await getAllShelfBooks();
-      const recentBadge = document.getElementById('recentCountBadge');
-      const shelfBadge = document.getElementById('shelfCountBadge');
-      if (recentBadge) recentBadge.textContent = books.length;
-      if (shelfBadge) shelfBadge.textContent = books.length;
-
-      if (db) {
-        const tx = db.transaction('bookmarks', 'readonly');
-        const req = tx.objectStore('bookmarks').count();
-        req.onsuccess = () => {
-          const bmBadge = document.getElementById('bookmarkCountBadge');
-          if (bmBadge) bmBadge.textContent = req.result;
-        };
-      }
-    }
-
-    const voicePresets = {
-      browser: [],
-      elevenlabs: [
-        { id: '21m00Tcm4TlvDq8ikWAM', name: 'Rachel (Calm & Natural)' },
-        { id: 'AZnzlk1XvdvUeBnXmlld', name: 'Domi (Empathetic)' },
-        { id: 'EXAVITQu4vr4xnSDxMaL', name: 'Bella (Expressive)' },
-        { id: 'ErXwobaYiN019PkySvjV', name: 'Antoni (Well-rounded)' },
-        { id: 'pNInz6obpgDQGcFmaJgB', name: 'Adam (Deep Baritone)' }
-      ],
-      openai: [
-        { id: 'alloy', name: 'Alloy (Balanced)' },
-        { id: 'echo', name: 'Echo (Warm)' },
-        { id: 'fable', name: 'Fable (British Accent)' },
-        { id: 'onyx', name: 'Onyx (Deep Authoritative)' },
-        { id: 'nova', name: 'Nova (Energetic)' },
-        { id: 'shimmer', name: 'Shimmer (Clear)' }
-      ],
-      google: [
-        { id: 'en-US-Journey-F', name: 'Journey Female (Natural)' },
-        { id: 'en-US-Journey-D', name: 'Journey Male (Deep)' },
-        { id: 'en-US-Neural2-F', name: 'Neural2 Female' }
-      ],
-      azure: [
-        { id: 'en-US-JennyNeural', name: 'Jenny (Neural US)' },
-        { id: 'en-US-GuyNeural', name: 'Guy (Neural US)' },
-        { id: 'en-GB-SoniaNeural', name: 'Sonia (Neural UK)' }
-      ]
-    };
-
-    let currentDocName = "Marginalia Quickstart";
-    let bookPages = [
-      [
-        "Welcome to Marginalia Mobile Bookshelf.",
-        "Tap the hamburger menu in the top-left to access your Recent List, My Shelf, Net Library, and Bookmarks.",
-        "Your books save directly to your browser so they remain available when you return.",
-        "Enjoy smooth read-along narration with continuous auto-paging."
-      ]
-    ];
-
-    let originalBookPages = null;
-    let originalDocName = null;
-    let originalPage = 0;
-
-    let currentPage = 0;
-    let currentSentenceIdx = 0;
-    let isPlaying = false;
-    let activeEngine = 'browser';
-    let playbackSpeed = 1.0;
-    const speedSteps = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0];
-
-    const browserSpeech = window.speechSynthesis;
-    let currentUtterance = null;
-    const audioElement = document.getElementById('neuralAudio');
-    const audioPreloadCache = new Map();
-    let wordTimerInterval = null;
-    let wakeLock = null;
-    let iosWatchdogInterval = null;
-
-    // DOM Elements
-    const contentPane = document.getElementById('contentPane');
-    const mainPlayToggle = document.getElementById('mainPlayToggle');
-    const prevPageBtn = document.getElementById('prevPageBtn');
-    const nextPageBtn = document.getElementById('nextPageBtn');
-    const pageIndicatorText = document.getElementById('pageIndicatorText');
-    const speedCycleBtn = document.getElementById('speedCycleBtn');
-    const autoFlipCheck = document.getElementById('autoFlipCheck');
-    const voicePicker = document.getElementById('voicePicker');
-    const fileInput = document.getElementById('fileInput');
-    const docTitle = document.getElementById('docTitle');
-    const preloadStatus = document.getElementById('preloadStatus');
-    const creditBadge = document.getElementById('creditBadge');
-    const creditDisplay = document.getElementById('creditDisplay');
-    const summarizeBtn = document.getElementById('summarizeBtn');
-    const summaryModal = document.getElementById('summaryModal');
-    const closeSummaryModalBtn = document.getElementById('closeSummaryModalBtn');
-    const sumChapterBtn = document.getElementById('sumChapterBtn');
-    const sumKeyTakeawaysBtn = document.getElementById('sumKeyTakeawaysBtn');
-    const summaryTrialNotice = document.getElementById('summaryTrialNotice');
-    const summaryReturnSpan = document.getElementById('summaryReturnSpan');
-    const exitSummaryBtn = document.getElementById('exitSummaryBtn');
-    const paywallModal = document.getElementById('paywallModal');
-    const closePaywallBtn = document.getElementById('closePaywallBtn');
-    const upgradeProBtn = document.getElementById('upgradeProBtn');
-    const authModal = document.getElementById('authModal');
-    const authEmail = document.getElementById('authEmail');
-    const authPass = document.getElementById('authPass');
-    const authSignInBtn = document.getElementById('authSignInBtn');
-    const authSignUpBtn = document.getElementById('authSignUpBtn');
-    const authCloseBtn = document.getElementById('authCloseBtn');
-
-    // Drawer Elements[cite: 9]
-    const openDrawerBtn = document.getElementById('openDrawerBtn');
-    const moonDrawer = document.getElementById('moonDrawer');
-    const drawerOverlay = document.getElementById('drawerOverlay');
-    const drawerRecentBtn = document.getElementById('drawerRecentBtn');
-    const drawerShelfBtn = document.getElementById('drawerShelfBtn');
-    const drawerNetLibBtn = document.getElementById('drawerNetLibBtn');
-    const drawerBookmarksBtn = document.getElementById('drawerBookmarksBtn');
-    const drawerOptionsBtn = document.getElementById('drawerOptionsBtn');
-    const drawerAboutBtn = document.getElementById('drawerAboutBtn');
-    const drawerNightThemeBtn = document.getElementById('drawerNightThemeBtn');
-    const drawerExitBtn = document.getElementById('drawerExitBtn');
-
-    // Shelf & Other Modals[cite: 9]
-    const shelfModal = document.getElementById('shelfModal');
-    const shelfModalTitle = document.getElementById('shelfModalTitle');
-    const shelfGrid = document.getElementById('shelfGrid');
-    const closeShelfBtn = document.getElementById('closeShelfBtn');
-    const netLibModal = document.getElementById('netLibModal');
-    const closeNetLibBtn = document.getElementById('closeNetLibBtn');
-    const bookmarksModal = document.getElementById('bookmarksModal');
-    const closeBookmarksBtn = document.getElementById('closeBookmarksBtn');
-    const bookmarksList = document.getElementById('bookmarksList');
-    const addBookmarkBtn = document.getElementById('addBookmarkBtn');
-    const optionsModal = document.getElementById('optionsModal');
-    const closeOptionsBtn = document.getElementById('closeOptionsBtn');
-    const aboutModal = document.getElementById('aboutModal');
-    const closeAboutBtn = document.getElementById('closeAboutBtn');
-    const fontSelect = document.getElementById('fontSelect');
-    const fontSizeSelect = document.getElementById('fontSizeSelect');
-
-    // --- DRAWER OPEN & CLOSE LOGIC[cite: 9] ---
-    function openDrawer() {
-      moonDrawer.classList.add('active');
-      drawerOverlay.classList.add('active');
-      refreshDrawerCounters();
-    }
-    function closeDrawer() {
-      moonDrawer.classList.remove('active');
-      drawerOverlay.classList.remove('active');
-    }
-
-    openDrawerBtn.addEventListener('click', openDrawer);
-    drawerOverlay.addEventListener('click', closeDrawer);
-    drawerExitBtn.addEventListener('click', closeDrawer);
-
-    // Swipe to close drawer
-    let touchStartX = 0;
-    moonDrawer.addEventListener('touchstart', (e) => { touchStartX = e.touches[0].clientX; }, { passive: true });
-    moonDrawer.addEventListener('touchend', (e) => {
-      const touchEndX = e.changedTouches[0].clientX;
-      if (touchStartX - touchEndX > 60) closeDrawer();
-    }, { passive: true });
-
-    // --- NIGHT THEME INSTANT TOGGLE[cite: 9] ---
-    drawerNightThemeBtn.addEventListener('click', () => {
-      const current = document.documentElement.getAttribute('data-theme') || 'dark';
-      const next = (current === 'dark' || current === 'oled') ? 'light' : 'dark';
-      document.documentElement.setAttribute('data-theme', next);
-      localStorage.setItem('marginalia_theme', next);
-    });
-
-    // --- OPTIONS & ABOUT MODALS[cite: 9] ---
-    drawerOptionsBtn.addEventListener('click', () => { closeDrawer(); optionsModal.style.display = 'flex'; });
-    closeOptionsBtn.addEventListener('click', () => { optionsModal.style.display = 'none'; });
-    drawerAboutBtn.addEventListener('click', () => { closeDrawer(); aboutModal.style.display = 'flex'; });
-    closeAboutBtn.addEventListener('click', () => { aboutModal.style.display = 'none'; });
-
-    fontSelect.addEventListener('change', (e) => {
-      contentPane.style.fontFamily = e.target.value === 'serif' ? 'var(--font-reader)' :
-        e.target.value === 'monospace' ? 'monospace' : 'var(--font-ui)';
-    });
-    fontSizeSelect.addEventListener('change', (e) => {
-      contentPane.style.fontSize = e.target.value;
-    });
-
-    // --- MY SHELF & RECENT LIST RENDERING[cite: 9] ---
-    async function showShelfModal(mode = 'shelf') {
-      closeDrawer();
-      shelfModalTitle.textContent = mode === 'recent' ? '🕒 Recent list' : '📚 My Shelf';
-      const books = await getAllShelfBooks();
-      shelfGrid.innerHTML = '';
-
-      if (books.length === 0) {
-        shelfGrid.innerHTML = '<div style="grid-column:1/-1; text-align:center; padding:2rem; color:var(--text-muted);">No books in your shelf yet. Use "Open" or Net Library to add books.</div>';
-      } else {
-        // Sort by last opened
-        books.sort((a, b) => b.lastOpened - a.lastOpened);
-        const displayBooks = mode === 'recent' ? books.slice(0, 5) : books;
-
-        displayBooks.forEach(b => {
-          const card = document.createElement('div');
-          card.className = 'shelf-card';
-          card.innerHTML = `
-            <div class="book-icon">📖</div>
-            <div class="book-name">${b.title}</div>
-            <div class="book-meta-sub">Page ${b.currentPage + 1} of ${b.pages.length}</div>
-          `;
-          card.addEventListener('click', () => {
-            loadBookFromRecord(b);
-            shelfModal.style.display = 'none';
-          });
-          shelfGrid.appendChild(card);
-        });
-      }
-      shelfModal.style.display = 'flex';
-    }
-
-    drawerRecentBtn.addEventListener('click', () => showShelfModal('recent'));
-    drawerShelfBtn.addEventListener('click', () => showShelfModal('shelf'));
-    closeShelfBtn.addEventListener('click', () => { shelfModal.style.display = 'none'; });
-
-    function loadBookFromRecord(b) {
-      stopAudio();
-      audioPreloadCache.clear();
-      bookPages = b.pages;
-      currentDocName = b.title;
-      docTitle.textContent = currentDocName;
-      currentPage = b.currentPage || 0;
-      currentSentenceIdx = b.currentSentenceIdx || 0;
-      originalBookPages = null;
-      summaryReturnSpan.style.display = 'none';
-      renderPage(currentPage);
-    }
-
-    // --- NET LIBRARY (CLASSICS)[cite: 9] ---
-    drawerNetLibBtn.addEventListener('click', () => { closeDrawer(); netLibModal.style.display = 'flex'; });
-    closeNetLibBtn.addEventListener('click', () => { netLibModal.style.display = 'none'; });
-
-    window.loadNetBook = function(key) {
-      stopAudio();
-      netLibModal.style.display = 'none';
-
-      let title = "";
-      let rawText = "";
-
-      if (key === 'art_of_war') {
-        title = "The Art of War — Sun Tzu";
-        rawText = "The art of war is of vital importance to the State. It is a matter of life and death, a road either to safety or to ruin. Hence it is a subject of inquiry which can on no account be neglected. The moral law causes the people to be in complete accord with their ruler, so that they will follow him regardless of their lives, undismayed by any danger. Heaven signifies night and day, cold and heat, times and seasons. Earth comprises distances, great and small; danger and security; open ground and narrow passes. The commander stands for the virtues of wisdom, sincerely, benevolence, courage and strictness. In war, the way is to avoid what is strong and to strike at what is weak.";
-      } else if (key === 'sherlock') {
-        title = "A Scandal in Bohemia — Conan Doyle";
-        rawText = "To Sherlock Holmes she is always the woman. I have seldom heard him mention her under any other name. In his eyes she eclipsHere is the complete, drop-in replacement for **`public/index.html`**. 
-
-It introduces the Moon+ Reader-inspired slide-out drawer, persistent in-browser book storage via **IndexedDB** ("My Shelf" and "Recent list"), and a one-tap bookmarking system so you never have to re-upload documents when reopening the app on your phone.
-
----
-
-### Key Additions
-* **Scenic Night Drawer**: Features the illustrated crescent moon header, accessible via the top-left menu icon (`☰`) or by swiping.
-* **My Shelf & Recent List (IndexedDB)**: Every uploaded book (EPUB, PDF, Word, TXT) is saved locally into your phone's browser database with progress tracking and last-read timestamps.
-* **Bookmarks**: Tap the ribbon icon on the reading card to bookmark any sentence. Open the drawer to browse and jump to saved bookmarks anytime.
-* **Quick-Action Footer**: Includes a single-tap Night Theme toggle, reader options (font size adjustments), and library management.
-
----
-
-### File: `public/index.html`
-
-Replace the entire contents of **`public/index.html`** with this code:
-
-```html
-<!DOCTYPE html>
-<html lang="en" data-theme="dark">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>Marginalia — Read-Along Reader</title>
-
-  <!-- Client-Side Document Parsers -->
-  <script src="[https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js](https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js)"></script>
-  <script src="[https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js](https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js)"></script>
-  <script src="[https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js](https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js)"></script>
-  <!-- Supabase Client -->
-  <script src="[https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2](https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2)"></script>
-
-  <script>
-    pdfjsLib.GlobalWorkerOptions.workerSrc = '[https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js](https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js)';
-  </script>
-
-  <style>
-    :root {
-      --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      --font-reader: "Georgia", "Merriweather", "Charter", serif;
-      --transition: 0.22s ease;
-      --safe-bottom: env(safe-area-inset-bottom, 16px);
       --reader-font-size: 1.22rem;
     }
 
@@ -1372,7 +40,7 @@ Replace the entire contents of **`public/index.html`** with this code:
       --tab-active-bg: #f1f5f9;
       --drawer-bg: #e2ecf5;
       --drawer-item-hover: #d2e3f3;
-      --modal-overlay: rgba(15, 23, 42, 0.5);
+      --modal-overlay: rgba(15, 23, 42, 0.55);
     }
 
     [data-theme="sepia"] {
@@ -1390,7 +58,7 @@ Replace the entire contents of **`public/index.html`** with this code:
       --tab-active-bg: #dfceb0;
       --drawer-bg: #dfd4bc;
       --drawer-item-hover: #d2c5a9;
-      --modal-overlay: rgba(66, 50, 30, 0.5);
+      --modal-overlay: rgba(66, 50, 30, 0.55);
     }
 
     [data-theme="dark"] {
@@ -1408,7 +76,7 @@ Replace the entire contents of **`public/index.html`** with this code:
       --tab-active-bg: #1e293b;
       --drawer-bg: #111a2d;
       --drawer-item-hover: #1b2844;
-      --modal-overlay: rgba(0, 0, 0, 0.7);
+      --modal-overlay: rgba(0, 0, 0, 0.75);
     }
 
     [data-theme="oled"] {
@@ -1426,7 +94,7 @@ Replace the entire contents of **`public/index.html`** with this code:
       --tab-active-bg: #222222;
       --drawer-bg: #080808;
       --drawer-item-hover: #181818;
-      --modal-overlay: rgba(0, 0, 0, 0.85);
+      --modal-overlay: rgba(0, 0, 0, 0.88);
     }
 
     * { 
@@ -1446,6 +114,7 @@ Replace the entire contents of **`public/index.html`** with this code:
       transition: background-color var(--transition), color var(--transition);
       -webkit-tap-highlight-color: transparent;
       padding-bottom: calc(90px + var(--safe-bottom));
+      overflow-x: hidden;
     }
 
     /* TOP HEADER */
@@ -1539,7 +208,7 @@ Replace the entire contents of **`public/index.html`** with this code:
       font-weight: 600;
     }
 
-    /* ENGINE BAR */
+    /* ENGINE TABS */
     .controls-panel {
       max-width: 860px;
       width: calc(100% - 1.5rem);
@@ -1610,7 +279,7 @@ Replace the entire contents of **`public/index.html`** with this code:
       width: 100%;
     }
 
-    /* READING AREA */
+    /* READING CONTAINER */
     main {
       flex: 1;
       display: flex;
@@ -1748,9 +417,7 @@ Replace the entire contents of **`public/index.html`** with this code:
       border: 1px solid var(--border);
     }
 
-    /* =========================================
-       MOON+ READER SLIDE-OUT DRAWER
-       ========================================= */
+    /* MOON+ READER SLIDE-OUT DRAWER */
     .drawer-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -1783,7 +450,6 @@ Replace the entire contents of **`public/index.html`** with this code:
       transform: translateX(310px);
     }
 
-    /* SCENIC NIGHT BANNER (MOON & SKY) */
     .drawer-header {
       height: 155px;
       background: linear-gradient(180deg, #182848 0%, #29487d 65%, #3d669e 100%);
@@ -1823,7 +489,6 @@ Replace the entire contents of **`public/index.html`** with this code:
       text-shadow: 0 1px 4px rgba(0,0,0,0.5);
     }
 
-    /* DRAWER MENU ITEMS */
     .drawer-body {
       flex: 1;
       overflow-y: auto;
@@ -1855,7 +520,6 @@ Replace the entire contents of **`public/index.html`** with this code:
       opacity: 0.85;
     }
 
-    /* DRAWER BOTTOM QUICK TOOLBAR */
     .drawer-footer {
       border-top: 1px solid var(--border);
       padding: 0.65rem 0.85rem calc(0.65rem + var(--safe-bottom));
@@ -1882,7 +546,7 @@ Replace the entire contents of **`public/index.html`** with this code:
       color: var(--text-main);
     }
 
-    /* MODALS & LIBRARY LISTS */
+    /* ALL MODALS */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -1907,6 +571,7 @@ Replace the entire contents of **`public/index.html`** with this code:
       display: flex;
       flex-direction: column;
       gap: 1rem;
+      position: relative;
     }
 
     .modal-title { font-size: 1.15rem; font-weight: 700; }
@@ -1986,7 +651,6 @@ Replace the entire contents of **`public/index.html`** with this code:
   <!-- MOON+ READER INSPIRED NAVIGATION DRAWER -->
   <div id="drawerOverlay" class="drawer-overlay"></div>
   <aside id="sideDrawer" class="side-drawer">
-    <!-- Scenic Header Banner -->
     <div class="drawer-header">
       <div class="scenic-moon"></div>
       <div class="star" style="top:25px; left:30px; width:2px; height:2px;"></div>
@@ -1996,7 +660,6 @@ Replace the entire contents of **`public/index.html`** with this code:
       <div class="drawer-header-title">Marginalia Library</div>
     </div>
 
-    <!-- Navigation List -->
     <div class="drawer-body">
       <div class="drawer-nav-item" id="navRecentList">
         <span class="drawer-nav-icon">🕒</span>
@@ -2019,10 +682,9 @@ Replace the entire contents of **`public/index.html`** with this code:
       </div>
     </div>
 
-    <!-- Bottom Quick-Action Toolbar -->
     <div class="drawer-footer">
       <button class="drawer-quick-btn" id="btnDrawerOptions">
-        <span class="icon">⚙️️</span>
+        <span class="icon">⚙</span>
         <span>Options</span>
       </button>
 
@@ -2068,7 +730,7 @@ Replace the entire contents of **`public/index.html`** with this code:
 
     <div class="reader-card">
       <div class="doc-meta">
-        <span id="docTitle">Marginalia Quickstart</span>
+        <span id="docTitle">Marginalia Reader</span>
 
         <div style="display:flex; align-items:center; gap:0.5rem;">
           <button id="addBookmarkBtn" class="bookmark-ribbon-btn" title="Bookmark Sentence">🔖</button>
@@ -2103,11 +765,12 @@ Replace the entire contents of **`public/index.html`** with this code:
   <div id="shelfModal" class="modal-overlay">
     <div class="modal-card">
       <div class="modal-title" id="shelfModalTitle">📚 My Shelf</div>
-      <div id="shelfModalList" class="modal-scrollable-list">
-        <!-- Rendered dynamically from IndexedDB -->
-      </div>
+      <p style="font-size:0.85rem; color:var(--text-muted);">
+        Books and documents saved permanently in your browser storage. Tap any to resume reading immediately.
+      </p>
+      <div id="shelfModalList" class="modal-scrollable-list"></div>
       <div style="display:flex; justify-content:flex-end;">
-        <button id="closeShelfModalBtn">Close</button>
+        <button id="closeShelfBtn" data-close="shelfModal">Close</button>
       </div>
     </div>
   </div>
@@ -2116,40 +779,49 @@ Replace the entire contents of **`public/index.html`** with this code:
   <div id="bookmarksModal" class="modal-overlay">
     <div class="modal-card">
       <div class="modal-title">🔖 Saved Bookmarks</div>
-      <div id="bookmarksModalList" class="modal-scrollable-list">
-        <!-- Rendered dynamically from IndexedDB -->
-      </div>
+      <div id="bookmarksModalList" class="modal-scrollable-list"></div>
       <div style="display:flex; justify-content:flex-end;">
-        <button id="closeBookmarksModalBtn">Close</button>
+        <button id="closeBookmarksBtn" data-close="bookmarksModal">Close</button>
       </div>
     </div>
   </div>
 
-  <!-- OPTIONS / SETTINGS MODAL -->
+  <!-- OPTIONS MODAL -->
   <div id="optionsModal" class="modal-overlay">
     <div class="modal-card">
-      <div class="modal-title">⚙️ Reader Options</div>
+      <div class="modal-title">⚙️ Reading Options</div>
       <div style="display:flex; flex-direction:column; gap:0.9rem;">
         <div>
-          <label style="font-size:0.85rem; color:var(--text-muted);">Font Size</label>
-          <div style="display:flex; gap:0.5rem; margin-top:0.4rem;">
-            <button id="fontDecBtn" style="flex:1;">A- Smaller</button>
-            <button id="fontIncBtn" style="flex:1;">A+ Larger</button>
-          </div>
+          <label style="font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:0.35rem;">Font Face</label>
+          <select id="fontSelect" style="width:100%;">
+            <option value="serif">Classic Serif (Georgia)</option>
+            <option value="sans-serif">Clean Sans-Serif (System UI)</option>
+            <option value="monospace">Monospace Reader</option>
+          </select>
         </div>
 
         <div>
-          <label style="font-size:0.85rem; color:var(--text-muted);">Color Palette</label>
-          <select id="optionThemeSelect" style="width:100%; margin-top:0.4rem;">
+          <label style="font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:0.35rem;">Font Size</label>
+          <select id="fontSizeSelect" style="width:100%;">
+            <option value="1.05rem">Small</option>
+            <option value="1.22rem" selected>Standard Mobile</option>
+            <option value="1.42rem">Large Reading</option>
+            <option value="1.65rem">Extra Large</option>
+          </select>
+        </div>
+
+        <div>
+          <label style="font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:0.35rem;">Theme Palette</label>
+          <select id="optionThemeSelect" style="width:100%;">
             <option value="light">Clean Light</option>
-            <option value="sepia">Sepia Book</option>
+            <option value="sepia">Sepia Paper</option>
             <option value="dark">Nord Dark</option>
             <option value="oled">Pitch Black OLED</option>
           </select>
         </div>
       </div>
       <div style="display:flex; justify-content:flex-end;">
-        <button id="closeOptionsModalBtn">Done</button>
+        <button id="closeOptionsBtn" data-close="optionsModal">Done</button>
       </div>
     </div>
   </div>
@@ -2159,10 +831,14 @@ Replace the entire contents of **`public/index.html`** with this code:
     <div class="modal-card">
       <div class="modal-title">ℹ️ About Marginalia</div>
       <p style="font-size:0.85rem; color:var(--text-muted); line-height:1.6;">
-        Marginalia is an executive, multi-engine read-along reader with in-browser neural audio, karaoke tracking, and local device bookshelf persistence.
+        Marginalia is an adaptive read-along platform combining client-side EPUB/PDF processing, synchronized karaoke TTS, and executive AI summaries.
       </p>
+      <div style="font-size:0.8rem; background:var(--bg-main); padding:0.75rem; border-radius:8px; border:1px solid var(--border);">
+        <div style="margin-bottom:0.3rem;"><strong>Version:</strong> 2.4.0 (Mobile Edition)</div>
+        <div><strong>Storage:</strong> IndexedDB Offline Bookshelf</div>
+      </div>
       <div style="display:flex; justify-content:flex-end;">
-        <button id="closeAboutModalBtn">Close</button>
+        <button id="closeAboutBtn" data-close="aboutModal">Close</button>
       </div>
     </div>
   </div>
@@ -2189,7 +865,21 @@ Replace the entire contents of **`public/index.html`** with this code:
       </button>
 
       <div style="display:flex; justify-content:flex-end;">
-        <button id="closeSummaryModalBtn">Cancel</button>
+        <button id="closeSummaryModalBtn" data-close="summaryModal">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PAYWALL MODAL -->
+  <div id="paywallModal" class="modal-overlay">
+    <div class="modal-card">
+      <div class="modal-title">🌟 Upgrade to Pro</div>
+      <p style="font-size:0.85rem; color:var(--text-muted);">
+        Your free trial summaries have been exhausted. Upgrade to Pro for unlimited AI document summaries and neural TTS engines.
+      </p>
+      <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
+        <button id="closePaywallBtn" data-close="paywallModal">Close</button>
+        <button id="upgradeProBtn" style="background:var(--accent); color:#fff; border:none; font-weight:600;">Upgrade to Pro ($9/mo)</button>
       </div>
     </div>
   </div>
@@ -2202,7 +892,7 @@ Replace the entire contents of **`public/index.html`** with this code:
       <input type="email" id="authEmail" class="input-field" placeholder="Email address" style="width:100%; padding:0.6rem; border-radius:6px; font-size:16px; border:1px solid var(--border); background:var(--bg-main); color:var(--text-main);" />
       <input type="password" id="authPass" class="input-field" placeholder="Password" style="width:100%; padding:0.6rem; border-radius:6px; font-size:16px; border:1px solid var(--border); background:var(--bg-main); color:var(--text-main);" />
       <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
-        <button id="authCloseBtn">Cancel</button>
+        <button id="authCloseBtn" data-close="authModal">Cancel</button>
         <button id="authSignUpBtn">Sign Up</button>
         <button id="authSignInBtn" style="background:var(--accent); color:#fff; border:none; font-weight:600;">Sign In</button>
       </div>
@@ -2213,7 +903,7 @@ Replace the entire contents of **`public/index.html`** with this code:
 
   <script>
     // --- SUPABASE CONFIGURATION ---
-    const SUPABASE_PROJECT_URL = "[https://your-project.supabase.co](https://your-project.supabase.co)"; 
+    const SUPABASE_PROJECT_URL = "https://your-project.supabase.co"; 
     const SUPABASE_ANON_KEY = "sb_publishable_or_anon_key";
 
     let supabaseClient = null;
@@ -2225,59 +915,89 @@ Replace the entire contents of **`public/index.html`** with this code:
       }
     }
 
-    // --- INDEXEDDB BOOKSHELF REPOSITORY ---
+    // --- UNIVERSAL MODAL SYSTEM (RELIABLE CLOSING) ---
+    function closeModalById(id) {
+      const modal = document.getElementById(id);
+      if (modal) modal.style.display = 'none';
+    }
+
+    // 1. Hook up all close buttons via data-close
+    document.querySelectorAll('[data-close]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeModalById(btn.getAttribute('data-close'));
+      });
+    });
+
+    // 2. Click outside modal card to close
+    document.querySelectorAll('.modal-overlay').forEach(modal => {
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) modal.style.display = 'none';
+      });
+    });
+
+    // --- INDEXEDDB REPOSITORY ---
     const DB_NAME = "MarginaliaBookDB";
     const DB_VERSION = 1;
     let dbInstance = null;
 
     function initIndexedDB() {
-      return new Promise((resolve, reject) => {
+      return new Promise((resolve) => {
         const req = indexedDB.open(DB_NAME, DB_VERSION);
         req.onupgradeneeded = (e) => {
           const db = e.target.result;
           if (!db.objectStoreNames.contains("books")) {
-            const bookStore = db.createObjectStore("books", { keyPath: "id", autoIncrement: true });
-            bookStore.createIndex("updatedAt", "updatedAt", { unique: false });
+            db.createObjectStore("books", { keyPath: "id", autoIncrement: true });
           }
           if (!db.objectStoreNames.contains("bookmarks")) {
-            const markStore = db.createObjectStore("bookmarks", { keyPath: "id", autoIncrement: true });
-            markStore.createIndex("bookTitle", "bookTitle", { unique: false });
+            db.createObjectStore("bookmarks", { keyPath: "id", autoIncrement: true });
           }
         };
         req.onsuccess = (e) => {
           dbInstance = e.target.result;
           resolve(dbInstance);
         };
-        req.onerror = (e) => reject(e.target.error);
+        req.onerror = () => resolve(null);
       });
     }
 
     async function saveBookToShelf(title, pages) {
       if (!dbInstance) await initIndexedDB();
+      if (!dbInstance) return;
       return new Promise((resolve) => {
         const tx = dbInstance.transaction(["books"], "readwrite");
         const store = tx.objectStore("books");
-        const bookRecord = {
-          title: title,
-          pages: pages,
-          currentPage: 0,
-          currentSentenceIdx: 0,
-          updatedAt: Date.now()
+        const req = store.getAll();
+        req.onsuccess = () => {
+          const existing = (req.result || []).find(b => b.title === title);
+          if (existing) {
+            existing.pages = pages;
+            existing.updatedAt = Date.now();
+            store.put(existing);
+          } else {
+            store.add({
+              title,
+              pages,
+              currentPage: 0,
+              currentSentenceIdx: 0,
+              updatedAt: Date.now()
+            });
+          }
+          resolve(true);
         };
-        store.add(bookRecord);
-        tx.oncomplete = () => resolve(true);
       });
     }
 
     async function getAllBooksFromShelf() {
       if (!dbInstance) await initIndexedDB();
+      if (!dbInstance) return [];
       return new Promise((resolve) => {
         const tx = dbInstance.transaction(["books"], "readonly");
         const store = tx.objectStore("books");
         const req = store.getAll();
         req.onsuccess = () => {
           const list = req.result || [];
-          list.sort((a, b) => b.updatedAt - a.updatedAt);
+          list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
           resolve(list);
         };
       });
@@ -2301,14 +1021,15 @@ Replace the entire contents of **`public/index.html`** with this code:
 
     async function saveBookmarkToDB(title, page, sentenceIdx, snippet) {
       if (!dbInstance) await initIndexedDB();
+      if (!dbInstance) return;
       return new Promise((resolve) => {
         const tx = dbInstance.transaction(["bookmarks"], "readwrite");
         const store = tx.objectStore("bookmarks");
         store.add({
           bookTitle: title,
-          page: page,
-          sentenceIdx: sentenceIdx,
-          snippet: snippet,
+          page,
+          sentenceIdx,
+          snippet,
           createdAt: Date.now()
         });
         tx.oncomplete = () => resolve(true);
@@ -2317,6 +1038,7 @@ Replace the entire contents of **`public/index.html`** with this code:
 
     async function getBookmarksFromDB() {
       if (!dbInstance) await initIndexedDB();
+      if (!dbInstance) return [];
       return new Promise((resolve) => {
         const tx = dbInstance.transaction(["bookmarks"], "readonly");
         const store = tx.objectStore("bookmarks");
@@ -2329,10 +1051,10 @@ Replace the entire contents of **`public/index.html`** with this code:
     let currentDocName = "Marginalia Quickstart";
     let bookPages = [
       [
-        "Welcome to your personal Marginalia reader library.",
-        "Tap the menu icon in the top left to open your bookshelf, recent documents, and bookmarks.",
-        "Every file you open is saved locally on your phone so you can resume reading instantly.",
-        "Tap the ribbon icon above to bookmark any sentence."
+        "Welcome to Marginalia Mobile Reader.",
+        "Your reading controls are pinned at the bottom of the screen within easy reach.",
+        "Tap the menu button in the top-left to access your saved bookshelf, recent books, and bookmarks.",
+        "All uploaded documents are stored directly in your browser."
       ]
     ];
 
@@ -2346,7 +1068,6 @@ Replace the entire contents of **`public/index.html`** with this code:
     let activeEngine = 'browser';
     let playbackSpeed = 1.0;
     const speedSteps = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0];
-    let readerFontSize = 1.22;
 
     const browserSpeech = window.speechSynthesis;
     let currentUtterance = null;
@@ -2354,7 +1075,6 @@ Replace the entire contents of **`public/index.html`** with this code:
     const audioPreloadCache = new Map();
     let wordTimerInterval = null;
     let wakeLock = null;
-    let iosWatchdogInterval = null;
 
     // DOM Elements
     const contentPane = document.getElementById('contentPane');
@@ -2392,24 +1112,29 @@ Replace the entire contents of **`public/index.html`** with this code:
     const shelfModal = document.getElementById('shelfModal');
     const shelfModalTitle = document.getElementById('shelfModalTitle');
     const shelfModalList = document.getElementById('shelfModalList');
-    const closeShelfModalBtn = document.getElementById('closeShelfModalBtn');
     const bookmarksModal = document.getElementById('bookmarksModal');
     const bookmarksModalList = document.getElementById('bookmarksModalList');
-    const closeBookmarksModalBtn = document.getElementById('closeBookmarksModalBtn');
     const optionsModal = document.getElementById('optionsModal');
-    const closeOptionsModalBtn = document.getElementById('closeOptionsModalBtn');
     const aboutModal = document.getElementById('aboutModal');
-    const closeAboutModalBtn = document.getElementById('closeAboutModalBtn');
+    const summaryModal = document.getElementById('summaryModal');
+    const paywallModal = document.getElementById('paywallModal');
+    const summaryTrialNotice = document.getElementById('summaryTrialNotice');
+    const sumChapterBtn = document.getElementById('sumChapterBtn');
+    const sumKeyTakeawaysBtn = document.getElementById('sumKeyTakeawaysBtn');
+    const authModal = document.getElementById('authModal');
+    const authEmail = document.getElementById('authEmail');
+    const authPass = document.getElementById('authPass');
+    const authSignInBtn = document.getElementById('authSignInBtn');
+    const authSignUpBtn = document.getElementById('authSignUpBtn');
+    const fontSelect = document.getElementById('fontSelect');
+    const fontSizeSelect = document.getElementById('fontSizeSelect');
     const optionThemeSelect = document.getElementById('optionThemeSelect');
-    const fontIncBtn = document.getElementById('fontIncBtn');
-    const fontDecBtn = document.getElementById('fontDecBtn');
 
-    // --- DRAWER OPEN / CLOSE ---
+    // --- DRAWER CONTROLLER ---
     function openDrawer() {
       sideDrawer.classList.add('open');
       drawerOverlay.classList.add('active');
     }
-
     function closeDrawer() {
       sideDrawer.classList.remove('open');
       drawerOverlay.classList.remove('active');
@@ -2419,7 +1144,7 @@ Replace the entire contents of **`public/index.html`** with this code:
     closeDrawerBtn.addEventListener('click', closeDrawer);
     drawerOverlay.addEventListener('click', closeDrawer);
 
-    // --- BOOKSHELF & RECENT LIST RENDERING ---
+    // --- SHELF & RECENT MODALS ---
     async function showShelfModal(mode = "shelf") {
       closeDrawer();
       const books = await getAllBooksFromShelf();
@@ -2427,7 +1152,7 @@ Replace the entire contents of **`public/index.html`** with this code:
       shelfModalList.innerHTML = '';
 
       if (books.length === 0) {
-        shelfModalList.innerHTML = '<div style="text-align:center; padding:2rem; color:var(--text-muted); font-size:0.85rem;">No books saved yet. Import a file to add it to your shelf.</div>';
+        shelfModalList.innerHTML = '<div style="text-align:center; padding:2rem; color:var(--text-muted); font-size:0.85rem;">No books saved yet. Open a document to add it to your shelf.</div>';
       } else {
         const displayBooks = mode === "recent" ? books.slice(0, 5) : books;
         displayBooks.forEach(b => {
@@ -2458,18 +1183,13 @@ Replace the entire contents of **`public/index.html`** with this code:
 
     navRecentList.addEventListener('click', () => showShelfModal("recent"));
     navMyShelf.addEventListener('click', () => showShelfModal("shelf"));
-    closeShelfModalBtn.addEventListener('click', () => { shelfModal.style.display = 'none'; });
-
-    navUploadFile.addEventListener('click', () => {
-      closeDrawer();
-      fileInput.click();
-    });
+    navUploadFile.addEventListener('click', () => { closeDrawer(); fileInput.click(); });
 
     // --- BOOKMARKS ---
     addBookmarkBtn.addEventListener('click', async () => {
-      const sentenceText = bookPages[currentPage]?.[currentSentenceIdx] || "Bookmark point";
+      const sentenceText = bookPages[currentPage]?.[currentSentenceIdx] || "Bookmark";
       await saveBookmarkToDB(currentDocName, currentPage, currentSentenceIdx, sentenceText);
-      alert(`Bookmark saved: Page ${currentPage + 1}`);
+      alert(`Bookmark saved on Page ${currentPage + 1}`);
     });
 
     navBookmarks.addEventListener('click', async () => {
@@ -2498,7 +1218,7 @@ Replace the entire contents of **`public/index.html`** with this code:
               bookmarksModal.style.display = 'none';
               renderPage(currentPage);
             } else {
-              alert(`This bookmark belongs to "${m.bookTitle}". Open that document first from My Shelf.`);
+              alert(`This bookmark belongs to "${m.bookTitle}". Please open it from My Shelf first.`);
             }
           });
           bookmarksModalList.appendChild(card);
@@ -2507,9 +1227,7 @@ Replace the entire contents of **`public/index.html`** with this code:
       bookmarksModal.style.display = 'flex';
     });
 
-    closeBookmarksModalBtn.addEventListener('click', () => { bookmarksModal.style.display = 'none'; });
-
-    // --- QUICK DRAWER TOOLBAR ACTIONS ---
+    // --- DRAWER QUICK ACTIONS ---
     btnDrawerNightToggle.addEventListener('click', () => {
       const current = document.documentElement.getAttribute('data-theme');
       const nextTheme = current === 'dark' ? 'oled' : (current === 'oled' ? 'sepia' : (current === 'sepia' ? 'light' : 'dark'));
@@ -2522,51 +1240,134 @@ Replace the entire contents of **`public/index.html`** with this code:
       optionThemeSelect.value = document.documentElement.getAttribute('data-theme') || 'dark';
       optionsModal.style.display = 'flex';
     });
-    closeOptionsModalBtn.addEventListener('click', () => { optionsModal.style.display = 'none'; });
+
+    btnDrawerAbout.addEventListener('click', () => {
+      closeDrawer();
+      aboutModal.style.display = 'flex';
+    });
+
+    fontSelect.addEventListener('change', (e) => {
+      contentPane.style.fontFamily = e.target.value === 'serif' ? 'var(--font-reader)' :
+        e.target.value === 'monospace' ? 'monospace' : 'var(--font-ui)';
+    });
+
+    fontSizeSelect.addEventListener('change', (e) => {
+      document.documentElement.style.setProperty('--reader-font-size', e.target.value);
+    });
 
     optionThemeSelect.addEventListener('change', (e) => {
       document.documentElement.setAttribute('data-theme', e.target.value);
       localStorage.setItem('marginalia_theme', e.target.value);
     });
 
-    fontIncBtn.addEventListener('click', () => {
-      readerFontSize = Math.min(1.8, readerFontSize + 0.1);
-      document.documentElement.style.setProperty('--reader-font-size', `${readerFontSize}rem`);
-    });
-    fontDecBtn.addEventListener('click', () => {
-      readerFontSize = Math.max(0.9, readerFontSize - 0.1);
-      document.documentElement.style.setProperty('--reader-font-size', `${readerFontSize}rem`);
+    // --- AUTHENTICATION & CREDIT LEDGER ---
+    async function getFreshAuthToken() {
+      if (!supabaseClient) return null;
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      return session?.access_token || null;
+    }
+
+    async function updateAuthBadge(explicitRemaining = null) {
+      if (!supabaseClient) {
+        creditDisplay.textContent = "⚡ Free Tier";
+        return;
+      }
+      if (explicitRemaining !== null) {
+        creditDisplay.textContent = `⚡ ${explicitRemaining.toLocaleString()} Chars`;
+        return;
+      }
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      if (session && session.user) {
+        const { data: profile } = await supabaseClient
+          .from('profiles')
+          .select('neural_chars_remaining, summary_credits_remaining, tier')
+          .eq('id', session.user.id)
+          .single();
+
+        const remaining = profile ? profile.neural_chars_remaining : 5000;
+        creditDisplay.textContent = `⚡ ${remaining.toLocaleString()} Chars`;
+      } else {
+        creditDisplay.textContent = "Sign In";
+      }
+    }
+
+    creditBadge.addEventListener('click', () => {
+      authModal.style.display = 'flex';
     });
 
-    btnDrawerAbout.addEventListener('click', () => {
-      closeDrawer();
-      aboutModal.style.display = 'flex';
+    authSignInBtn.addEventListener('click', async () => {
+      if (!supabaseClient) {
+        alert("Supabase credentials not set in index.html.");
+        authModal.style.display = 'none';
+        return;
+      }
+      const { error } = await supabaseClient.auth.signInWithPassword({
+        email: authEmail.value,
+        password: authPass.value
+      });
+      if (error) alert(error.message);
+      else {
+        authModal.style.display = 'none';
+        updateAuthBadge();
+      }
     });
-    closeAboutModalBtn.addEventListener('click', () => { aboutModal.style.display = 'none'; });
 
-    // --- DOM BUILDER ---
+    authSignUpBtn.addEventListener('click', async () => {
+      if (!supabaseClient) {
+        alert("Supabase credentials not set in index.html.");
+        authModal.style.display = 'none';
+        return;
+      }
+      const { error } = await supabaseClient.auth.signUp({
+        email: authEmail.value,
+        password: authPass.value
+      });
+      if (error) alert(error.message);
+      else {
+        authModal.style.display = 'none';
+        updateAuthBadge();
+      }
+    });
+
+    // --- SCREEN WAKE LOCK ---
+    async function requestWakeLock() {
+      try {
+        if ('wakeLock' in navigator && !wakeLock) {
+          wakeLock = await navigator.wakeLock.request('screen');
+        }
+      } catch (e) {}
+    }
+
+    function releaseWakeLock() {
+      if (wakeLock) {
+        wakeLock.release().catch(() => {});
+        wakeLock = null;
+      }
+    }
+
+    // --- PLAYBACK CONTROLLER ---
     function buildSentenceDOM(sentenceText, sIdx) {
-      const sentenceSpan = document.createElement('span');
-      sentenceSpan.className = 'sentence';
-      sentenceSpan.id = `sent-${sIdx}`;
+      const span = document.createElement('span');
+      span.className = 'sentence';
+      span.id = `sent-${sIdx}`;
 
       const words = sentenceText.split(/(\s+)/);
       let wordCount = 0;
 
       words.forEach(chunk => {
         if (chunk.trim().length > 0) {
-          const wordSpan = document.createElement('span');
-          wordSpan.className = 'word';
-          wordSpan.id = `w-${sIdx}-${wordCount}`;
-          wordSpan.textContent = chunk;
-          sentenceSpan.appendChild(wordSpan);
+          const wSpan = document.createElement('span');
+          wSpan.className = 'word';
+          wSpan.id = `w-${sIdx}-${wordCount}`;
+          wSpan.textContent = chunk;
+          span.appendChild(wSpan);
           wordCount++;
         } else {
-          sentenceSpan.appendChild(document.createTextNode(chunk));
+          span.appendChild(document.createTextNode(chunk));
         }
       });
 
-      sentenceSpan.addEventListener('click', () => {
+      span.addEventListener('click', () => {
         currentSentenceIdx = sIdx;
         if (isPlaying) {
           stopAudio();
@@ -2577,7 +1378,7 @@ Replace the entire contents of **`public/index.html`** with this code:
         }
       });
 
-      return sentenceSpan;
+      return span;
     }
 
     function renderPage(idx) {
@@ -2613,77 +1414,6 @@ Replace the entire contents of **`public/index.html`** with this code:
       });
     }
 
-    // --- VOICE SETUP ---
-    function populateVoices() {
-      const prevChoice = voicePicker.value;
-      voicePicker.innerHTML = '';
-
-      if (activeEngine === 'browser') {
-        const voices = browserSpeech.getVoices();
-        if (!voices || voices.length === 0) {
-          const opt = document.createElement('option');
-          opt.value = "default";
-          opt.textContent = "Default System Voice";
-          voicePicker.appendChild(opt);
-          return;
-        }
-
-        const userLangPrefix = (navigator.language || 'en').toLowerCase().split('-')[0];
-        const indexedVoices = voices.map((v, i) => ({ voice: v, idx: i }));
-
-        indexedVoices.sort((a, b) => {
-          const aLang = a.voice.lang.toLowerCase();
-          const bLang = b.voice.lang.toLowerCase();
-          const aIsUser = aLang.startsWith(userLangPrefix);
-          const bIsUser = bLang.startsWith(userLangPrefix);
-          const aIsEn = aLang.startsWith('en');
-          const bIsEn = bLang.startsWith('en');
-
-          if (aIsUser && !bIsUser) return -1;
-          if (!aIsUser && bIsUser) return 1;
-          if (aIsEn && !bIsEn) return -1;
-          if (!aIsEn && bIsEn) return 1;
-          return a.voice.name.localeCompare(b.voice.name);
-        });
-
-        let defaultChoiceIdx = indexedVoices[0].idx;
-        const enVoice = indexedVoices.find(item => item.voice.lang.toLowerCase().startsWith('en'));
-        if (enVoice) defaultChoiceIdx = enVoice.idx;
-
-        indexedVoices.forEach(item => {
-          const opt = document.createElement('option');
-          opt.value = item.idx;
-          opt.textContent = `${item.voice.name} (${item.voice.lang})`;
-          if (prevChoice && item.idx.toString() === prevChoice) {
-            opt.selected = true;
-          } else if (!prevChoice && item.idx === defaultChoiceIdx) {
-            opt.selected = true;
-          }
-          voicePicker.appendChild(opt);
-        });
-      }
-    }
-
-    if (typeof speechSynthesis !== 'undefined') {
-      speechSynthesis.onvoiceschanged = populateVoices;
-    }
-    ['touchstart', 'click'].forEach(evt => {
-      document.body.addEventListener(evt, () => {
-        if (voicePicker.children.length <= 1) populateVoices();
-      }, { once: true });
-    });
-
-    speedCycleBtn.addEventListener('click', () => {
-      let nextIdx = (speedSteps.indexOf(playbackSpeed) + 1) % speedSteps.length;
-      playbackSpeed = speedSteps[nextIdx];
-      speedCycleBtn.textContent = `${playbackSpeed.toFixed(1)}x`;
-      if (isPlaying && activeEngine === 'browser') {
-        browserSpeech.cancel();
-        playCurrentSentence();
-      }
-    });
-
-    // --- PLAYBACK ENGINE ---
     async function playCurrentSentence() {
       const pageSentences = bookPages[currentPage];
       if (!pageSentences || pageSentences.length === 0) return;
@@ -2702,9 +1432,15 @@ Replace the entire contents of **`public/index.html`** with this code:
 
       highlightActiveSentence();
       mainPlayToggle.textContent = '⏸';
+      requestWakeLock();
 
-      const textToRead = pageSentences[currentSentenceIdx];
-      speakBrowser(textToRead);
+      const text = pageSentences[currentSentenceIdx];
+
+      if (activeEngine === 'browser') {
+        speakBrowser(text);
+      } else {
+        await speakServerless(text);
+      }
     }
 
     function speakBrowser(text) {
@@ -2759,15 +1495,353 @@ Replace the entire contents of **`public/index.html`** with this code:
       browserSpeech.speak(currentUtterance);
     }
 
+    async function speakServerless(text) {
+      try {
+        const token = await getFreshAuthToken();
+        if (!token) {
+          stopAudio();
+          alert("Please sign in to access cloud voices.");
+          authModal.style.display = 'flex';
+          return;
+        }
+
+        const cacheKey = `${activeEngine}_${voicePicker.value}_${playbackSpeed}_${text}`;
+        let cached = audioPreloadCache.get(cacheKey);
+        let audioSrc = cached?.src;
+
+        if (!audioSrc) {
+          preloadStatus.textContent = "Connecting...";
+          const res = await fetch('/api/tts', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({
+              text,
+              voiceId: voicePicker.value,
+              engine: activeEngine,
+              speed: playbackSpeed
+            })
+          });
+
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+
+          audioSrc = data.audio_base64 
+            ? `data:audio/mp3;base64,${data.audio_base64}`
+            : (data.audioUrl || '');
+
+          if (data.remaining_chars !== undefined) updateAuthBadge(data.remaining_chars);
+        }
+
+        audioElement.src = audioSrc;
+        audioElement.playbackRate = playbackSpeed;
+        await audioElement.play();
+
+        const totalWords = text.trim().split(/\s+/).length;
+        audioElement.ontimeupdate = () => {
+          if (audioElement.duration) {
+            const fraction = audioElement.currentTime / audioElement.duration;
+            const targetWord = Math.min(totalWords - 1, Math.floor(fraction * totalWords));
+            highlightActiveWord(targetWord);
+          }
+        };
+
+        audioElement.onended = () => {
+          if (!isPlaying) return;
+          currentSentenceIdx++;
+          playCurrentSentence();
+        };
+
+      } catch (err) {
+        stopAudio();
+        alert(err.message);
+      }
+    }
+
     function stopAudio() {
       isPlaying = false;
       mainPlayToggle.textContent = '▶';
+      releaseWakeLock();
       if (wordTimerInterval) clearInterval(wordTimerInterval);
       browserSpeech.cancel();
+      audioElement.pause();
       document.querySelectorAll('.word').forEach(el => el.classList.remove('active-word'));
     }
 
-    // --- ROBUST EPUB & FILE PARSER ---
+    // --- CONTROLS HOOKS ---
+    mainPlayToggle.addEventListener('click', () => {
+      if (isPlaying) {
+        stopAudio();
+      } else {
+        isPlaying = true;
+        playCurrentSentence();
+      }
+    });
+
+    prevPageBtn.addEventListener('click', () => {
+      if (currentPage > 0) {
+        currentPage--;
+        currentSentenceIdx = 0;
+        const wasPlaying = isPlaying;
+        stopAudio();
+        renderPage(currentPage);
+        if (wasPlaying) { isPlaying = true; playCurrentSentence(); }
+      }
+    });
+
+    nextPageBtn.addEventListener('click', () => {
+      if (currentPage < bookPages.length - 1) {
+        currentPage++;
+        currentSentenceIdx = 0;
+        const wasPlaying = isPlaying;
+        stopAudio();
+        renderPage(currentPage);
+        if (wasPlaying) { isPlaying = true; playCurrentSentence(); }
+      }
+    });
+
+    speedCycleBtn.addEventListener('click', () => {
+      let nextIdx = (speedSteps.indexOf(playbackSpeed) + 1) % speedSteps.length;
+      playbackSpeed = speedSteps[nextIdx];
+      speedCycleBtn.textContent = `${playbackSpeed.toFixed(1)}x`;
+      if (isPlaying) {
+        if (activeEngine === 'browser') {
+          browserSpeech.cancel();
+          playCurrentSentence();
+        } else {
+          audioElement.playbackRate = playbackSpeed;
+        }
+      }
+    });
+
+    // --- VOICES & ENGINES ---
+    const voicePresets = {
+      browser: [],
+      elevenlabs: [
+        { id: '21m00Tcm4TlvDq8ikWAM', name: 'Rachel (Calm & Natural)' },
+        { id: 'AZnzlk1XvdvUeBnXmlld', name: 'Domi (Empathetic)' },
+        { id: 'EXAVITQu4vr4xnSDxMaL', name: 'Bella (Expressive)' },
+        { id: 'ErXwobaYiN019PkySvjV', name: 'Antoni (Well-rounded)' },
+        { id: 'pNInz6obpgDQGcFmaJgB', name: 'Adam (Deep Baritone)' }
+      ],
+      openai: [
+        { id: 'alloy', name: 'Alloy (Balanced)' },
+        { id: 'echo', name: 'Echo (Warm)' },
+        { id: 'fable', name: 'Fable (British Accent)' },
+        { id: 'onyx', name: 'Onyx (Deep Authoritative)' },
+        { id: 'nova', name: 'Nova (Energetic)' },
+        { id: 'shimmer', name: 'Shimmer (Clear)' }
+      ],
+      google: [
+        { id: 'en-US-Journey-F', name: 'Journey Female (Natural)' },
+        { id: 'en-US-Journey-D', name: 'Journey Male (Deep)' },
+        { id: 'en-US-Neural2-F', name: 'Neural2 Female' }
+      ],
+      azure: [
+        { id: 'en-US-JennyNeural', name: 'Jenny (Neural US)' },
+        { id: 'en-US-GuyNeural', name: 'Guy (Neural US)' },
+        { id: 'en-GB-SoniaNeural', name: 'Sonia (Neural UK)' }
+      ]
+    };
+
+    function populateVoices() {
+      const prevChoice = voicePicker.value;
+      voicePicker.innerHTML = '';
+
+      if (activeEngine === 'browser') {
+        const voices = browserSpeech.getVoices();
+        if (!voices || voices.length === 0) {
+          const opt = document.createElement('option');
+          opt.value = "default";
+          opt.textContent = "Default System Voice";
+          voicePicker.appendChild(opt);
+          return;
+        }
+
+        const userLang = (navigator.language || 'en').toLowerCase().split('-')[0];
+        const indexed = voices.map((v, i) => ({ v, i }));
+
+        indexed.sort((a, b) => {
+          const aL = a.v.lang.toLowerCase();
+          const bL = b.v.lang.toLowerCase();
+          const aU = aL.startsWith(userLang);
+          const bU = bL.startsWith(userLang);
+          const aE = aL.startsWith('en');
+          const bE = bL.startsWith('en');
+          if (aU && !bU) return -1;
+          if (!aU && bU) return 1;
+          if (aE && !bE) return -1;
+          if (!aE && bE) return 1;
+          return a.v.name.localeCompare(b.v.name);
+        });
+
+        let defIdx = indexed[0].i;
+        const enV = indexed.find(item => item.v.lang.toLowerCase().startsWith('en'));
+        if (enV) defIdx = enV.i;
+
+        indexed.forEach(item => {
+          const opt = document.createElement('option');
+          opt.value = item.i;
+          opt.textContent = `${item.v.name} (${item.v.lang})`;
+          if (prevChoice && item.i.toString() === prevChoice) opt.selected = true;
+          else if (!prevChoice && item.i === defIdx) opt.selected = true;
+          voicePicker.appendChild(opt);
+        });
+      } else {
+        const list = voicePresets[activeEngine] || [];
+        list.forEach(item => {
+          const opt = document.createElement('option');
+          opt.value = item.id;
+          opt.textContent = item.name;
+          if (item.id === prevChoice) opt.selected = true;
+          voicePicker.appendChild(opt);
+        });
+      }
+    }
+
+    if (typeof speechSynthesis !== 'undefined') {
+      speechSynthesis.onvoiceschanged = populateVoices;
+    }
+    ['touchstart', 'click'].forEach(evt => {
+      document.body.addEventListener(evt, () => {
+        if (voicePicker.children.length <= 1) populateVoices();
+      }, { once: true });
+    });
+
+    voicePicker.addEventListener('change', () => {
+      audioPreloadCache.clear();
+      if (isPlaying) {
+        stopAudio();
+        isPlaying = true;
+        playCurrentSentence();
+      }
+    });
+
+    document.querySelectorAll('.engine-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.engine-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        activeEngine = tab.dataset.engine;
+        audioPreloadCache.clear();
+        populateVoices();
+        if (isPlaying) {
+          stopAudio();
+          isPlaying = true;
+          playCurrentSentence();
+        }
+      });
+    });
+
+    // --- AI SUMMARIZER ---
+    summarizeBtn.addEventListener('click', async () => {
+      const token = await getFreshAuthToken();
+      if (!token) {
+        alert("Please sign in or create an account to use AI summaries.");
+        authModal.style.display = 'flex';
+        return;
+      }
+
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      const { data: profile } = await supabaseClient
+        .from('profiles')
+        .select('summary_credits_remaining, tier')
+        .eq('id', session.user.id)
+        .single();
+
+      if (profile) {
+        if (profile.tier === 'pro') {
+          summaryTrialNotice.textContent = "Plan: Pro Subscriber (Unlimited Summaries)";
+        } else {
+          const trials = profile.summary_credits_remaining ?? 3;
+          summaryTrialNotice.textContent = `Free Trial: ${trials} summaries remaining`;
+          if (trials <= 0) {
+            paywallModal.style.display = 'flex';
+            return;
+          }
+        }
+      }
+
+      summaryModal.style.display = 'flex';
+    });
+
+    async function triggerSummarize(mode) {
+      summaryModal.style.display = 'none';
+      stopAudio();
+
+      const token = await getFreshAuthToken();
+      if (!token) return;
+
+      let text = mode === 'chapter' ? (bookPages[currentPage] || []).join(' ') : bookPages.flat().join(' ');
+      if (!text.trim()) { alert("No text to summarize."); return; }
+
+      contentPane.innerHTML = `<div style="text-align:center; padding:3rem; color:var(--text-muted); font-style:italic;">Generating AI Summary...</div>`;
+
+      try {
+        const res = await fetch('/api/summarize', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({ text, mode })
+        });
+
+        const data = await res.json();
+        if (res.status === 402 || data.trialExhausted) {
+          paywallModal.style.display = 'flex';
+          renderPage(currentPage);
+          return;
+        }
+
+        if (!res.ok) throw new Error(data.error || "Summary request failed");
+
+        if (!originalBookPages) {
+          originalBookPages = bookPages;
+          originalDocName = currentDocName;
+          originalPage = currentPage;
+        }
+
+        const sents = splitIntoSentences(data.summary);
+        bookPages = [];
+        for (let i = 0; i < sents.length; i += 4) {
+          bookPages.push(sents.slice(i, i + 4));
+        }
+
+        currentDocName = `Summary: ${originalDocName}`;
+        docTitle.textContent = currentDocName;
+        summaryReturnSpan.style.display = 'inline-block';
+
+        currentPage = 0;
+        currentSentenceIdx = 0;
+        renderPage(0);
+
+        isPlaying = true;
+        playCurrentSentence();
+      } catch (e) {
+        alert(e.message);
+        renderPage(currentPage);
+      }
+    }
+
+    sumChapterBtn.addEventListener('click', () => triggerSummarize('chapter'));
+    sumKeyTakeawaysBtn.addEventListener('click', () => triggerSummarize('key_takeaways'));
+
+    exitSummaryBtn.addEventListener('click', () => {
+      if (originalBookPages) {
+        stopAudio();
+        bookPages = originalBookPages;
+        currentDocName = originalDocName;
+        currentPage = originalPage;
+        originalBookPages = null;
+        docTitle.textContent = currentDocName;
+        summaryReturnSpan.style.display = 'none';
+        renderPage(currentPage);
+      }
+    });
+
+    // --- FILE PARSER ---
     function normalizeZipPath(basePath, relativePath) {
       const combined = basePath ? `${basePath}/${relativePath}` : relativePath;
       const parts = combined.replace(/\\/g, '/').split('/');
@@ -2910,40 +1984,10 @@ Replace the entire contents of **`public/index.html`** with this code:
         currentPage = 0;
         currentSentenceIdx = 0;
         renderPage(0);
-
-        // Save into IndexedDB Shelf
         saveBookToShelf(currentDocName, bookPages);
 
       } catch (err) {
         alert("Failed to read file: " + err.message);
-        renderPage(currentPage);
-      }
-    });
-
-    // --- CONTROLS HOOKS ---
-    mainPlayToggle.addEventListener('click', () => {
-      if (isPlaying) stopAudio();
-      else {
-        populateVoices();
-        isPlaying = true;
-        playCurrentSentence();
-      }
-    });
-
-    prevPageBtn.addEventListener('click', () => {
-      if (currentPage > 0) {
-        currentPage--;
-        currentSentenceIdx = 0;
-        stopAudio();
-        renderPage(currentPage);
-      }
-    });
-
-    nextPageBtn.addEventListener('click', () => {
-      if (currentPage < bookPages.length - 1) {
-        currentPage++;
-        currentSentenceIdx = 0;
-        stopAudio();
         renderPage(currentPage);
       }
     });
@@ -2954,6 +1998,7 @@ Replace the entire contents of **`public/index.html`** with this code:
     initIndexedDB();
     populateVoices();
     renderPage(0);
+    updateAuthBadge();
   </script>
 </body>
 </html>
