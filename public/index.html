@@ -27,7 +27,7 @@
     [data-theme="light"] {
       --bg-main: #f8fafc;
       --panel-bg: #ffffff;
-      --panel-blur: rgba(255, 255, 255, 0.92);
+      --panel-blur: rgba(255, 255, 255, 0.94);
       --text-main: #0f172a;
       --text-muted: #64748b;
       --border: #e2e8f0;
@@ -44,7 +44,7 @@
     [data-theme="sepia"] {
       --bg-main: #f4ecd8;
       --panel-bg: #eae0c8;
-      --panel-blur: rgba(234, 224, 200, 0.92);
+      --panel-blur: rgba(234, 224, 200, 0.94);
       --text-main: #42321e;
       --text-muted: #7d674c;
       --border: #d4c4a8;
@@ -61,7 +61,7 @@
     [data-theme="dark"] {
       --bg-main: #0b1120;
       --panel-bg: #151e32;
-      --panel-blur: rgba(21, 30, 50, 0.92);
+      --panel-blur: rgba(21, 30, 50, 0.94);
       --text-main: #f1f5f9;
       --text-muted: #94a3b8;
       --border: #23314e;
@@ -96,7 +96,7 @@
       box-sizing: border-box; 
       margin: 0; 
       padding: 0; 
-      touch-action: manipulation; /* Eliminates 300ms tap delay */
+      touch-action: manipulation;
     }
 
     body {
@@ -108,10 +108,9 @@
       flex-direction: column;
       transition: background-color var(--transition), color var(--transition);
       -webkit-tap-highlight-color: transparent;
-      padding-bottom: calc(90px + var(--safe-bottom)); /* Clearance for sticky player */
+      padding-bottom: calc(90px + var(--safe-bottom));
     }
 
-    /* TOP HEADER */
     header {
       padding: 0.75rem 1rem;
       background: var(--panel-bg);
@@ -149,16 +148,17 @@
     .header-actions {
       display: flex;
       align-items: center;
-      gap: 0.5rem;
+      gap: 0.45rem;
+      flex-wrap: wrap;
     }
 
-    button, select, label.btn-ui, input[type="number"] {
+    button, select, label.btn-ui {
       background: var(--bg-main);
       color: var(--text-main);
       border: 1px solid var(--border);
-      padding: 0.45rem 0.65rem;
+      padding: 0.42rem 0.65rem;
       border-radius: 6px;
-      font-size: 16px; /* Strictly 16px to prevent iOS Safari auto-zoom */
+      font-size: 16px;
       cursor: pointer;
       outline: none;
       display: inline-flex;
@@ -169,14 +169,7 @@
     }
 
     @media (min-width: 641px) {
-      button, select, label.btn-ui, input[type="number"] {
-        font-size: 0.85rem;
-      }
-    }
-
-    select option {
-      background: var(--panel-bg);
-      color: var(--text-main);
+      button, select, label.btn-ui { font-size: 0.85rem; }
     }
 
     .credit-badge {
@@ -191,7 +184,13 @@
       white-space: nowrap;
     }
 
-    /* ENGINE & VOICE DRAWER */
+    .btn-summarize {
+      background: linear-gradient(135deg, rgba(56, 189, 248, 0.15), rgba(168, 85, 247, 0.15));
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      font-weight: 600;
+    }
+
     .controls-panel {
       max-width: 860px;
       width: calc(100% - 1.5rem);
@@ -261,7 +260,6 @@
       width: 100%;
     }
 
-    /* READING CONTAINER */
     main {
       flex: 1;
       display: flex;
@@ -282,9 +280,7 @@
     }
 
     @media (min-width: 641px) {
-      .reader-card {
-        padding: 3rem 2.5rem;
-      }
+      .reader-card { padding: 3rem 2.5rem; }
     }
 
     .doc-meta {
@@ -297,6 +293,7 @@
       padding-bottom: 0.4rem;
       display: flex;
       justify-content: space-between;
+      align-items: center;
     }
 
     .book-content {
@@ -314,7 +311,6 @@
       }
     }
 
-    /* SUBTLE HIGHLIGHTING */
     .sentence {
       padding: 2px 3px;
       border-radius: 4px;
@@ -342,12 +338,9 @@
       font-weight: 600;
     }
 
-    /* STICKY FLOATING BOTTOM PLAYER */
     .mobile-player-bar {
       position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
+      bottom: 0; left: 0; right: 0;
       background: var(--panel-blur);
       backdrop-filter: blur(14px);
       border-top: 1px solid var(--border);
@@ -379,7 +372,6 @@
       cursor: pointer;
       box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
     }
-    .player-btn-main:active { transform: scale(0.95); }
 
     .player-btn-nav {
       width: 38px;
@@ -408,7 +400,7 @@
       border: 1px solid var(--border);
     }
 
-    /* AUTH MODAL */
+    /* MODAL OVERLAY */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -425,7 +417,7 @@
       background: var(--panel-bg);
       border: 1px solid var(--border);
       width: 100%;
-      max-width: 360px;
+      max-width: 380px;
       border-radius: 14px;
       padding: 1.5rem;
       box-shadow: 0 10px 40px rgba(0,0,0,0.4);
@@ -444,11 +436,29 @@
       color: var(--text-main);
       font-size: 16px;
     }
+
+    .summary-choice-btn {
+      width: 100%;
+      padding: 0.85rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg-main);
+      color: var(--text-main);
+      font-size: 0.9rem;
+      text-align: left;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+    .summary-choice-btn:hover {
+      border-color: var(--accent);
+      background: rgba(56, 189, 248, 0.05);
+    }
   </style>
 </head>
 <body>
 
-  <!-- TOP HEADER -->
   <header>
     <div class="brand-group">
       <svg class="brand-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -461,6 +471,9 @@
     </div>
 
     <div class="header-actions">
+      <!-- AI Summarize Button -->
+      <button id="summarizeBtn" class="btn-summarize">✨ Summarize</button>
+
       <div id="creditBadge" class="credit-badge">
         <span id="creditDisplay">Sign In</span>
       </div>
@@ -478,7 +491,6 @@
   </header>
 
   <main>
-    <!-- VOICE & ENGINE SELECTOR DRAWER -->
     <div class="controls-panel">
       <div class="engine-tabs-group">
         <button class="engine-tab active" data-engine="browser">Browser Native</button>
@@ -501,10 +513,12 @@
       </div>
     </div>
 
-    <!-- BOOK CARD -->
     <div class="reader-card">
       <div class="doc-meta">
         <span id="docTitle">Marginalia Reader</span>
+        <span id="summaryReturnSpan" style="display:none;">
+          <button id="exitSummaryBtn" style="padding:0.2rem 0.5rem; font-size:0.75rem;">← Back to Book</button>
+        </span>
         <span id="preloadStatus">Ready</span>
       </div>
 
@@ -512,7 +526,7 @@
     </div>
   </main>
 
-  <!-- STICKY FLOATING BOTTOM PLAYER (ACCESSIBLE IN THUMB ZONE) -->
+  <!-- STICKY PLAYER -->
   <div class="mobile-player-bar">
     <div class="player-nav-group">
       <button id="prevPageBtn" class="player-btn-nav" title="Previous Page">←</button>
@@ -528,11 +542,52 @@
     <button id="speedCycleBtn" class="speed-pill-btn">1.0x</button>
   </div>
 
+  <!-- SUMMARIZE MODAL -->
+  <div id="summaryModal" class="modal-overlay">
+    <div class="modal-card">
+      <div class="modal-title">✨ AI Document Summary</div>
+      <p style="font-size:0.85rem; color:var(--text-muted);">
+        Select summarization scope. You can listen to the resulting summary immediately.
+      </p>
+      <div id="summaryTrialNotice" style="font-size:0.8rem; color:var(--accent); font-weight:600;">
+        Trial Balance: Checking...
+      </div>
+
+      <button id="sumChapterBtn" class="summary-choice-btn">
+        <strong>Summarize Current Section</strong>
+        <span style="font-size:0.75rem; color:var(--text-muted);">Condenses active chapter or visible pages.</span>
+      </button>
+
+      <button id="sumKeyTakeawaysBtn" class="summary-choice-btn">
+        <strong>Key Takeaways of Document</strong>
+        <span style="font-size:0.75rem; color:var(--text-muted);">High-level core themes and key conclusions.</span>
+      </button>
+
+      <div style="display:flex; justify-content:flex-end;">
+        <button id="closeSummaryModalBtn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PAYWALL / UPGRADE MODAL -->
+  <div id="paywallModal" class="modal-overlay">
+    <div class="modal-card">
+      <div class="modal-title">🌟 Upgrade to Pro</div>
+      <p style="font-size:0.85rem; color:var(--text-muted);">
+        Your free trial summaries have been exhausted. Upgrade to Pro for unlimited AI document summaries and high-speed neural TTS engines.
+      </p>
+      <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
+        <button id="closePaywallBtn">Close</button>
+        <button id="upgradeProBtn" style="background:var(--accent); color:#fff; border:none; font-weight:600;">Upgrade to Pro ($9/mo)</button>
+      </div>
+    </div>
+  </div>
+
   <!-- AUTH MODAL -->
   <div id="authModal" class="modal-overlay">
     <div class="modal-card">
       <div class="modal-title">Account & Quota Access</div>
-      <p style="font-size:0.85rem; color:var(--text-muted);">Log in to use your neural cloud voices across devices.</p>
+      <p style="font-size:0.85rem; color:var(--text-muted);">Sign in to access your free trial summaries and neural voice quota.</p>
       <input type="email" id="authEmail" class="input-field" placeholder="Email address" />
       <input type="password" id="authPass" class="input-field" placeholder="Password" />
       <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
@@ -555,7 +610,7 @@
       try {
         supabaseClient = supabase.createClient(SUPABASE_PROJECT_URL, SUPABASE_ANON_KEY);
       } catch (err) {
-        console.warn("Supabase client init:", err);
+        console.warn("Supabase init error:", err);
       }
     }
 
@@ -588,15 +643,20 @@
       ]
     };
 
-    let currentDocName = "Marginalia Mobile";
+    let currentDocName = "Marginalia Quickstart";
     let bookPages = [
       [
-        "Welcome to Marginalia Mobile.",
-        "Notice the sticky control bar at the bottom: your thumbs can always reach Play, Pause, and Page flipping.",
-        "Your phone screen will stay awake automatically while listening.",
-        "Tap on any sentence directly to jump playback instantly."
+        "Welcome to Marginalia with AI-powered Summarization.",
+        "Tap the 'Summarize' button at any time to condense chapters or generate full document key takeaways.",
+        "Your first 3 summaries are on us as part of your free trial.",
+        "When finished, you can switch back to your original book with a single click."
       ]
     ];
+
+    // State backups for switching between book and summary
+    let originalBookPages = null;
+    let originalDocName = null;
+    let originalPage = 0;
 
     let currentPage = 0;
     let currentSentenceIdx = 0;
@@ -628,6 +688,17 @@
     const preloadStatus = document.getElementById('preloadStatus');
     const creditBadge = document.getElementById('creditBadge');
     const creditDisplay = document.getElementById('creditDisplay');
+    const summarizeBtn = document.getElementById('summarizeBtn');
+    const summaryModal = document.getElementById('summaryModal');
+    const closeSummaryModalBtn = document.getElementById('closeSummaryModalBtn');
+    const sumChapterBtn = document.getElementById('sumChapterBtn');
+    const sumKeyTakeawaysBtn = document.getElementById('sumKeyTakeawaysBtn');
+    const summaryTrialNotice = document.getElementById('summaryTrialNotice');
+    const summaryReturnSpan = document.getElementById('summaryReturnSpan');
+    const exitSummaryBtn = document.getElementById('exitSummaryBtn');
+    const paywallModal = document.getElementById('paywallModal');
+    const closePaywallBtn = document.getElementById('closePaywallBtn');
+    const upgradeProBtn = document.getElementById('upgradeProBtn');
     const authModal = document.getElementById('authModal');
     const authEmail = document.getElementById('authEmail');
     const authPass = document.getElementById('authPass');
@@ -651,14 +722,11 @@
       }
     }
 
-    // --- RE-ACQUIRE WAKE LOCK ON APP RESUME ---
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && isPlaying) {
-        requestScreenWakeLock();
-      }
+      if (document.visibilityState === 'visible' && isPlaying) requestScreenWakeLock();
     });
 
-    // --- TOKEN & USER QUOTA ---
+    // --- AUTH & LEDGER HELPERS ---
     async function getFreshAuthToken() {
       if (!supabaseClient) return null;
       const { data: { session } } = await supabaseClient.auth.getSession();
@@ -678,7 +746,7 @@
       if (session && session.user) {
         const { data: profile } = await supabaseClient
           .from('profiles')
-          .select('neural_chars_remaining')
+          .select('neural_chars_remaining, summary_credits_remaining, tier')
           .eq('id', session.user.id)
           .single();
 
@@ -689,7 +757,138 @@
       }
     }
 
-    // --- MOBILE-RELIABLE VOICE POPULATION ---
+    // --- AI SUMMARIZE ACTION ---
+    summarizeBtn.addEventListener('click', async () => {
+      const token = await getFreshAuthToken();
+      if (!token) {
+        alert("Please sign in or create an account to use AI summaries.");
+        authModal.style.display = 'flex';
+        return;
+      }
+
+      // Fetch active trial balance from Supabase
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      const { data: profile } = await supabaseClient
+        .from('profiles')
+        .select('summary_credits_remaining, tier')
+        .eq('id', session.user.id)
+        .single();
+
+      if (profile) {
+        if (profile.tier === 'pro') {
+          summaryTrialNotice.textContent = "Plan: Pro Subscriber (Unlimited Summaries)";
+        } else {
+          const trials = profile.summary_credits_remaining ?? 3;
+          summaryTrialNotice.textContent = `Free Trial: ${trials} summaries remaining`;
+          if (trials <= 0) {
+            paywallModal.style.display = 'flex';
+            return;
+          }
+        }
+      }
+
+      summaryModal.style.display = 'flex';
+    });
+
+    closeSummaryModalBtn.addEventListener('click', () => { summaryModal.style.display = 'none'; });
+    closePaywallBtn.addEventListener('click', () => { paywallModal.style.display = 'none'; });
+    upgradeProBtn.addEventListener('click', () => {
+      alert("Redirecting to subscription checkout...");
+      paywallModal.style.display = 'none';
+    });
+
+    async function triggerSummarize(mode) {
+      summaryModal.style.display = 'none';
+      stopAudio();
+
+      const token = await getFreshAuthToken();
+      if (!token) return;
+
+      // Extract text according to chosen scope
+      let textToSummarize = "";
+      if (mode === 'chapter') {
+        textToSummarize = (bookPages[currentPage] || []).join(' ');
+      } else {
+        textToSummarize = bookPages.flat().join(' ');
+      }
+
+      if (!textToSummarize || textToSummarize.trim().length === 0) {
+        alert("No readable text available to summarize.");
+        return;
+      }
+
+      contentPane.innerHTML = `<div style="text-align:center; padding:3rem; color:var(--text-muted); font-style:italic;">Generating AI ${mode === 'chapter' ? 'Section' : 'Document'} Summary...</div>`;
+
+      try {
+        const res = await fetch('/api/summarize', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({ text: textToSummarize, mode })
+        });
+
+        const data = await res.json();
+        if (res.status === 402 || data.trialExhausted) {
+          paywallModal.style.display = 'flex';
+          renderPage(currentPage);
+          return;
+        }
+
+        if (!res.ok) throw new Error(data.error || "Failed to generate summary");
+
+        // Backup current book state
+        if (!originalBookPages) {
+          originalBookPages = bookPages;
+          originalDocName = currentDocName;
+          originalPage = currentPage;
+        }
+
+        // Tokenize summary into read-along sentences
+        const summarySentences = splitIntoSentences(data.summary);
+        bookPages = [];
+        const perPage = 4;
+        for (let i = 0; i < summarySentences.length; i += perPage) {
+          bookPages.push(summarySentences.slice(i, i + perPage));
+        }
+
+        currentDocName = `Summary: ${originalDocName}`;
+        docTitle.textContent = currentDocName;
+        summaryReturnSpan.style.display = 'inline-block';
+
+        currentPage = 0;
+        currentSentenceIdx = 0;
+        renderPage(0);
+
+        // Auto-play the summary
+        isPlaying = true;
+        playCurrentSentence();
+
+      } catch (err) {
+        alert(err.message);
+        renderPage(currentPage);
+      }
+    }
+
+    sumChapterBtn.addEventListener('click', () => triggerSummarize('chapter'));
+    sumKeyTakeawaysBtn.addEventListener('click', () => triggerSummarize('key_takeaways'));
+
+    exitSummaryBtn.addEventListener('click', () => {
+      if (originalBookPages) {
+        stopAudio();
+        bookPages = originalBookPages;
+        currentDocName = originalDocName;
+        currentPage = originalPage;
+        originalBookPages = null;
+
+        docTitle.textContent = currentDocName;
+        summaryReturnSpan.style.display = 'none';
+        renderPage(currentPage);
+      }
+    });
+
+    // --- VOICE SETUP ---
     function populateVoices() {
       const prevChoice = voicePicker.value;
       voicePicker.innerHTML = '';
@@ -756,7 +955,6 @@
       });
     });
 
-    // --- SPEED CYCLER (SINGLE MOBILE TAP BUTTON) ---
     speedCycleBtn.addEventListener('click', () => {
       let nextIdx = (speedSteps.indexOf(playbackSpeed) + 1) % speedSteps.length;
       playbackSpeed = speedSteps[nextIdx];
@@ -773,7 +971,7 @@
       }
     });
 
-    // --- SENTENCE & WORD DOM ---
+    // --- DOM BUILDER ---
     function buildSentenceDOM(sentenceText, sIdx) {
       const sentenceSpan = document.createElement('span');
       sentenceSpan.className = 'sentence';
@@ -823,7 +1021,6 @@
       highlightActiveSentence();
     }
 
-    // Focal vertical auto-center: places reading target in comfortable view
     function highlightActiveSentence() {
       document.querySelectorAll('.sentence').forEach(el => el.classList.remove('active-sentence'));
       document.querySelectorAll('.word').forEach(el => el.classList.remove('active-word'));
@@ -842,7 +1039,7 @@
       });
     }
 
-    // --- SMART PLAYBACK & iOS WATCHDOG ---
+    // --- PLAYBACK CONTROLLER ---
     async function playCurrentSentence() {
       const pageSentences = bookPages[currentPage];
       if (!pageSentences || pageSentences.length === 0) return;
@@ -864,7 +1061,6 @@
       requestScreenWakeLock();
 
       const textToRead = pageSentences[currentSentenceIdx];
-      syncMediaSession(textToRead);
 
       if (activeEngine === 'browser') {
         speakBrowser(textToRead);
@@ -897,7 +1093,6 @@
         }
       };
 
-      // Fallback for mobile WebKit if onboundary is suppressed
       const wordsArr = text.trim().split(/\s+/);
       const totalWords = wordsArr.length;
       let mobileWordIdx = 0;
@@ -917,7 +1112,6 @@
         }
       }, 200);
 
-      // Safari background keepalive: prevents iOS from killing playback
       iosWatchdogInterval = setInterval(() => {
         if (browserSpeech.speaking) browserSpeech.resume();
       }, 5000);
@@ -1010,27 +1204,7 @@
       document.querySelectorAll('.word').forEach(el => el.classList.remove('active-word'));
     }
 
-    function syncMediaSession(sentenceText) {
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.metadata = new MediaMetadata({
-          title: currentDocName,
-          artist: `Page ${currentPage + 1} of ${bookPages.length}`,
-          album: 'Marginalia'
-        });
-        navigator.mediaSession.setActionHandler('play', () => { isPlaying = true; playCurrentSentence(); });
-        navigator.mediaSession.setActionHandler('pause', stopAudio);
-        navigator.mediaSession.setActionHandler('previoustrack', () => {
-          if (currentSentenceIdx > 0) currentSentenceIdx--;
-          playCurrentSentence();
-        });
-        navigator.mediaSession.setActionHandler('nexttrack', () => {
-          currentSentenceIdx++;
-          playCurrentSentence();
-        });
-      }
-    }
-
-    // --- UNIVERSAL FILE & EPUB PARSER ---
+    // --- DOCUMENT PARSING UTILITIES ---
     function htmlToCleanText(rawHtml) {
       return rawHtml
         .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
@@ -1040,8 +1214,6 @@
         .replace(/&amp;/gi, '&')
         .replace(/&lt;/gi, '<')
         .replace(/&gt;/gi, '>')
-        .replace(/&quot;/gi, '"')
-        .replace(/&#39;/gi, "'")
         .replace(/\s+/g, ' ')
         .trim();
     }
@@ -1070,6 +1242,9 @@
 
       stopAudio();
       audioPreloadCache.clear();
+      originalBookPages = null;
+      summaryReturnSpan.style.display = 'none';
+
       currentDocName = file.name;
       docTitle.textContent = currentDocName;
       contentPane.innerHTML = `<div style="text-align:center; padding:3rem; color:var(--text-muted); font-style:italic;">Opening ${file.name}...</div>`;
@@ -1082,7 +1257,8 @@
           extractedText = await file.text();
         } 
         else if (ext === 'html' || ext === 'htm') {
-          extractedText = htmlToCleanText(await file.text());
+          const raw = await file.text();
+          extractedText = htmlToCleanText(raw);
         } 
         else if (ext === 'docx') {
           const buf = await file.arrayBuffer();
@@ -1168,9 +1344,8 @@
 
     // --- CONTROLS HOOKS ---
     mainPlayToggle.addEventListener('click', () => {
-      if (isPlaying) {
-        stopAudio();
-      } else {
+      if (isPlaying) stopAudio();
+      else {
         populateVoices();
         isPlaying = true;
         playCurrentSentence();
@@ -1247,7 +1422,6 @@
       }
     });
 
-    // Initial Load
     const savedTheme = localStorage.getItem('marginalia_theme') || 'dark';
     document.documentElement.setAttribute('data-theme', savedTheme);
     themeSelect.value = savedTheme;
