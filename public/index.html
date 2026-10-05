@@ -408,6 +408,116 @@
       color: var(--text-main);
       font-size: 0.9rem;
     }
+/* =========================================
+       MOBILE OPTIMIZATIONS (< 640px)
+       ========================================= */
+    @media (max-width: 640px) {
+      header {
+        padding: 0.75rem 1rem;
+        gap: 0.6rem;
+      }
+
+      .brand-title {
+        font-size: 1.15rem;
+      }
+
+      /* Compact header buttons */
+      .header-actions {
+        width: 100%;
+        justify-content: space-between;
+        gap: 0.4rem;
+      }
+
+      .header-actions button,
+      .header-actions select,
+      .header-actions label.btn-ui {
+        padding: 0.4rem 0.55rem;
+        font-size: 0.8rem;
+      }
+
+      /* Controls panel padding and layout */
+      .controls-panel {
+        margin: 0.75rem 0.75rem 0;
+        padding: 0.85rem;
+        gap: 0.75rem;
+        width: calc(100% - 1.5rem);
+      }
+
+      /* Horizontal touch-scroll for engine tabs */
+      .engine-tabs-group {
+        display: flex;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        padding-bottom: 4px;
+      }
+      .engine-tabs-group::-webkit-scrollbar {
+        display: none;
+      }
+
+      .engine-tab {
+        flex-shrink: 0;
+        font-size: 0.78rem;
+        padding: 0.35rem 0.75rem;
+      }
+
+      /* Stack sub-controls cleanly */
+      .settings-sub-bar {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.65rem;
+      }
+
+      .setting-group {
+        justify-content: space-between;
+        width: 100%;
+      }
+
+      .setting-group select {
+        flex: 1;
+        max-width: 65%;
+      }
+
+      /* Reader Card: expand width and reduce edge padding */
+      main {
+        padding: 0.75rem 0.5rem 2rem;
+      }
+
+      .reader-card {
+        padding: 1.75rem 1.1rem;
+        margin-top: 0.5rem;
+        border-radius: 8px;
+        min-height: calc(100vh - 280px);
+      }
+
+      .book-content {
+        font-size: 1.15rem;
+        line-height: 1.95;
+      }
+
+      /* Clean mobile footer */
+      .footer-bar {
+        margin-top: 2rem;
+        padding-top: 1rem;
+      }
+
+      .footer-bar button {
+        padding: 0.45rem 0.65rem;
+        font-size: 0.8rem;
+      }
+
+      .page-nav {
+        font-size: 0.8rem;
+        gap: 0.4rem;
+      }
+
+      .page-jump-input {
+        width: 54px;
+        min-width: 54px;
+        padding: 0.25rem;
+      }
+    }
   </style>
 </head>
 <body>
@@ -525,8 +635,8 @@
   <script>
     // --- SUPABASE CONFIGURATION ---
     // If you wish to hardcode public credentials for your instance, paste them here:
-    const SUPABASE_PROJECT_URL = "https://your-project.supabase.co"; 
-    const SUPABASE_ANON_KEY = "sb_publishable_or_anon_key";
+    const SUPABASE_PROJECT_URL = "https://nnxphilhkhvwnitxvzdi.supabase.co/rest/v1/"; 
+    const SUPABASE_ANON_KEY = "sb_publishable_ekzdgLR6FSDHnP2DZNklMQ_n3-k0ZLN";
 
     let supabaseClient = null;
     let currentUserSession = null;
