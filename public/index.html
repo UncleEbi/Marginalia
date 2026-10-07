@@ -616,7 +616,7 @@
     }
     .drawer-quick-btn span.icon { font-size: 1.15rem; color: var(--text-main); }
 
-    /* ALL MODALS */
+    /* MODALS */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -760,11 +760,9 @@
       </div>
 
       <div class="header-actions">
-        <!-- Direct File Open Button -->
         <label class="btn-header btn-open-doc" for="fileInput">📁 Open</label>
         <input type="file" id="fileInput" accept=".epub,.pdf,.docx,.txt,.md,.html,.htm,*/*" style="display:none;" />
 
-        <!-- AI Document Summarizer Button -->
         <button id="summarizeBtn" class="btn-header btn-summarize">✨ Summary</button>
 
         <div id="creditBadge" class="credit-badge">
@@ -832,7 +830,7 @@
   </aside>
 
   <main>
-    <!-- COLLAPSIBLE VOICE BAR (WITHOUT GOOGLE CLOUD) -->
+    <!-- COLLAPSIBLE VOICE BAR -->
     <div class="controls-panel">
       <div class="controls-toggle-bar" id="controlsToggleBar">
         <span id="activeVoiceBadge" style="font-weight:600; color:var(--accent);">🎙️ Native Voice</span>
@@ -954,7 +952,7 @@
     </div>
   </div>
 
-  <!-- OPTIONS MODAL WITH KARAOKE SYNC CALIBRATION & BYOK -->
+  <!-- OPTIONS MODAL WITH HIGHLIGHT MODE & CADENCE CALIBRATION -->
   <div id="optionsModal" class="modal-overlay">
     <div class="modal-card">
       <div class="modal-title">⚙ Reading Options</div>
@@ -988,14 +986,24 @@
           </select>
         </div>
 
+        <!-- HIGHLIGHT MODE SELECTOR (NEW) -->
+        <div>
+          <label style="font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:0.35rem;">Highlight Mode</label>
+          <select id="highlightModeSelect" style="width:100%; padding:0.4rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:16px;">
+            <option value="word">Word Karaoke (Synchronized)</option>
+            <option value="sentence">Sentence Only (Smooth Focus)</option>
+            <option value="none">Off (No Highlights)</option>
+          </select>
+        </div>
+
         <!-- KARAOKE TIMING CALIBRATION -->
-        <div style="border-top:1px dashed var(--border); padding-top:0.75rem;">
+        <div id="karaokeCalibrationContainer" style="border-top:1px dashed var(--border); padding-top:0.75rem;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.3rem;">
             <label style="font-weight:600; font-size:0.85rem;">Karaoke Sync Adjustment</label>
             <span id="syncCalibrationDisplay" style="font-size:0.8rem; color:var(--accent); font-weight:600;">Normal</span>
           </div>
           <p style="font-size:0.74rem; color:var(--text-muted); margin-bottom:0.5rem;">
-            Nudge the highlight speed if your phone voice reads slower or faster than the words.
+            Nudge the highlight pace slower or faster to align with your device's accent.
           </p>
           <div style="display:flex; align-items:center; gap:0.6rem;">
             <span style="font-size:0.75rem; color:var(--text-muted);">Slower</span>
@@ -1008,7 +1016,7 @@
         <div style="border-top:1px dashed var(--border); padding-top:0.75rem;">
           <div style="font-weight:600; font-size:0.85rem; margin-bottom:0.25rem;">Custom API Keys (Zero Cost)</div>
           <p style="font-size:0.74rem; color:var(--text-muted); margin-bottom:0.6rem;">
-            Provide your personal keys for unlimited studio voices and AI summaries. Keys are stored only on your device.
+            Provide personal keys for unlimited studio voices and summaries. Stored only on your device.
           </p>
 
           <label style="font-size:0.76rem; color:var(--text-muted); display:block;">OpenAI Key (Audio & Summaries)</label>
@@ -1033,7 +1041,7 @@
         Marginalia is an adaptive read-along reader with client-side document processing, native and neural TTS, and AI summaries.
       </p>
       <div style="font-size:0.8rem; background:var(--bg-main); padding:0.75rem; border-radius:8px; border:1px solid var(--border);">
-        <div style="margin-bottom:0.3rem;"><strong>Version:</strong> 2.8.0 (Self-Calibrating Audio Edition)</div>
+        <div style="margin-bottom:0.3rem;"><strong>Version:</strong> 2.9.0 (Dynamic Cadence Edition)</div>
         <div><strong>Storage:</strong> IndexedDB Offline Bookshelf</div>
       </div>
       <div style="display:flex; justify-content:flex-end;">
@@ -1271,8 +1279,8 @@
       [
         "Welcome to Marginalia Mobile Reader.",
         "Tap the Open button above to import any EPUB, PDF, Word, or text file.",
-        "The karaoke highlighter dynamically adjusts to match your phone's speaking rhythm.",
-        "Your books and diagrams are saved automatically in your browser."
+        "You can now customize your reading rhythm: choose between synchronized word karaoke, sentence-only focus, or clean text.",
+        "Your documents and progress are saved automatically on your device."
       ]
     ];
     let bookChapters = [
@@ -1290,17 +1298,18 @@
     let playbackSpeed = 1.0;
     const speedSteps = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0];
 
-    // --- SELF-LEARNING ADAPTIVE CADENCE STATE ---
-    let learnedCadenceMultiplier = 1.0;
-    let userManualCalibration = 1.0;
+    // --- HIGHLIGHT & TIMING STATE ---
+    let highlightMode = localStorage.getItem('marginalia_highlight_mode') || 'word'; // 'word', 'sentence', 'none'
+    let learnedCadenceMultiplier = 1.0; // Self-learning voice adaptation factor
+    let userManualCalibration = 1.0;   // Manual fine-tune multiplier
     let sentenceSpeechStartTime = 0;
     let estimatedSentenceDurationMs = 0;
+    let wordAnimFrameId = null;
 
     const browserSpeech = window.speechSynthesis;
     let currentUtterance = null;
     const audioElement = document.getElementById('neuralAudio');
     const audioPreloadCache = new Map();
-    let wordTimerInterval = null;
 
     // DOM Elements
     const contentPane = document.getElementById('contentPane');
@@ -1367,10 +1376,12 @@
     const fontSelect = document.getElementById('fontSelect');
     const fontSizeSelect = document.getElementById('fontSizeSelect');
     const optionThemeSelect = document.getElementById('optionThemeSelect');
+    const highlightModeSelect = document.getElementById('highlightModeSelect');
     const customOpenAiKeyInput = document.getElementById('customOpenAiKeyInput');
     const customElevenKeyInput = document.getElementById('customElevenKeyInput');
     const karaokeCalibrationSlider = document.getElementById('karaokeCalibrationSlider');
     const syncCalibrationDisplay = document.getElementById('syncCalibrationDisplay');
+    const karaokeCalibrationContainer = document.getElementById('karaokeCalibrationContainer');
 
     // --- DRAWER CONTROLLER ---
     function openDrawer() {
@@ -1575,6 +1586,8 @@
     btnDrawerOptions.addEventListener('click', () => {
       closeDrawer();
       optionThemeSelect.value = document.documentElement.getAttribute('data-theme') || 'dark';
+      highlightModeSelect.value = highlightMode;
+      karaokeCalibrationContainer.style.display = highlightMode === 'word' ? 'block' : 'none';
       customOpenAiKeyInput.value = localStorage.getItem('marginalia_byok_openai') || '';
       customElevenKeyInput.value = localStorage.getItem('marginalia_byok_eleven') || '';
       karaokeCalibrationSlider.value = userManualCalibration;
@@ -1601,6 +1614,10 @@
       localStorage.setItem('marginalia_theme', e.target.value);
     });
 
+    highlightModeSelect.addEventListener('change', (e) => {
+      karaokeCalibrationContainer.style.display = e.target.value === 'word' ? 'block' : 'none';
+    });
+
     function updateSyncCalibrationLabel(val) {
       if (val === 1.0) syncCalibrationDisplay.textContent = "Normal (Auto-Sync)";
       else if (val < 1.0) syncCalibrationDisplay.textContent = `${Math.round((1 - val) * 100)}% Slower`;
@@ -1615,9 +1632,12 @@
     });
 
     document.getElementById('closeOptionsBtn').addEventListener('click', () => {
+      highlightMode = highlightModeSelect.value;
+      localStorage.setItem('marginalia_highlight_mode', highlightMode);
       localStorage.setItem('marginalia_byok_openai', customOpenAiKeyInput.value.trim());
       localStorage.setItem('marginalia_byok_eleven', customElevenKeyInput.value.trim());
       localStorage.setItem('marginalia_sync_calibration', userManualCalibration.toString());
+      highlightActiveSentence();
       updateAuthBadge();
     });
 
@@ -1693,28 +1713,39 @@
       }
     });
 
-    // --- ACCURATE CADENCE TIMELINE ENGINE ---
+    // --- ACCURATE SYLLABLE-INFORMED CADENCE ENGINE ---
     function computeWordTimeline(words, speed, totalDuration = null) {
       const effectiveCadenceFactor = learnedCadenceMultiplier * userManualCalibration;
-      const baseMsPerChar = (88 * effectiveCadenceFactor) / speed;
       const timeline = [];
       let totalEst = 0;
 
-      words.forEach((word) => {
-        const clean = word.trim();
-        const charCount = Math.max(1, clean.replace(/[^a-zA-Z0-9]/g, '').length);
-        let duration = Math.max(220 / speed, charCount * baseMsPerChar);
+      // Base speech duration calibrated to natural mobile TTS pacing
+      const basePerUnit = (88 * effectiveCadenceFactor) / speed;
 
-        if (/[,;:\-]/.test(clean)) duration += (350 * effectiveCadenceFactor) / speed;
-        else if (/[.!?]/.test(clean)) duration += (550 * effectiveCadenceFactor) / speed;
+      words.forEach((word) => {
+        const clean = word.trim().toLowerCase();
+        const stripped = clean.replace(/[^a-z0-9]/g, '');
+        // Approximate syllable clusters (vowel groupings)
+        const vowelClusters = (stripped.match(/[aeiouy]+/g) || []).length;
+        const syllables = Math.max(1, vowelClusters);
+
+        // Combined phonetic weight: character length + syllable density
+        const weight = Math.max(1.2, (stripped.length * 0.45) + (syllables * 0.75));
+        let duration = Math.max(200 / speed, weight * basePerUnit);
+
+        // Realistic breath pauses
+        if (/[,;:\-]/.test(clean)) duration += (320 * effectiveCadenceFactor) / speed;
+        else if (/[.!?]/.test(clean)) duration += (480 * effectiveCadenceFactor) / speed;
 
         timeline.push({ duration });
         totalEst += duration;
       });
 
+      // Fit to exact physical audio duration when available
       if (totalDuration && totalDuration > 0) {
         const ratio = (totalDuration * 1000) / totalEst;
         timeline.forEach(item => { item.duration *= ratio; });
+        totalEst = totalDuration * 1000;
       }
 
       let accum = 0;
@@ -1724,8 +1755,15 @@
           accum += item.duration;
           return { start: start / 1000, end: accum / 1000 };
         }),
-        totalEstMs: accum
+        totalEstMs: totalEst
       };
+    }
+
+    function cancelWordAnimation() {
+      if (wordAnimFrameId) {
+        cancelAnimationFrame(wordAnimFrameId);
+        wordAnimFrameId = null;
+      }
     }
 
     // --- DOM BUILDERS ---
@@ -1829,6 +1867,8 @@
       document.querySelectorAll('.reader-diagram').forEach(el => el.classList.remove('active-diagram'));
       document.querySelectorAll('.word').forEach(el => el.classList.remove('active-word'));
 
+      if (highlightMode === 'none') return;
+
       const target = document.getElementById(`sent-${currentSentenceIdx}`);
       if (target) {
         if (target.classList.contains('reader-diagram')) {
@@ -1841,6 +1881,10 @@
     }
 
     function highlightActiveWord(wIdx) {
+      if (highlightMode !== 'word') {
+        document.querySelectorAll('.word.active-word').forEach(el => el.classList.remove('active-word'));
+        return;
+      }
       document.querySelectorAll(`#sent-${currentSentenceIdx} .word`).forEach((el, index) => {
         if (index === wIdx) el.classList.add('active-word');
         else el.classList.remove('active-word');
@@ -1890,7 +1934,7 @@
 
     function speakBrowser(text) {
       browserSpeech.cancel();
-      if (wordTimerInterval) clearInterval(wordTimerInterval);
+      cancelWordAnimation();
 
       currentUtterance = new SpeechSynthesisUtterance(text);
       currentUtterance.rate = playbackSpeed;
@@ -1917,41 +1961,56 @@
           boundaryCount++;
           if (boundaryCount > 1) {
             usingNativeBoundaries = true;
-            if (wordTimerInterval) { clearInterval(wordTimerInterval); wordTimerInterval = null; }
+            cancelWordAnimation();
           }
-          const words = text.slice(0, e.charIndex).trim().split(/\s+/);
-          highlightActiveWord(words[0] === "" ? 0 : words.length);
+          if (highlightMode === 'word') {
+            const words = text.slice(0, e.charIndex).trim().split(/\s+/);
+            highlightActiveWord(words[0] === "" ? 0 : words.length);
+          }
         }
       };
 
       currentUtterance.onstart = () => {
-        highlightActiveWord(0);
+        if (highlightMode === 'word') highlightActiveWord(0);
         sentenceSpeechStartTime = performance.now();
 
-        const audioBufferDelaySec = 0.24 / playbackSpeed;
+        // 180ms lead-in hardware compensation buffer
+        const leadInDelayMs = 180 / playbackSpeed;
 
-        wordTimerInterval = setInterval(() => {
-          if (usingNativeBoundaries) return;
-          const rawElapsedSec = (performance.now() - sentenceSpeechStartTime) / 1000;
-          const effectiveElapsedSec = Math.max(0, rawElapsedSec - audioBufferDelaySec);
+        function renderFrame() {
+          if (!isPlaying || usingNativeBoundaries || highlightMode !== 'word') return;
+          const elapsedMs = performance.now() - sentenceSpeechStartTime;
+          const effectiveElapsedSec = Math.max(0, (elapsedMs - leadInDelayMs) / 1000);
 
           let activeIdx = 0;
           for (let i = 0; i < timeline.length; i++) {
-            if (effectiveElapsedSec >= timeline[i].start) activeIdx = i;
-            else break;
+            if (effectiveElapsedSec >= timeline[i].start) {
+              activeIdx = i;
+            } else {
+              break;
+            }
           }
           highlightActiveWord(activeIdx);
-        }, 40);
+
+          if (elapsedMs < estimatedSentenceDurationMs + 1200) {
+            wordAnimFrameId = requestAnimationFrame(renderFrame);
+          }
+        }
+
+        if (highlightMode === 'word') {
+          wordAnimFrameId = requestAnimationFrame(renderFrame);
+        }
       };
 
       currentUtterance.onend = () => {
-        if (wordTimerInterval) clearInterval(wordTimerInterval);
+        cancelWordAnimation();
 
+        // Adaptive self-learning loop
         if (sentenceSpeechStartTime && estimatedSentenceDurationMs > 400) {
           const actualElapsedMs = performance.now() - sentenceSpeechStartTime;
           const observedRatio = actualElapsedMs / estimatedSentenceDurationMs;
-          if (observedRatio >= 0.6 && observedRatio <= 1.8) {
-            learnedCadenceMultiplier = (learnedCadenceMultiplier * 0.4) + (observedRatio * 0.6);
+          if (observedRatio >= 0.65 && observedRatio <= 1.6) {
+            learnedCadenceMultiplier = (learnedCadenceMultiplier * 0.6) + (observedRatio * 0.4);
           }
         }
 
@@ -2020,12 +2079,15 @@
           if (!timeline && audioElement.duration) {
             timeline = computeWordTimeline(wordsArr, playbackSpeed, audioElement.duration).timeline;
           }
-          if (timeline) {
+          if (timeline && highlightMode === 'word') {
             const cur = audioElement.currentTime;
             let activeIdx = 0;
             for (let i = 0; i < timeline.length; i++) {
-              if (cur >= timeline[i].start) activeIdx = i;
-              else break;
+              if (cur >= timeline[i].start) {
+                activeIdx = i;
+              } else {
+                break;
+              }
             }
             highlightActiveWord(activeIdx);
           }
@@ -2046,7 +2108,7 @@
     function stopAudio() {
       isPlaying = false;
       mainPlayToggle.textContent = '▶';
-      if (wordTimerInterval) clearInterval(wordTimerInterval);
+      cancelWordAnimation();
       browserSpeech.cancel();
       audioElement.pause();
       document.querySelectorAll('.word').forEach(el => el.classList.remove('active-word'));
@@ -2097,7 +2159,7 @@
       }
     });
 
-    // --- VOICES & ENGINES (WITHOUT GOOGLE CLOUD) ---
+    // --- VOICES & ENGINES ---
     const voicePresets = {
       browser: [],
       elevenlabs: [
