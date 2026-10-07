@@ -616,7 +616,7 @@
     }
     .drawer-quick-btn span.icon { font-size: 1.15rem; color: var(--text-main); }
 
-    /* MODALS */
+    /* MODAL ARCHITECTURE: SCROLLABLE WITH STICKY HEAD & FOOT */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -633,17 +633,48 @@
       background: var(--panel-bg);
       border: 1px solid var(--border);
       width: 100%;
-      max-width: 420px;
-      max-height: 85vh;
+      max-width: 440px;
+      max-height: 88vh;
       border-radius: 14px;
-      padding: 1.4rem;
+      padding: 1.25rem 1.35rem;
       box-shadow: 0 10px 40px rgba(0,0,0,0.4);
       display: flex;
       flex-direction: column;
-      gap: 1rem;
+      overflow: hidden;
+    }
+
+    .modal-header-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 0.75rem;
+      flex-shrink: 0;
+    }
+
+    .modal-scrollable-body {
+      flex: 1;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding-right: 0.3rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.95rem;
+    }
+
+    .modal-footer-bar {
+      margin-top: 0.75rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.5rem;
+      flex-shrink: 0;
     }
 
     .modal-title { font-size: 1.15rem; font-weight: 700; }
+
     .modal-scrollable-list {
       flex: 1;
       overflow-y: auto;
@@ -952,14 +983,18 @@
     </div>
   </div>
 
-  <!-- OPTIONS MODAL WITH HIGHLIGHT MODE & CADENCE CALIBRATION -->
+  <!-- OPTIONS MODAL: SCROLLABLE WITH PINNED SAVE BUTTON -->
   <div id="optionsModal" class="modal-overlay">
     <div class="modal-card">
-      <div class="modal-title">⚙ Reading Options</div>
-      <div style="display:flex; flex-direction:column; gap:0.9rem;">
+      <div class="modal-header-bar">
+        <div class="modal-title">⚙ Reading Options</div>
+        <button class="bookmark-ribbon-btn" data-close="optionsModal" style="font-size:1.1rem;">✕</button>
+      </div>
+
+      <div class="modal-scrollable-body" id="optionsModalBody">
         <div>
           <label style="font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:0.35rem;">Font Face</label>
-          <select id="fontSelect" style="width:100%; padding:0.4rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:16px;">
+          <select id="fontSelect" style="width:100%; padding:0.45rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:16px;">
             <option value="serif">Classic Serif (Georgia)</option>
             <option value="sans-serif">Clean Sans-Serif (System UI)</option>
             <option value="monospace">Monospace Reader</option>
@@ -968,9 +1003,9 @@
 
         <div>
           <label style="font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:0.35rem;">Font Size</label>
-          <select id="fontSizeSelect" style="width:100%; padding:0.4rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:16px;">
+          <select id="fontSizeSelect" style="width:100%; padding:0.45rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:16px;">
             <option value="1.05rem">Small</option>
-            <option value="1.15rem" selected>Standard</option>
+            <option value="1.15rem">Standard</option>
             <option value="1.35rem">Large</option>
             <option value="1.55rem">Extra Large</option>
           </select>
@@ -978,7 +1013,7 @@
 
         <div>
           <label style="font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:0.35rem;">Theme Palette</label>
-          <select id="optionThemeSelect" style="width:100%; padding:0.4rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:16px;">
+          <select id="optionThemeSelect" style="width:100%; padding:0.45rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:16px;">
             <option value="light">Clean Light</option>
             <option value="sepia">Sepia Paper</option>
             <option value="dark">Nord Dark</option>
@@ -986,17 +1021,15 @@
           </select>
         </div>
 
-        <!-- HIGHLIGHT MODE SELECTOR (NEW) -->
         <div>
           <label style="font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:0.35rem;">Highlight Mode</label>
-          <select id="highlightModeSelect" style="width:100%; padding:0.4rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:16px;">
+          <select id="highlightModeSelect" style="width:100%; padding:0.45rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:16px;">
             <option value="word">Word Karaoke (Synchronized)</option>
             <option value="sentence">Sentence Only (Smooth Focus)</option>
             <option value="none">Off (No Highlights)</option>
           </select>
         </div>
 
-        <!-- KARAOKE TIMING CALIBRATION -->
         <div id="karaokeCalibrationContainer" style="border-top:1px dashed var(--border); padding-top:0.75rem;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.3rem;">
             <label style="font-weight:600; font-size:0.85rem;">Karaoke Sync Adjustment</label>
@@ -1012,23 +1045,22 @@
           </div>
         </div>
 
-        <!-- BRING YOUR OWN KEY (BYOK) -->
-        <div style="border-top:1px dashed var(--border); padding-top:0.75rem;">
+        <div style="border-top:1px dashed var(--border); padding-top:0.75rem; padding-bottom:0.5rem;">
           <div style="font-weight:600; font-size:0.85rem; margin-bottom:0.25rem;">Custom API Keys (Zero Cost)</div>
           <p style="font-size:0.74rem; color:var(--text-muted); margin-bottom:0.6rem;">
             Provide personal keys for unlimited studio voices and summaries. Stored only on your device.
           </p>
 
           <label style="font-size:0.76rem; color:var(--text-muted); display:block;">OpenAI Key (Audio & Summaries)</label>
-          <input type="password" id="customOpenAiKeyInput" placeholder="sk-..." style="width:100%; margin-top:0.25rem; font-size:14px; padding:0.45rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border);" />
+          <input type="password" id="customOpenAiKeyInput" placeholder="sk-..." style="width:100%; margin-top:0.25rem; font-size:14px; padding:0.5rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border);" />
 
-          <label style="font-size:0.76rem; color:var(--text-muted); margin-top:0.5rem; display:block;">ElevenLabs Key</label>
-          <input type="password" id="customElevenKeyInput" placeholder="xi-..." style="width:100%; margin-top:0.25rem; font-size:14px; padding:0.45rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border);" />
+          <label style="font-size:0.76rem; color:var(--text-muted); margin-top:0.6rem; display:block;">ElevenLabs Key</label>
+          <input type="password" id="customElevenKeyInput" placeholder="xi-..." style="width:100%; margin-top:0.25rem; font-size:14px; padding:0.5rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border);" />
         </div>
       </div>
 
-      <div style="display:flex; justify-content:flex-end;">
-        <button id="closeOptionsBtn" data-close="optionsModal" style="padding:0.4rem 0.8rem; border-radius:6px; background:var(--accent); color:#fff; border:none; font-weight:600;">Save & Done</button>
+      <div class="modal-footer-bar">
+        <button id="saveOptionsBtn" style="padding:0.5rem 1.1rem; border-radius:6px; background:var(--accent); color:#fff; border:none; font-weight:600; cursor:pointer;">Save & Done</button>
       </div>
     </div>
   </div>
@@ -1041,7 +1073,7 @@
         Marginalia is an adaptive read-along reader with client-side document processing, native and neural TTS, and AI summaries.
       </p>
       <div style="font-size:0.8rem; background:var(--bg-main); padding:0.75rem; border-radius:8px; border:1px solid var(--border);">
-        <div style="margin-bottom:0.3rem;"><strong>Version:</strong> 2.9.0 (Dynamic Cadence Edition)</div>
+        <div style="margin-bottom:0.3rem;"><strong>Version:</strong> 2.9.1 (Scroll-Optimized Options Edition)</div>
         <div><strong>Storage:</strong> IndexedDB Offline Bookshelf</div>
       </div>
       <div style="display:flex; justify-content:flex-end;">
@@ -1299,9 +1331,9 @@
     const speedSteps = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0];
 
     // --- HIGHLIGHT & TIMING STATE ---
-    let highlightMode = localStorage.getItem('marginalia_highlight_mode') || 'word'; // 'word', 'sentence', 'none'
-    let learnedCadenceMultiplier = 1.0; // Self-learning voice adaptation factor
-    let userManualCalibration = 1.0;   // Manual fine-tune multiplier
+    let highlightMode = localStorage.getItem('marginalia_highlight_mode') || 'word';
+    let learnedCadenceMultiplier = 1.0;
+    let userManualCalibration = 1.0;
     let sentenceSpeechStartTime = 0;
     let estimatedSentenceDurationMs = 0;
     let wordAnimFrameId = null;
@@ -1382,6 +1414,7 @@
     const karaokeCalibrationSlider = document.getElementById('karaokeCalibrationSlider');
     const syncCalibrationDisplay = document.getElementById('syncCalibrationDisplay');
     const karaokeCalibrationContainer = document.getElementById('karaokeCalibrationContainer');
+    const saveOptionsBtn = document.getElementById('saveOptionsBtn');
 
     // --- DRAWER CONTROLLER ---
     function openDrawer() {
@@ -1575,17 +1608,20 @@
       renderPage(currentPage);
     });
 
-    // --- QUICK DRAWER THEME & OPTIONS ---
+    // --- QUICK DRAWER THEME & OPTIONS (PERSISTED) ---
     btnDrawerNightToggle.addEventListener('click', () => {
       const current = document.documentElement.getAttribute('data-theme');
       const nextTheme = current === 'dark' ? 'oled' : (current === 'oled' ? 'sepia' : (current === 'sepia' ? 'light' : 'dark'));
       document.documentElement.setAttribute('data-theme', nextTheme);
       localStorage.setItem('marginalia_theme', nextTheme);
+      optionThemeSelect.value = nextTheme;
     });
 
     btnDrawerOptions.addEventListener('click', () => {
       closeDrawer();
       optionThemeSelect.value = document.documentElement.getAttribute('data-theme') || 'dark';
+      fontSelect.value = localStorage.getItem('marginalia_font_face') || 'serif';
+      fontSizeSelect.value = localStorage.getItem('marginalia_font_size') || '1.15rem';
       highlightModeSelect.value = highlightMode;
       karaokeCalibrationContainer.style.display = highlightMode === 'word' ? 'block' : 'none';
       customOpenAiKeyInput.value = localStorage.getItem('marginalia_byok_openai') || '';
@@ -1600,13 +1636,19 @@
       aboutModal.style.display = 'flex';
     });
 
+    function applyFontFace(val) {
+      contentPane.style.fontFamily = val === 'serif' ? 'var(--font-reader)' :
+        val === 'monospace' ? 'monospace' : 'var(--font-ui)';
+    }
+
     fontSelect.addEventListener('change', (e) => {
-      contentPane.style.fontFamily = e.target.value === 'serif' ? 'var(--font-reader)' :
-        e.target.value === 'monospace' ? 'monospace' : 'var(--font-ui)';
+      applyFontFace(e.target.value);
+      localStorage.setItem('marginalia_font_face', e.target.value);
     });
 
     fontSizeSelect.addEventListener('change', (e) => {
       document.documentElement.style.setProperty('--reader-font-size', e.target.value);
+      localStorage.setItem('marginalia_font_size', e.target.value);
     });
 
     optionThemeSelect.addEventListener('change', (e) => {
@@ -1631,14 +1673,39 @@
       localStorage.setItem('marginalia_sync_calibration', val.toString());
     });
 
-    document.getElementById('closeOptionsBtn').addEventListener('click', () => {
-      highlightMode = highlightModeSelect.value;
-      localStorage.setItem('marginalia_highlight_mode', highlightMode);
-      localStorage.setItem('marginalia_byok_openai', customOpenAiKeyInput.value.trim());
-      localStorage.setItem('marginalia_byok_eleven', customElevenKeyInput.value.trim());
-      localStorage.setItem('marginalia_sync_calibration', userManualCalibration.toString());
+    // UNIFIED SAVE & PERSISTENCE CONTROLLER
+    saveOptionsBtn.addEventListener('click', () => {
+      const selectedFont = fontSelect.value;
+      const selectedSize = fontSizeSelect.value;
+      const selectedTheme = optionThemeSelect.value;
+      const selectedHighlight = highlightModeSelect.value;
+      const openAiKey = customOpenAiKeyInput.value.trim();
+      const elevenKey = customElevenKeyInput.value.trim();
+      const calib = karaokeCalibrationSlider.value;
+
+      localStorage.setItem('marginalia_font_face', selectedFont);
+      localStorage.setItem('marginalia_font_size', selectedSize);
+      localStorage.setItem('marginalia_theme', selectedTheme);
+      localStorage.setItem('marginalia_highlight_mode', selectedHighlight);
+      localStorage.setItem('marginalia_byok_openai', openAiKey);
+      localStorage.setItem('marginalia_byok_eleven', elevenKey);
+      localStorage.setItem('marginalia_sync_calibration', calib);
+
+      applyFontFace(selectedFont);
+      document.documentElement.style.setProperty('--reader-font-size', selectedSize);
+      document.documentElement.setAttribute('data-theme', selectedTheme);
+      highlightMode = selectedHighlight;
+      userManualCalibration = parseFloat(calib) || 1.0;
+
       highlightActiveSentence();
       updateAuthBadge();
+
+      // Quick visual confirmation before closing
+      saveOptionsBtn.textContent = '✓ Saved!';
+      setTimeout(() => {
+        saveOptionsBtn.textContent = 'Save & Done';
+        closeModalById('optionsModal');
+      }, 350);
     });
 
     // --- AUTHENTICATION & CREDITS ---
@@ -1719,21 +1786,17 @@
       const timeline = [];
       let totalEst = 0;
 
-      // Base speech duration calibrated to natural mobile TTS pacing
       const basePerUnit = (88 * effectiveCadenceFactor) / speed;
 
       words.forEach((word) => {
         const clean = word.trim().toLowerCase();
         const stripped = clean.replace(/[^a-z0-9]/g, '');
-        // Approximate syllable clusters (vowel groupings)
         const vowelClusters = (stripped.match(/[aeiouy]+/g) || []).length;
         const syllables = Math.max(1, vowelClusters);
 
-        // Combined phonetic weight: character length + syllable density
         const weight = Math.max(1.2, (stripped.length * 0.45) + (syllables * 0.75));
         let duration = Math.max(200 / speed, weight * basePerUnit);
 
-        // Realistic breath pauses
         if (/[,;:\-]/.test(clean)) duration += (320 * effectiveCadenceFactor) / speed;
         else if (/[.!?]/.test(clean)) duration += (480 * effectiveCadenceFactor) / speed;
 
@@ -1741,7 +1804,6 @@
         totalEst += duration;
       });
 
-      // Fit to exact physical audio duration when available
       if (totalDuration && totalDuration > 0) {
         const ratio = (totalDuration * 1000) / totalEst;
         timeline.forEach(item => { item.duration *= ratio; });
@@ -1974,7 +2036,6 @@
         if (highlightMode === 'word') highlightActiveWord(0);
         sentenceSpeechStartTime = performance.now();
 
-        // 180ms lead-in hardware compensation buffer
         const leadInDelayMs = 180 / playbackSpeed;
 
         function renderFrame() {
@@ -2005,7 +2066,6 @@
       currentUtterance.onend = () => {
         cancelWordAnimation();
 
-        // Adaptive self-learning loop
         if (sentenceSpeechStartTime && estimatedSentenceDurationMs > 400) {
           const actualElapsedMs = performance.now() - sentenceSpeechStartTime;
           const observedRatio = actualElapsedMs / estimatedSentenceDurationMs;
@@ -2755,13 +2815,28 @@
       }
     });
 
-    // Startup Initialization
+    // STARTUP PREFERENCES RESTORATION
     const savedTheme = localStorage.getItem('marginalia_theme') || 'dark';
     document.documentElement.setAttribute('data-theme', savedTheme);
+    optionThemeSelect.value = savedTheme;
+
+    const savedFont = localStorage.getItem('marginalia_font_face') || 'serif';
+    fontSelect.value = savedFont;
+    applyFontFace(savedFont);
+
+    const savedFontSize = localStorage.getItem('marginalia_font_size') || '1.15rem';
+    fontSizeSelect.value = savedFontSize;
+    document.documentElement.style.setProperty('--reader-font-size', savedFontSize);
+
+    const savedHighlight = localStorage.getItem('marginalia_highlight_mode') || 'word';
+    highlightMode = savedHighlight;
+    highlightModeSelect.value = savedHighlight;
 
     const savedCalibration = localStorage.getItem('marginalia_sync_calibration');
     if (savedCalibration) {
       userManualCalibration = parseFloat(savedCalibration) || 1.0;
+      karaokeCalibrationSlider.value = userManualCalibration;
+      updateSyncCalibrationLabel(userManualCalibration);
     }
 
     initIndexedDB();
