@@ -832,7 +832,7 @@
   </aside>
 
   <main>
-    <!-- COLLAPSIBLE VOICE BAR -->
+    <!-- COLLAPSIBLE VOICE BAR (WITHOUT GOOGLE CLOUD) -->
     <div class="controls-panel">
       <div class="controls-toggle-bar" id="controlsToggleBar">
         <span id="activeVoiceBadge" style="font-weight:600; color:var(--accent);">🎙️ Native Voice</span>
@@ -844,7 +844,6 @@
           <button class="engine-tab active" data-engine="browser">Browser Native</button>
           <button class="engine-tab" data-engine="elevenlabs">ElevenLabs</button>
           <button class="engine-tab" data-engine="openai">OpenAI Audio</button>
-          <button class="engine-tab" data-engine="google">Google Cloud</button>
           <button class="engine-tab" data-engine="azure">Azure Speech</button>
         </div>
 
@@ -1292,8 +1291,8 @@
     const speedSteps = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0];
 
     // --- SELF-LEARNING ADAPTIVE CADENCE STATE ---
-    let learnedCadenceMultiplier = 1.0; // Auto-learns actual phone TTS speaking rate
-    let userManualCalibration = 1.0;   // Manual slider adjustment from Options
+    let learnedCadenceMultiplier = 1.0;
+    let userManualCalibration = 1.0;
     let sentenceSpeechStartTime = 0;
     let estimatedSentenceDurationMs = 0;
 
@@ -1696,8 +1695,6 @@
 
     // --- ACCURATE CADENCE TIMELINE ENGINE ---
     function computeWordTimeline(words, speed, totalDuration = null) {
-      // Base: Realistic ~130 WPM speech rate on phones (88ms per character)
-      // Scaled by speed setting, user manual calibration slider, and self-learned engine multiplier
       const effectiveCadenceFactor = learnedCadenceMultiplier * userManualCalibration;
       const baseMsPerChar = (88 * effectiveCadenceFactor) / speed;
       const timeline = [];
@@ -1708,7 +1705,6 @@
         const charCount = Math.max(1, clean.replace(/[^a-zA-Z0-9]/g, '').length);
         let duration = Math.max(220 / speed, charCount * baseMsPerChar);
 
-        // Natural breath & punctuation pauses
         if (/[,;:\-]/.test(clean)) duration += (350 * effectiveCadenceFactor) / speed;
         else if (/[.!?]/.test(clean)) duration += (550 * effectiveCadenceFactor) / speed;
 
@@ -1716,7 +1712,6 @@
         totalEst += duration;
       });
 
-      // Normalize if audio has an exact physical duration (e.g. serverless audio tracks)
       if (totalDuration && totalDuration > 0) {
         const ratio = (totalDuration * 1000) / totalEst;
         timeline.forEach(item => { item.duration *= ratio; });
@@ -1893,7 +1888,6 @@
       }
     }
 
-    // NATIVE BROWSER SPEECH SYNTHESIS ENGINE
     function speakBrowser(text) {
       browserSpeech.cancel();
       if (wordTimerInterval) clearInterval(wordTimerInterval);
@@ -1934,7 +1928,6 @@
         highlightActiveWord(0);
         sentenceSpeechStartTime = performance.now();
 
-        // 240ms startup grace period to absorb mobile audio buffer initialization
         const audioBufferDelaySec = 0.24 / playbackSpeed;
 
         wordTimerInterval = setInterval(() => {
@@ -1954,13 +1947,10 @@
       currentUtterance.onend = () => {
         if (wordTimerInterval) clearInterval(wordTimerInterval);
 
-        // SELF-LEARNING CADENCE RECALIBRATION:
-        // Measure real time taken vs estimated time to lock sync on the next sentence
         if (sentenceSpeechStartTime && estimatedSentenceDurationMs > 400) {
           const actualElapsedMs = performance.now() - sentenceSpeechStartTime;
           const observedRatio = actualElapsedMs / estimatedSentenceDurationMs;
           if (observedRatio >= 0.6 && observedRatio <= 1.8) {
-            // Smoothly adapt the multiplier towards the voice's real speaking rate
             learnedCadenceMultiplier = (learnedCadenceMultiplier * 0.4) + (observedRatio * 0.6);
           }
         }
@@ -2107,7 +2097,7 @@
       }
     });
 
-    // --- VOICES & ENGINES ---
+    // --- VOICES & ENGINES (WITHOUT GOOGLE CLOUD) ---
     const voicePresets = {
       browser: [],
       elevenlabs: [
@@ -2124,11 +2114,6 @@
         { id: 'onyx', name: 'Onyx (Deep Authoritative)' },
         { id: 'nova', name: 'Nova (Energetic)' },
         { id: 'shimmer', name: 'Shimmer (Clear)' }
-      ],
-      google: [
-        { id: 'en-US-Journey-F', name: 'Journey Female (Natural)' },
-        { id: 'en-US-Journey-D', name: 'Journey Male (Deep)' },
-        { id: 'en-US-Neural2-F', name: 'Neural2 Female' }
       ],
       azure: [
         { id: 'en-US-JennyNeural', name: 'Jenny (Neural US)' },
@@ -2212,7 +2197,7 @@
 
     voicePicker.addEventListener('change', () => {
       audioPreloadCache.clear();
-      learnedCadenceMultiplier = 1.0; // Reset self-calibrator to adapt to the new voice
+      learnedCadenceMultiplier = 1.0;
       const selectedOption = voicePicker.options[voicePicker.selectedIndex];
       activeVoiceBadge.textContent = `${activeEngine === 'browser' ? '🎙️' : '⚡'} ${selectedOption ? selectedOption.text.split('(')[0].trim() : 'Voice'}`;
       
@@ -2694,7 +2679,7 @@
 
         currentPage = 0;
         currentSentenceIdx = 0;
-        learnedCadenceMultiplier = 1.0; // Reset self-calibrator for fresh document
+        learnedCadenceMultiplier = 1.0;
         preloadStatus.textContent = "Ready";
         renderPage(0);
         saveBookToShelf(currentDocName, bookPages, bookChapters);
