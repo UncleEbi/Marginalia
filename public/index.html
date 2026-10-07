@@ -193,6 +193,7 @@
       background: linear-gradient(135deg, rgba(56, 189, 248, 0.12), rgba(168, 85, 247, 0.12));
       border: 1px solid var(--accent);
       color: var(--accent);
+      font-weight: 600;
     }
 
     .credit-badge {
@@ -699,9 +700,7 @@
       border-radius: 4px;
       transition: background var(--transition);
     }
-    .shelf-delete-btn:hover {
-      background: rgba(239, 68, 68, 0.12);
-    }
+    .shelf-delete-btn:hover { background: rgba(239, 68, 68, 0.12); }
 
     .bookmark-ribbon-btn {
       background: transparent;
@@ -712,7 +711,6 @@
       padding: 0.2rem;
     }
 
-    /* CHAPTER / PAGE SELECTOR TABS */
     .nav-tab-group {
       display: flex;
       border-bottom: 1px solid var(--border);
@@ -766,7 +764,8 @@
         <label class="btn-header btn-open-doc" for="fileInput">📁 Open</label>
         <input type="file" id="fileInput" accept=".epub,.pdf,.docx,.txt,.md,.html,.htm,*/*" style="display:none;" />
 
-        <button id="summarizeBtn" class="btn-header btn-summarize">✨ AI</button>
+        <!-- AI Document Summarizer Button -->
+        <button id="summarizeBtn" class="btn-header btn-summarize">✨ Summary</button>
 
         <div id="creditBadge" class="credit-badge">
           <span id="creditDisplay">Sign In</span>
@@ -880,7 +879,7 @@
     </div>
   </main>
 
-  <!-- STICKY BOTTOM PLAYER WITH CHAPTER/PAGE TRIGGER -->
+  <!-- STICKY BOTTOM PLAYER -->
   <div class="mobile-player-bar">
     <div class="player-nav-group">
       <button id="prevPageBtn" class="player-btn-nav" title="Previous Page">←</button>
@@ -908,10 +907,8 @@
         <button id="tabPagesBtn" class="nav-tab-btn">🔢 By Page</button>
       </div>
 
-      <!-- Tab 1: Chapters -->
       <div id="chapterListView" class="modal-scrollable-list"></div>
 
-      <!-- Tab 2: Page Jump -->
       <div id="pageJumpView" style="display:none; flex-direction:column; gap:1.2rem; padding:0.5rem 0;">
         <div style="display:flex; justify-content:space-between; align-items:center;">
           <span style="font-size:0.88rem; color:var(--text-muted);">Select Page:</span>
@@ -933,12 +930,12 @@
     </div>
   </div>
 
-  <!-- MY SHELF / RECENT LIST MODAL WITH DELETE OPTION -->
+  <!-- MY SHELF MODAL -->
   <div id="shelfModal" class="modal-overlay">
     <div class="modal-card">
       <div class="modal-title" id="shelfModalTitle">📚 My Shelf</div>
       <p style="font-size:0.82rem; color:var(--text-muted);">
-        Saved locally in your device browser. Tap a title to read, or tap 🗑️ to delete.
+        Saved locally on your device. Tap a book to open, or tap 🗑️ to delete it.
       </p>
       <div id="shelfModalList" class="modal-scrollable-list"></div>
       <div style="display:flex; justify-content:flex-end;">
@@ -958,10 +955,10 @@
     </div>
   </div>
 
-  <!-- OPTIONS MODAL -->
+  <!-- OPTIONS MODAL WITH KARAOKE SYNC CALIBRATION & BYOK -->
   <div id="optionsModal" class="modal-overlay">
     <div class="modal-card">
-      <div class="modal-title">⚙️ Reading Options</div>
+      <div class="modal-title">⚙ Reading Options</div>
       <div style="display:flex; flex-direction:column; gap:0.9rem;">
         <div>
           <label style="font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:0.35rem;">Font Face</label>
@@ -991,9 +988,40 @@
             <option value="oled">Pitch Black OLED</option>
           </select>
         </div>
+
+        <!-- KARAOKE TIMING CALIBRATION -->
+        <div style="border-top:1px dashed var(--border); padding-top:0.75rem;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.3rem;">
+            <label style="font-weight:600; font-size:0.85rem;">Karaoke Sync Adjustment</label>
+            <span id="syncCalibrationDisplay" style="font-size:0.8rem; color:var(--accent); font-weight:600;">Normal</span>
+          </div>
+          <p style="font-size:0.74rem; color:var(--text-muted); margin-bottom:0.5rem;">
+            Nudge the highlight speed if your phone voice reads slower or faster than the words.
+          </p>
+          <div style="display:flex; align-items:center; gap:0.6rem;">
+            <span style="font-size:0.75rem; color:var(--text-muted);">Slower</span>
+            <input type="range" id="karaokeCalibrationSlider" min="0.75" max="1.35" step="0.05" value="1.0" style="flex:1; accent-color:var(--accent);" />
+            <span style="font-size:0.75rem; color:var(--text-muted);">Faster</span>
+          </div>
+        </div>
+
+        <!-- BRING YOUR OWN KEY (BYOK) -->
+        <div style="border-top:1px dashed var(--border); padding-top:0.75rem;">
+          <div style="font-weight:600; font-size:0.85rem; margin-bottom:0.25rem;">Custom API Keys (Zero Cost)</div>
+          <p style="font-size:0.74rem; color:var(--text-muted); margin-bottom:0.6rem;">
+            Provide your personal keys for unlimited studio voices and AI summaries. Keys are stored only on your device.
+          </p>
+
+          <label style="font-size:0.76rem; color:var(--text-muted); display:block;">OpenAI Key (Audio & Summaries)</label>
+          <input type="password" id="customOpenAiKeyInput" placeholder="sk-..." style="width:100%; margin-top:0.25rem; font-size:14px; padding:0.45rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border);" />
+
+          <label style="font-size:0.76rem; color:var(--text-muted); margin-top:0.5rem; display:block;">ElevenLabs Key</label>
+          <input type="password" id="customElevenKeyInput" placeholder="xi-..." style="width:100%; margin-top:0.25rem; font-size:14px; padding:0.45rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border);" />
+        </div>
       </div>
+
       <div style="display:flex; justify-content:flex-end;">
-        <button id="closeOptionsBtn" data-close="optionsModal" style="padding:0.4rem 0.8rem; border-radius:6px; background:var(--accent); color:#fff; border:none; font-weight:600;">Done</button>
+        <button id="closeOptionsBtn" data-close="optionsModal" style="padding:0.4rem 0.8rem; border-radius:6px; background:var(--accent); color:#fff; border:none; font-weight:600;">Save & Done</button>
       </div>
     </div>
   </div>
@@ -1003,10 +1031,10 @@
     <div class="modal-card">
       <div class="modal-title">ℹ️ About Marginalia</div>
       <p style="font-size:0.85rem; color:var(--text-muted); line-height:1.6;">
-        Marginalia is an adaptive read-along platform combining client-side EPUB/PDF processing, synchronized karaoke TTS, and executive AI summaries.
+        Marginalia is an adaptive read-along reader with client-side document processing, native and neural TTS, and AI summaries.
       </p>
       <div style="font-size:0.8rem; background:var(--bg-main); padding:0.75rem; border-radius:8px; border:1px solid var(--border);">
-        <div style="margin-bottom:0.3rem;"><strong>Version:</strong> 2.6.0 (Multimodal Mobile Edition)</div>
+        <div style="margin-bottom:0.3rem;"><strong>Version:</strong> 2.8.0 (Self-Calibrating Audio Edition)</div>
         <div><strong>Storage:</strong> IndexedDB Offline Bookshelf</div>
       </div>
       <div style="display:flex; justify-content:flex-end;">
@@ -1047,7 +1075,7 @@
     <div class="modal-card">
       <div class="modal-title">🌟 Upgrade to Pro</div>
       <p style="font-size:0.85rem; color:var(--text-muted);">
-        Your free trial AI credits have been exhausted. Upgrade to Pro for unlimited AI document summaries, vision diagram analysis, and neural voices.
+        Your free trial credits have ended. Add your personal key in Options to use cloud features for free, or upgrade to Pro.
       </p>
       <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
         <button id="closePaywallBtn" data-close="paywallModal" style="padding:0.4rem 0.8rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border);">Close</button>
@@ -1075,8 +1103,8 @@
 
   <script>
     // --- SUPABASE CONFIGURATION ---
-    const SUPABASE_PROJECT_URL = "https://your-project.supabase.co"; 
-    const SUPABASE_ANON_KEY = "sb_publishable_or_anon_key";
+    const SUPABASE_PROJECT_URL = "https://nnxphilhkhvwnitxvzdi.supabase.co"; 
+    const SUPABASE_ANON_KEY = "sb_publishable_ekzdgLR6FSDHnP2DZNklMQ_n3-k0ZLN";
 
     let supabaseClient = null;
     if (SUPABASE_PROJECT_URL && !SUPABASE_PROJECT_URL.includes("your-project")) {
@@ -1117,7 +1145,7 @@
       toggleCaret.textContent = isCollapsed ? 'Settings ▾' : 'Hide ▴';
     });
 
-    // --- INDEXEDDB STORAGE (WITH DELETE SUPPORT) ---
+    // --- INDEXEDDB STORAGE (WITH DELETE) ---
     const DB_NAME = "MarginaliaBookDB";
     const DB_VERSION = 1;
     let dbInstance = null;
@@ -1244,7 +1272,7 @@
       [
         "Welcome to Marginalia Mobile Reader.",
         "Tap the Open button above to import any EPUB, PDF, Word, or text file.",
-        "Tap the page indicator at the bottom to jump to any page or chapter instantly.",
+        "The karaoke highlighter dynamically adjusts to match your phone's speaking rhythm.",
         "Your books and diagrams are saved automatically in your browser."
       ]
     ];
@@ -1262,6 +1290,12 @@
     let activeEngine = 'browser';
     let playbackSpeed = 1.0;
     const speedSteps = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0];
+
+    // --- SELF-LEARNING ADAPTIVE CADENCE STATE ---
+    let learnedCadenceMultiplier = 1.0; // Auto-learns actual phone TTS speaking rate
+    let userManualCalibration = 1.0;   // Manual slider adjustment from Options
+    let sentenceSpeechStartTime = 0;
+    let estimatedSentenceDurationMs = 0;
 
     const browserSpeech = window.speechSynthesis;
     let currentUtterance = null;
@@ -1334,6 +1368,10 @@
     const fontSelect = document.getElementById('fontSelect');
     const fontSizeSelect = document.getElementById('fontSizeSelect');
     const optionThemeSelect = document.getElementById('optionThemeSelect');
+    const customOpenAiKeyInput = document.getElementById('customOpenAiKeyInput');
+    const customElevenKeyInput = document.getElementById('customElevenKeyInput');
+    const karaokeCalibrationSlider = document.getElementById('karaokeCalibrationSlider');
+    const syncCalibrationDisplay = document.getElementById('syncCalibrationDisplay');
 
     // --- DRAWER CONTROLLER ---
     function openDrawer() {
@@ -1374,7 +1412,6 @@
             </div>
           `;
 
-          // Delete click listener
           const delBtn = card.querySelector('.shelf-delete-btn');
           delBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
@@ -1384,7 +1421,6 @@
             }
           });
 
-          // Open click listener
           card.addEventListener('click', () => {
             stopAudio();
             bookPages = b.pages;
@@ -1477,7 +1513,7 @@
         chapterListView.innerHTML = '<div style="text-align:center; padding:1.5rem; color:var(--text-muted);">No separate chapters found.</div>';
       } else {
         const currentCh = getCurrentChapter();
-        bookChapters.forEach((ch, idx) => {
+        bookChapters.forEach((ch) => {
           const item = document.createElement('div');
           item.className = `chapter-item ${ch.pageIndex === currentCh.pageIndex ? 'active' : ''}`;
           item.innerHTML = `
@@ -1540,6 +1576,10 @@
     btnDrawerOptions.addEventListener('click', () => {
       closeDrawer();
       optionThemeSelect.value = document.documentElement.getAttribute('data-theme') || 'dark';
+      customOpenAiKeyInput.value = localStorage.getItem('marginalia_byok_openai') || '';
+      customElevenKeyInput.value = localStorage.getItem('marginalia_byok_eleven') || '';
+      karaokeCalibrationSlider.value = userManualCalibration;
+      updateSyncCalibrationLabel(userManualCalibration);
       optionsModal.style.display = 'flex';
     });
 
@@ -1562,6 +1602,26 @@
       localStorage.setItem('marginalia_theme', e.target.value);
     });
 
+    function updateSyncCalibrationLabel(val) {
+      if (val === 1.0) syncCalibrationDisplay.textContent = "Normal (Auto-Sync)";
+      else if (val < 1.0) syncCalibrationDisplay.textContent = `${Math.round((1 - val) * 100)}% Slower`;
+      else syncCalibrationDisplay.textContent = `${Math.round((val - 1) * 100)}% Faster`;
+    }
+
+    karaokeCalibrationSlider.addEventListener('input', (e) => {
+      const val = parseFloat(e.target.value);
+      userManualCalibration = val;
+      updateSyncCalibrationLabel(val);
+      localStorage.setItem('marginalia_sync_calibration', val.toString());
+    });
+
+    document.getElementById('closeOptionsBtn').addEventListener('click', () => {
+      localStorage.setItem('marginalia_byok_openai', customOpenAiKeyInput.value.trim());
+      localStorage.setItem('marginalia_byok_eleven', customElevenKeyInput.value.trim());
+      localStorage.setItem('marginalia_sync_calibration', userManualCalibration.toString());
+      updateAuthBadge();
+    });
+
     // --- AUTHENTICATION & CREDITS ---
     async function getFreshAuthToken() {
       if (!supabaseClient) return null;
@@ -1570,6 +1630,11 @@
     }
 
     async function updateAuthBadge(explicitRemaining = null) {
+      const hasByok = Boolean(localStorage.getItem('marginalia_byok_openai') || localStorage.getItem('marginalia_byok_eleven'));
+      if (hasByok) {
+        creditDisplay.textContent = "⚡ BYOK Active";
+        return;
+      }
       if (!supabaseClient) {
         creditDisplay.textContent = "⚡ Free Tier";
         return;
@@ -1629,35 +1694,43 @@
       }
     });
 
-    // --- CADENCE TIMELINE ENGINE ---
+    // --- ACCURATE CADENCE TIMELINE ENGINE ---
     function computeWordTimeline(words, speed, totalDuration = null) {
-      const baseMsPerChar = 68 / speed;
+      // Base: Realistic ~130 WPM speech rate on phones (88ms per character)
+      // Scaled by speed setting, user manual calibration slider, and self-learned engine multiplier
+      const effectiveCadenceFactor = learnedCadenceMultiplier * userManualCalibration;
+      const baseMsPerChar = (88 * effectiveCadenceFactor) / speed;
       const timeline = [];
       let totalEst = 0;
 
       words.forEach((word) => {
         const clean = word.trim();
         const charCount = Math.max(1, clean.replace(/[^a-zA-Z0-9]/g, '').length);
-        let duration = Math.max(160 / speed, charCount * baseMsPerChar);
+        let duration = Math.max(220 / speed, charCount * baseMsPerChar);
 
-        if (/[,;:\-]/.test(clean)) duration += 280 / speed;
-        else if (/[.!?]/.test(clean)) duration += 420 / speed;
+        // Natural breath & punctuation pauses
+        if (/[,;:\-]/.test(clean)) duration += (350 * effectiveCadenceFactor) / speed;
+        else if (/[.!?]/.test(clean)) duration += (550 * effectiveCadenceFactor) / speed;
 
         timeline.push({ duration });
         totalEst += duration;
       });
 
+      // Normalize if audio has an exact physical duration (e.g. serverless audio tracks)
       if (totalDuration && totalDuration > 0) {
         const ratio = (totalDuration * 1000) / totalEst;
         timeline.forEach(item => { item.duration *= ratio; });
       }
 
       let accum = 0;
-      return timeline.map(item => {
-        const start = accum;
-        accum += item.duration;
-        return { start: start / 1000, end: accum / 1000 };
-      });
+      return {
+        timeline: timeline.map(item => {
+          const start = accum;
+          accum += item.duration;
+          return { start: start / 1000, end: accum / 1000 };
+        }),
+        totalEstMs: accum
+      };
     }
 
     // --- DOM BUILDERS ---
@@ -1830,27 +1903,23 @@
 
       const voices = browserSpeech.getVoices();
       if (voices.length > 0 && voicePicker.value && voicePicker.value !== "default") {
-        // Match exact selected voice by unique URI or composite identifier
         const selectedVoice = voices.find(v => (v.voiceURI === voicePicker.value) || (`${v.name}:::${v.lang}` === voicePicker.value));
         if (selectedVoice) {
           currentUtterance.voice = selectedVoice;
-          // CRITICAL: Explicitly set lang to force Android TTS engine to load correct accent/voice
           currentUtterance.lang = selectedVoice.lang;
         }
       }
 
       const wordsArr = text.trim().split(/\s+/).filter(w => w.length > 0);
-      const timeline = computeWordTimeline(wordsArr, playbackSpeed);
+      const computed = computeWordTimeline(wordsArr, playbackSpeed);
+      const timeline = computed.timeline;
+      estimatedSentenceDurationMs = computed.totalEstMs;
 
       let boundaryCount = 0;
-      let lastBoundaryTime = 0;
       let usingNativeBoundaries = false;
 
       currentUtterance.onboundary = (e) => {
         if (e.name === 'word') {
-          const now = performance.now();
-          if (lastBoundaryTime && (now - lastBoundaryTime < 75)) return;
-          lastBoundaryTime = now;
           boundaryCount++;
           if (boundaryCount > 1) {
             usingNativeBoundaries = true;
@@ -1863,22 +1932,39 @@
 
       currentUtterance.onstart = () => {
         highlightActiveWord(0);
-        const startTime = performance.now();
+        sentenceSpeechStartTime = performance.now();
+
+        // 240ms startup grace period to absorb mobile audio buffer initialization
+        const audioBufferDelaySec = 0.24 / playbackSpeed;
 
         wordTimerInterval = setInterval(() => {
           if (usingNativeBoundaries) return;
-          const elapsedSec = (performance.now() - startTime) / 1000;
+          const rawElapsedSec = (performance.now() - sentenceSpeechStartTime) / 1000;
+          const effectiveElapsedSec = Math.max(0, rawElapsedSec - audioBufferDelaySec);
+
           let activeIdx = 0;
           for (let i = 0; i < timeline.length; i++) {
-            if (elapsedSec >= timeline[i].start) activeIdx = i;
+            if (effectiveElapsedSec >= timeline[i].start) activeIdx = i;
             else break;
           }
           highlightActiveWord(activeIdx);
-        }, 50);
+        }, 40);
       };
 
       currentUtterance.onend = () => {
         if (wordTimerInterval) clearInterval(wordTimerInterval);
+
+        // SELF-LEARNING CADENCE RECALIBRATION:
+        // Measure real time taken vs estimated time to lock sync on the next sentence
+        if (sentenceSpeechStartTime && estimatedSentenceDurationMs > 400) {
+          const actualElapsedMs = performance.now() - sentenceSpeechStartTime;
+          const observedRatio = actualElapsedMs / estimatedSentenceDurationMs;
+          if (observedRatio >= 0.6 && observedRatio <= 1.8) {
+            // Smoothly adapt the multiplier towards the voice's real speaking rate
+            learnedCadenceMultiplier = (learnedCadenceMultiplier * 0.4) + (observedRatio * 0.6);
+          }
+        }
+
         if (!isPlaying) return;
         currentSentenceIdx++;
         playCurrentSentence();
@@ -1890,10 +1976,13 @@
 
     async function speakServerless(text) {
       try {
+        const customOpenAi = localStorage.getItem('marginalia_byok_openai') || '';
+        const customEleven = localStorage.getItem('marginalia_byok_eleven') || '';
         const token = await getFreshAuthToken();
-        if (!token) {
+
+        if (!token && !customOpenAi && !customEleven) {
           stopAudio();
-          alert("Please sign in to access cloud voices.");
+          alert("Please sign in or enter your custom API key in Options.");
           authModal.style.display = 'flex';
           return;
         }
@@ -1904,12 +1993,14 @@
 
         if (!audioSrc) {
           preloadStatus.textContent = "Connecting...";
+          const headers = { 'Content-Type': 'application/json' };
+          if (token) headers['Authorization'] = `Bearer ${token}`;
+          if (customOpenAi) headers['x-custom-openai-key'] = customOpenAi;
+          if (customEleven) headers['x-custom-elevenlabs-key'] = customEleven;
+
           const res = await fetch('/api/tts', {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${token}`
-            },
+            headers,
             body: JSON.stringify({
               text,
               voiceId: voicePicker.value,
@@ -1937,7 +2028,7 @@
 
         audioElement.ontimeupdate = () => {
           if (!timeline && audioElement.duration) {
-            timeline = computeWordTimeline(wordsArr, playbackSpeed, audioElement.duration);
+            timeline = computeWordTimeline(wordsArr, playbackSpeed, audioElement.duration).timeline;
           }
           if (timeline) {
             const cur = audioElement.currentTime;
@@ -2057,14 +2148,13 @@
           opt.value = "default";
           opt.textContent = "System Default Voice";
           voicePicker.appendChild(opt);
-          activeVoiceBadge.textContent = "🎙️️ System Default";
+          activeVoiceBadge.textContent = "🎙️ System Default";
           return;
         }
 
         const userLang = (navigator.language || 'en').toLowerCase().split('-')[0];
         const indexed = voices.map(v => v);
 
-        // Sort voices: device language first, then English, then alphabetical
         indexed.sort((a, b) => {
           const aL = a.lang.toLowerCase();
           const bL = b.lang.toLowerCase();
@@ -2083,7 +2173,6 @@
 
         indexed.forEach(v => {
           const opt = document.createElement('option');
-          // Key by voiceURI or fallback signature to ensure unique mapping
           const vKey = v.voiceURI || `${v.name}:::${v.lang}`;
           opt.value = vKey;
           opt.textContent = `${v.name} (${v.lang})`;
@@ -2123,16 +2212,14 @@
 
     voicePicker.addEventListener('change', () => {
       audioPreloadCache.clear();
+      learnedCadenceMultiplier = 1.0; // Reset self-calibrator to adapt to the new voice
       const selectedOption = voicePicker.options[voicePicker.selectedIndex];
       activeVoiceBadge.textContent = `${activeEngine === 'browser' ? '🎙️' : '⚡'} ${selectedOption ? selectedOption.text.split('(')[0].trim() : 'Voice'}`;
       
-      // If audio is actively playing, smoothly restart with the new voice
       if (isPlaying) {
         stopAudio();
         isPlaying = true;
-        setTimeout(() => {
-          playCurrentSentence();
-        }, 60);
+        setTimeout(() => { playCurrentSentence(); }, 60);
       }
     });
 
@@ -2142,6 +2229,7 @@
         tab.classList.add('active');
         activeEngine = tab.dataset.engine;
         audioPreloadCache.clear();
+        learnedCadenceMultiplier = 1.0;
         populateVoices();
         if (isPlaying) {
           stopAudio();
@@ -2154,9 +2242,11 @@
     // --- AI VISION: EXPLAIN DIAGRAM ---
     async function explainDiagram(imgSrc, captionText = "") {
       stopAudio();
+      const customOpenAi = localStorage.getItem('marginalia_byok_openai') || '';
       const token = await getFreshAuthToken();
-      if (!token) {
-        alert("Please sign in or create an account to analyze diagrams.");
+
+      if (!token && !customOpenAi) {
+        alert("Please sign in or enter your OpenAI key in Options to analyze diagrams.");
         authModal.style.display = 'flex';
         return;
       }
@@ -2165,12 +2255,13 @@
       contentPane.innerHTML = `<div style="text-align:center; padding:3rem; color:var(--text-muted); font-style:italic;">Analyzing diagram with Vision AI...</div>`;
 
       try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+        if (customOpenAi) headers['x-custom-openai-key'] = customOpenAi;
+
         const res = await fetch('/api/describe-image', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
+          headers,
           body: JSON.stringify({ imageBase64: imgSrc })
         });
 
@@ -2216,29 +2307,37 @@
 
     // --- AI DOCUMENT SUMMARIZER ---
     summarizeBtn.addEventListener('click', async () => {
+      const customOpenAi = localStorage.getItem('marginalia_byok_openai') || '';
       const token = await getFreshAuthToken();
-      if (!token) {
-        alert("Please sign in or create an account to use AI summaries.");
+
+      if (!token && !customOpenAi) {
+        alert("Please sign in or enter your OpenAI key in Options to use AI summaries.");
         authModal.style.display = 'flex';
         return;
       }
 
-      const { data: { session } } = await supabaseClient.auth.getSession();
-      const { data: profile } = await supabaseClient
-        .from('profiles')
-        .select('summary_credits_remaining, tier')
-        .eq('id', session.user.id)
-        .single();
+      if (customOpenAi) {
+        summaryTrialNotice.textContent = "Status: Using custom OpenAI Key (Unlimited)";
+      } else if (supabaseClient) {
+        const { data: { session } } = await supabaseClient.auth.getSession();
+        if (session) {
+          const { data: profile } = await supabaseClient
+            .from('profiles')
+            .select('summary_credits_remaining, tier')
+            .eq('id', session.user.id)
+            .single();
 
-      if (profile) {
-        if (profile.tier === 'pro') {
-          summaryTrialNotice.textContent = "Plan: Pro Subscriber (Unlimited Summaries)";
-        } else {
-          const trials = profile.summary_credits_remaining ?? 3;
-          summaryTrialNotice.textContent = `Free Trial: ${trials} summaries remaining`;
-          if (trials <= 0) {
-            paywallModal.style.display = 'flex';
-            return;
+          if (profile) {
+            if (profile.tier === 'pro') {
+              summaryTrialNotice.textContent = "Plan: Pro Subscriber (Unlimited Summaries)";
+            } else {
+              const trials = profile.summary_credits_remaining ?? 3;
+              summaryTrialNotice.textContent = `Free Trial: ${trials} summaries remaining`;
+              if (trials <= 0) {
+                paywallModal.style.display = 'flex';
+                return;
+              }
+            }
           }
         }
       }
@@ -2250,8 +2349,10 @@
       summaryModal.style.display = 'none';
       stopAudio();
 
+      const customOpenAi = localStorage.getItem('marginalia_byok_openai') || '';
       const token = await getFreshAuthToken();
-      if (!token) return;
+
+      if (!token && !customOpenAi) return;
 
       const flattenItems = (items) => items.map(it => typeof it === 'string' ? it : (it?.caption || '')).join(' ');
       let text = mode === 'chapter' ? flattenItems(bookPages[currentPage] || []) : flattenItems(bookPages.flat());
@@ -2260,12 +2361,13 @@
       contentPane.innerHTML = `<div style="text-align:center; padding:3rem; color:var(--text-muted); font-style:italic;">Generating AI Summary...</div>`;
 
       try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+        if (customOpenAi) headers['x-custom-openai-key'] = customOpenAi;
+
         const res = await fetch('/api/summarize', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
+          headers,
           body: JSON.stringify({ text, mode })
         });
 
@@ -2592,6 +2694,7 @@
 
         currentPage = 0;
         currentSentenceIdx = 0;
+        learnedCadenceMultiplier = 1.0; // Reset self-calibrator for fresh document
         preloadStatus.textContent = "Ready";
         renderPage(0);
         saveBookToShelf(currentDocName, bookPages, bookChapters);
@@ -2608,6 +2711,12 @@
     // Startup Initialization
     const savedTheme = localStorage.getItem('marginalia_theme') || 'dark';
     document.documentElement.setAttribute('data-theme', savedTheme);
+
+    const savedCalibration = localStorage.getItem('marginalia_sync_calibration');
+    if (savedCalibration) {
+      userManualCalibration = parseFloat(savedCalibration) || 1.0;
+    }
+
     initIndexedDB();
     populateVoices();
     renderPage(0);
