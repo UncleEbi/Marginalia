@@ -1,9 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabase = createClient(
-  process.env.SUPABASE_URL || '',
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ''
-);
+const supabaseUrl = process.env.SUPABASE_URL || process.env.SUPABASE_PROJECT_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY;
+
+const supabase = (supabaseUrl && supabaseKey) ? createClient(supabaseUrl, supabaseKey) : null;
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -18,17 +18,25 @@ export default async function handler(req, res) {
 
   let isPro = false;
   let user = null;
-  let trialLeft = 0;
+  let trialLeft = 3;
 
-  // If user did not provide a custom key, enforce Supabase account quotas
+  // Enforce Supabase account quotas if user is not using their own key
   if (!customOpenAiKey) {
     if (!token) {
-      return res.status(401).json({ error: 'Please sign in or enter your custom OpenAI key in Options.' });
+      return res.status(401).json({ error: 'No active session. Please sign in or enter your OpenAI key in Options.' });
+    }
+
+    if (!supabase) {
+      return res.status(500).json({ 
+        error: 'Backend error: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing in Vercel environment variables.' 
+      });
     }
 
     const { data: authData, error: authErr } = await supabase.auth.getUser(token);
     if (authErr || !authData?.user) {
-      return res.status(401).json({ error: 'Invalid or expired user session.' });
+      return res.status(401).json({ 
+        error: authErr?.message ? `Auth error: ${authErr.message}. Please sign in again.` : 'Invalid or expired user session. Please sign in again.' 
+      });
     }
     user = authData.user;
 
@@ -38,8 +46,19 @@ export default async function handler(req, res) {
       .eq('id', user.id)
       .single();
 
-    isPro = profile?.tier === 'pro';
-    trialLeft = profile?.summary_credits_remaining ?? 0;
+    if (profile) {
+      isPro = profile.tier === 'pro';
+      trialLeft = profile.summary_credits_remaining ?? 3;
+    } else {
+      // Auto-provision a default free-tier profile row if one does not exist
+      await supabase.from('profiles').upsert({
+        id: user.id,
+        email: user.email,
+        summary_credits_remaining: 3,
+        neural_chars_remaining: 5000,
+        tier: 'free'
+      }).catch(() => {});
+    }
 
     if (!isPro && trialLeft <= 0) {
       return res.status(402).json({
@@ -51,7 +70,7 @@ export default async function handler(req, res) {
 
   const apiKey = customOpenAiKey || process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    return res.status(500).json({ error: 'No OpenAI API key found.' });
+    return res.status(500).json({ error: 'No OpenAI API key found. Add OPENAI_API_KEY in Vercel or enter your key in Options.' });
   }
 
   const systemPrompt = "You are an executive reading companion. Summarize the text clearly and naturally so it flows smoothly when read aloud via text-to-speech narration. Avoid markdown bullet symbols, asterisks, or raw symbols that sound clunky when read by audio engines.";
