@@ -1,173 +1,181 @@
 import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
+  process.env.SUPABASE_URL || '',
+  process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 );
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { text, voiceId, engine, speed = 1.0 } = req.body;
+  const { text, voiceId, engine = 'openai', speed = 1.0 } = req.body || {};
+  const customOpenAiKey = req.headers['x-custom-openai-key'];
+  const customElevenKey = req.headers['x-custom-elevenlabs-key'];
   const token = req.headers.authorization?.replace('Bearer ', '');
 
-  if (!token) {
-    return res.status(401).json({ error: 'Authentication required. Please sign in to use neural voices.' });
-  }
-  if (!text || text.length === 0) {
-    return res.status(400).json({ error: 'No text provided' });
+  if (!text || !text.trim()) {
+    return res.status(400).json({ error: 'No text provided for narration.' });
   }
 
-  // 1. Verify user session via Supabase JWT
-  const { data: { user }, error: authErr } = await supabase.auth.getUser(token);
-  if (authErr || !user) {
-    return res.status(401).json({ error: `Invalid user session: ${authErr?.message || 'User not found'}` });
-  }
+  const charCount = text.length;
+  const isByok = (engine === 'openai' && customOpenAiKey) || (engine === 'elevenlabs' && customElevenKey);
+  let user = null;
+  let remainingChars = null;
 
-  // 2. Fetch current character balance
-  const { data: profile, error: profErr } = await supabase
-    .from('profiles')
-    .select('neural_chars_remaining, tier')
-    .eq('id', user.id)
-    .single();
+  // Check Supabase quota only if using host-funded APIs
+  if (!isByok) {
+    if (!token) {
+      return res.status(401).json({ error: 'Please sign in or enter your custom API key in Options.' });
+    }
 
-  if (profErr || !profile) {
-    return res.status(404).json({ error: 'Profile record not found in Supabase database.' });
-  }
+    const { data: authData, error: authErr } = await supabase.auth.getUser(token);
+    if (authErr || !authData?.user) {
+      return res.status(401).json({ error: 'Invalid or expired user session.' });
+    }
+    user = authData.user;
 
-  const charCost = text.length;
-  if (profile.neural_chars_remaining < charCost) {
-    return res.status(402).json({ 
-      error: 'Character balance depleted. Upgrade to continue listening with neural voices.' 
-    });
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('neural_chars_remaining')
+      .eq('id', user.id)
+      .single();
+
+    remainingChars = profile?.neural_chars_remaining ?? 5000;
+    if (remainingChars < charCount) {
+      return res.status(402).json({
+        error: `Insufficient neural character quota (${remainingChars.toLocaleString()} left). Add your API key in Options or upgrade.`,
+        charsExhausted: true
+      });
+    }
   }
 
   try {
-    let resultPayload = {};
+    let audioBase64 = null;
 
-    // --- ELEVENLABS ---
-    if (engine === 'elevenlabs') {
-      if (!process.env.ELEVENLABS_API_KEY) {
-        throw new Error('ELEVENLABS_API_KEY is not configured in Vercel environment variables.');
-      }
+    // 1. OPENAI AUDIO ENGINE
+    if (engine === 'openai') {
+      const apiKey = customOpenAiKey || process.env.OPENAI_API_KEY;
+      if (!apiKey) throw new Error('OpenAI API key not configured.');
 
-      const elevenRes = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/with-timestamps`, {
+      const response = await fetch('https://api.openai.com/v1/audio/speech', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'xi-api-key': process.env.ELEVENLABS_API_KEY
-        },
-        body: JSON.stringify({
-          text,
-          model_id: 'eleven_multilingual_v2'
-        })
-      });
-
-      if (!elevenRes.ok) {
-        const errDetail = await elevenRes.text();
-        throw new Error(`ElevenLabs error (${elevenRes.status}): ${errDetail}`);
-      }
-
-      resultPayload = await elevenRes.json();
-    }
-
-    // --- OPENAI AUDIO ---
-    else if (engine === 'openai') {
-      if (!process.env.OPENAI_API_KEY) {
-        throw new Error('OPENAI_API_KEY is not configured in Vercel environment variables.');
-      }
-
-      const openAiRes = await fetch('https://api.openai.com/v1/audio/speech', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+          'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           model: 'tts-1',
           input: text,
           voice: voiceId || 'alloy',
-          speed: parseFloat(speed)
+          speed: Math.max(0.25, Math.min(4.0, speed))
         })
       });
 
-      if (!openAiRes.ok) {
-        const errDetail = await openAiRes.text();
-        throw new Error(`OpenAI error (${openAiRes.status}): ${errDetail}`);
+      if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`OpenAI TTS error (${response.status}): ${err}`);
       }
 
-      const arrayBuffer = await openAiRes.arrayBuffer();
-      resultPayload = { audio_base64: Buffer.from(arrayBuffer).toString('base64') };
+      const buffer = await response.arrayBuffer();
+      audioBase64 = Buffer.from(buffer).toString('base64');
     }
 
-    // --- GOOGLE CLOUD TTS ---
-    else if (engine === 'google') {
-      if (!process.env.GOOGLE_TTS_API_KEY) {
-        throw new Error('GOOGLE_TTS_API_KEY is not configured in Vercel environment variables.');
+    // 2. ELEVENLABS AUDIO ENGINE
+    else if (engine === 'elevenlabs') {
+      const apiKey = customElevenKey || process.env.ELEVENLABS_API_KEY;
+      if (!apiKey) throw new Error('ElevenLabs API key not configured.');
+
+      const vId = voiceId || '21m00Tcm4TlvDq8ikWAM'; // Rachel default
+      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${vId}`, {
+        method: 'POST',
+        headers: {
+          'xi-api-key': apiKey,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          text,
+          model_id: 'eleven_monolingual_v1',
+          voice_settings: { stability: 0.5, similarity_boost: 0.75 }
+        })
+      });
+
+      if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`ElevenLabs error (${response.status}): ${err}`);
       }
 
-      const lang = voiceId ? voiceId.split('-').slice(0, 2).join('-') : 'en-US';
-      const googleRes = await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${process.env.GOOGLE_TTS_API_KEY}`, {
+      const buffer = await response.arrayBuffer();
+      audioBase64 = Buffer.from(buffer).toString('base64');
+    }
+
+    // 3. GOOGLE CLOUD TTS
+    else if (engine === 'google') {
+      const apiKey = process.env.GOOGLE_TTS_API_KEY;
+      if (!apiKey) throw new Error('Google Cloud TTS API key not configured.');
+
+      const response = await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           input: { text },
-          voice: { languageCode: lang, name: voiceId || 'en-US-Journey-F' },
-          audioConfig: { audioEncoding: 'MP3', speakingRate: parseFloat(speed) }
+          voice: { languageCode: 'en-US', name: voiceId || 'en-US-Journey-F' },
+          audioConfig: { audioEncoding: 'MP3', speakingRate: speed }
         })
       });
 
-      if (!googleRes.ok) {
-        const errDetail = await googleRes.text();
-        throw new Error(`Google Cloud TTS error (${googleRes.status}): ${errDetail}`);
+      if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`Google TTS error (${response.status}): ${err}`);
       }
 
-      const data = await googleRes.json();
-      resultPayload = { audio_base64: data.audioContent };
+      const data = await response.json();
+      audioBase64 = data.audioContent;
     }
 
-    // --- AZURE SPEECH ---
+    // 4. AZURE SPEECH ENGINE
     else if (engine === 'azure') {
-      if (!process.env.AZURE_SPEECH_KEY) {
-        throw new Error('AZURE_SPEECH_KEY is not configured in Vercel environment variables.');
-      }
-
+      const key = process.env.AZURE_SPEECH_KEY;
       const region = process.env.AZURE_SPEECH_REGION || 'eastus';
-      const voice = voiceId || 'en-US-JennyNeural';
-      const ssml = `<speak version='1.0' xml:lang='en-US'><voice name='${voice}'>${text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</voice></speak>`;
+      if (!key) throw new Error('Azure Speech API key not configured.');
 
-      const azureRes = await fetch(`https://${region}.tts.speech.microsoft.com/cognitiveservices/v1`, {
+      const ssml = `<speak version='1.0' xml:lang='en-US'><voice name='${voiceId || 'en-US-JennyNeural'}'><prosody rate='${speed}'>${text}</prosody></voice></speak>`;
+      const response = await fetch(`https://${region}.tts.speech.microsoft.com/cognitiveservices/v1`, {
         method: 'POST',
         headers: {
-          'Ocp-Apim-Subscription-Key': process.env.AZURE_SPEECH_KEY,
+          'Ocp-Apim-Subscription-Key': key,
           'Content-Type': 'application/ssml+xml',
           'X-Microsoft-OutputFormat': 'audio-16khz-128kbitrate-mono-mp3'
         },
         body: ssml
       });
 
-      if (!azureRes.ok) {
-        const errDetail = await azureRes.text();
-        throw new Error(`Azure Speech error (${azureRes.status}): ${errDetail}`);
+      if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`Azure Speech error (${response.status}): ${err}`);
       }
 
-      const arrayBuffer = await azureRes.arrayBuffer();
-      resultPayload = { audio_base64: Buffer.from(arrayBuffer).toString('base64') };
+      const buffer = await response.arrayBuffer();
+      audioBase64 = Buffer.from(buffer).toString('base64');
     }
 
     else {
       return res.status(400).json({ error: `Unsupported engine: ${engine}` });
     }
 
-    // 3. Deduct character cost and calculate remaining balance
-    const updatedRemaining = profile.neural_chars_remaining - charCost;
-    await supabase
-      .from('profiles')
-      .update({ neural_chars_remaining: updatedRemaining })
-      .eq('id', user.id);
+    // Deduct characters from ledger if running on host balance
+    let updatedRemaining = remainingChars;
+    if (!isByok && user && remainingChars !== null) {
+      updatedRemaining = Math.max(0, remainingChars - charCount);
+      await supabase
+        .from('profiles')
+        .update({ neural_chars_remaining: updatedRemaining })
+        .eq('id', user.id);
+    }
 
-    resultPayload.remaining_chars = updatedRemaining;
-    return res.status(200).json(resultPayload);
+    return res.status(200).json({
+      audio_base64: audioBase64,
+      remaining_chars: isByok ? 'Unlimited (BYOK)' : updatedRemaining
+    });
 
   } catch (err) {
     return res.status(500).json({ error: err.message });
