@@ -208,7 +208,7 @@
       white-space: nowrap;
     }
 
-    /* COLLAPSIBLE CONTROLS */
+    /* CONTROLS */
     .controls-panel {
       max-width: 860px;
       width: calc(100% - 1.2rem);
@@ -431,7 +431,7 @@
       white-space: nowrap;
     }
 
-    /* STICKY BOTTOM PLAYER */
+    /* BOTTOM PLAYER */
     .mobile-player-bar {
       position: fixed;
       bottom: 0; left: 0; right: 0;
@@ -509,7 +509,7 @@
       cursor: pointer;
     }
 
-    /* MOON+ READER DRAWER */
+    /* DRAWER */
     .drawer-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -616,7 +616,7 @@
     }
     .drawer-quick-btn span.icon { font-size: 1.15rem; color: var(--text-main); }
 
-    /* MODAL ARCHITECTURE: SCROLLABLE WITH STICKY HEAD & FOOT */
+    /* MODAL ARCHITECTURE: SCROLLABLE WITH PINNED HEADER/FOOTER */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -778,6 +778,31 @@
       border-color: var(--accent);
       background: rgba(56, 189, 248, 0.08);
     }
+
+    /* AUTH INPUTS & AUTOFILL FIX */
+    .auth-input-field {
+      width: 100%;
+      padding: 0.65rem 0.8rem;
+      border-radius: 8px;
+      font-size: 15px;
+      border: 1px solid var(--border);
+      background: var(--bg-main) !important;
+      color: var(--text-main) !important;
+      box-sizing: border-box;
+      outline: none;
+      transition: border-color var(--transition);
+    }
+    .auth-input-field:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent);
+    }
+    .auth-input-field:-webkit-autofill,
+    .auth-input-field:-webkit-autofill:hover, 
+    .auth-input-field:-webkit-autofill:focus {
+      -webkit-text-fill-color: var(--text-main) !important;
+      -webkit-box-shadow: 0 0 0px 1000px var(--bg-main) inset !important;
+      transition: background-color 5000s ease-in-out 0s;
+    }
   </style>
 </head>
 <body>
@@ -861,7 +886,7 @@
   </aside>
 
   <main>
-    <!-- COLLAPSIBLE VOICE BAR -->
+    <!-- VOICE & ENGINE BAR -->
     <div class="controls-panel">
       <div class="controls-toggle-bar" id="controlsToggleBar">
         <span id="activeVoiceBadge" style="font-weight:600; color:var(--accent);">🎙️ Native Voice</span>
@@ -1073,7 +1098,7 @@
         Marginalia is an adaptive read-along reader with client-side document processing, native and neural TTS, and AI summaries.
       </p>
       <div style="font-size:0.8rem; background:var(--bg-main); padding:0.75rem; border-radius:8px; border:1px solid var(--border);">
-        <div style="margin-bottom:0.3rem;"><strong>Version:</strong> 2.9.1 (Scroll-Optimized Options Edition)</div>
+        <div style="margin-bottom:0.3rem;"><strong>Version:</strong> 2.9.3 (Auth-Resolved Edition)</div>
         <div><strong>Storage:</strong> IndexedDB Offline Bookshelf</div>
       </div>
       <div style="display:flex; justify-content:flex-end;">
@@ -1123,17 +1148,36 @@
     </div>
   </div>
 
-  <!-- AUTH MODAL -->
+  <!-- AUTH MODAL: FIXED SPACING, DEDICATED LABELS & STATUS BANNER -->
   <div id="authModal" class="modal-overlay">
-    <div class="modal-card">
-      <div class="modal-title">Account & Quota Access</div>
-      <p style="font-size:0.85rem; color:var(--text-muted);">Sign in to access your free trial summaries and neural voice quota.</p>
-      <input type="email" id="authEmail" class="input-field" placeholder="Email address" style="width:100%; padding:0.6rem; border-radius:6px; font-size:16px; border:1px solid var(--border); background:var(--bg-main); color:var(--text-main);" />
-      <input type="password" id="authPass" class="input-field" placeholder="Password" style="width:100%; padding:0.6rem; border-radius:6px; font-size:16px; border:1px solid var(--border); background:var(--bg-main); color:var(--text-main);" />
-      <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
-        <button id="authCloseBtn" data-close="authModal" style="padding:0.4rem 0.8rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border);">Cancel</button>
-        <button id="authSignUpBtn" style="padding:0.4rem 0.8rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border);">Sign Up</button>
-        <button id="authSignInBtn" style="background:var(--accent); color:#fff; border:none; font-weight:600; padding:0.4rem 0.8rem; border-radius:6px;">Sign In</button>
+    <div class="modal-card" style="max-width:390px; gap:0.75rem;">
+      <div class="modal-header-bar" style="margin-bottom:0; padding-bottom:0.5rem;">
+        <div class="modal-title">Account & Quota Access</div>
+        <button class="bookmark-ribbon-btn" data-close="authModal" style="font-size:1.1rem;">✕</button>
+      </div>
+
+      <p style="font-size:0.83rem; color:var(--text-muted); line-height:1.4;">
+        Sign in to access your free trial summaries and neural voice quota.
+      </p>
+
+      <div id="authStatusAlert" style="display:none; font-size:0.8rem; padding:0.6rem 0.75rem; border-radius:6px; line-height:1.35;"></div>
+
+      <div style="display:flex; flex-direction:column; gap:0.75rem;">
+        <div>
+          <label style="font-size:0.78rem; font-weight:600; color:var(--text-muted); display:block; margin-bottom:0.35rem;">Email Address</label>
+          <input type="email" id="authEmail" class="auth-input-field" placeholder="you@example.com" autocomplete="email" />
+        </div>
+
+        <div>
+          <label style="font-size:0.78rem; font-weight:600; color:var(--text-muted); display:block; margin-bottom:0.35rem;">Password</label>
+          <input type="password" id="authPass" class="auth-input-field" placeholder="••••••••" autocomplete="current-password" />
+        </div>
+      </div>
+
+      <div class="modal-footer-bar" style="margin-top:0.3rem;">
+        <button id="authCloseBtn" data-close="authModal" style="padding:0.45rem 0.85rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:0.85rem; cursor:pointer;">Cancel</button>
+        <button id="authSignUpBtn" style="padding:0.45rem 0.85rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:0.85rem; font-weight:500; cursor:pointer;">Sign Up</button>
+        <button id="authSignInBtn" style="background:var(--accent); color:#fff; border:none; font-weight:600; padding:0.45rem 1rem; border-radius:6px; font-size:0.85rem; cursor:pointer;">Sign In</button>
       </div>
     </div>
   </div>
@@ -1400,11 +1444,15 @@
     const summaryTrialNotice = document.getElementById('summaryTrialNotice');
     const sumChapterBtn = document.getElementById('sumChapterBtn');
     const sumKeyTakeawaysBtn = document.getElementById('sumKeyTakeawaysBtn');
+
+    // Auth Elements
     const authModal = document.getElementById('authModal');
     const authEmail = document.getElementById('authEmail');
     const authPass = document.getElementById('authPass');
     const authSignInBtn = document.getElementById('authSignInBtn');
     const authSignUpBtn = document.getElementById('authSignUpBtn');
+    const authStatusAlert = document.getElementById('authStatusAlert');
+
     const fontSelect = document.getElementById('fontSelect');
     const fontSizeSelect = document.getElementById('fontSizeSelect');
     const optionThemeSelect = document.getElementById('optionThemeSelect');
@@ -1700,7 +1748,6 @@
       highlightActiveSentence();
       updateAuthBadge();
 
-      // Quick visual confirmation before closing
       saveOptionsBtn.textContent = '✓ Saved!';
       setTimeout(() => {
         saveOptionsBtn.textContent = 'Save & Done';
@@ -1708,11 +1755,42 @@
       }, 350);
     });
 
-    // --- AUTHENTICATION & CREDITS ---
+    // --- AUTHENTICATION CONTROLLER (LIVE BANNER + AUTO-REFRESH) ---
+    function showAuthAlert(msg, type = "error") {
+      authStatusAlert.style.display = 'block';
+      authStatusAlert.textContent = msg;
+      if (type === "error") {
+        authStatusAlert.style.background = 'rgba(239, 68, 68, 0.15)';
+        authStatusAlert.style.color = '#ef4444';
+        authStatusAlert.style.border = '1px solid rgba(239, 68, 68, 0.3)';
+      } else if (type === "success") {
+        authStatusAlert.style.background = 'rgba(16, 185, 129, 0.15)';
+        authStatusAlert.style.color = '#10b981';
+        authStatusAlert.style.border = '1px solid rgba(16, 185, 129, 0.3)';
+      } else {
+        authStatusAlert.style.background = 'rgba(56, 189, 248, 0.15)';
+        authStatusAlert.style.color = 'var(--accent)';
+        authStatusAlert.style.border = '1px solid rgba(56, 189, 248, 0.3)';
+      }
+    }
+
     async function getFreshAuthToken() {
       if (!supabaseClient) return null;
-      const { data: { session } } = await supabaseClient.auth.getSession();
-      return session?.access_token || null;
+      try {
+        let { data: { session } } = await supabaseClient.auth.getSession();
+        if (!session) return null;
+
+        const nowSec = Math.floor(Date.now() / 1000);
+        if (session.expires_at && (session.expires_at - nowSec < 90)) {
+          const { data: refreshed, error } = await supabaseClient.auth.refreshSession();
+          if (!error && refreshed?.session) {
+            session = refreshed.session;
+          }
+        }
+        return session?.access_token || null;
+      } catch (e) {
+        return null;
+      }
     }
 
     async function updateAuthBadge(explicitRemaining = null) {
@@ -1744,39 +1822,82 @@
       }
     }
 
-    creditBadge.addEventListener('click', () => { authModal.style.display = 'flex'; });
+    creditBadge.addEventListener('click', () => { 
+      authStatusAlert.style.display = 'none';
+      authModal.style.display = 'flex'; 
+    });
 
     authSignInBtn.addEventListener('click', async () => {
+      authStatusAlert.style.display = 'none';
       if (!supabaseClient) {
-        alert("Supabase credentials not configured.");
-        authModal.style.display = 'none';
+        showAuthAlert("Supabase credentials not configured in index.html.", "error");
         return;
       }
-      const { error } = await supabaseClient.auth.signInWithPassword({
-        email: authEmail.value,
-        password: authPass.value
-      });
-      if (error) alert(error.message);
-      else {
-        authModal.style.display = 'none';
-        updateAuthBadge();
+      const email = authEmail.value.trim();
+      const password = authPass.value;
+      if (!email || !password) {
+        showAuthAlert("Please enter both email and password.", "error");
+        return;
+      }
+
+      authSignInBtn.disabled = true;
+      authSignInBtn.textContent = "Signing in...";
+      try {
+        const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+        if (error) {
+          if (error.message.toLowerCase().includes('email not confirmed')) {
+            showAuthAlert("Email not confirmed. Check your inbox or turn off 'Confirm email' in Supabase Authentication settings.", "error");
+          } else {
+            showAuthAlert(error.message, "error");
+          }
+        } else {
+          showAuthAlert("Success! Signed in.", "success");
+          setTimeout(() => {
+            authModal.style.display = 'none';
+            updateAuthBadge();
+          }, 600);
+        }
+      } catch (err) {
+        showAuthAlert(err.message, "error");
+      } finally {
+        authSignInBtn.disabled = false;
+        authSignInBtn.textContent = "Sign In";
       }
     });
 
     authSignUpBtn.addEventListener('click', async () => {
+      authStatusAlert.style.display = 'none';
       if (!supabaseClient) {
-        alert("Supabase credentials not configured.");
-        authModal.style.display = 'none';
+        showAuthAlert("Supabase credentials not configured in index.html.", "error");
         return;
       }
-      const { error } = await supabaseClient.auth.signUp({
-        email: authEmail.value,
-        password: authPass.value
-      });
-      if (error) alert(error.message);
-      else {
-        authModal.style.display = 'none';
-        updateAuthBadge();
+      const email = authEmail.value.trim();
+      const password = authPass.value;
+      if (!email || !password) {
+        showAuthAlert("Please enter both email and password.", "error");
+        return;
+      }
+
+      authSignUpBtn.disabled = true;
+      authSignUpBtn.textContent = "Signing up...";
+      try {
+        const { data, error } = await supabaseClient.auth.signUp({ email, password });
+        if (error) {
+          showAuthAlert(error.message, "error");
+        } else if (data?.user && !data?.session) {
+          showAuthAlert("Account created! Please check your email inbox to confirm your account (or disable 'Confirm email' in Supabase Dashboard), then sign in.", "info");
+        } else {
+          showAuthAlert("Account created & signed in!", "success");
+          setTimeout(() => {
+            authModal.style.display = 'none';
+            updateAuthBadge();
+          }, 700);
+        }
+      } catch (err) {
+        showAuthAlert(err.message, "error");
+      } finally {
+        authSignUpBtn.disabled = false;
+        authSignUpBtn.textContent = "Sign Up";
       }
     });
 
@@ -2091,7 +2212,7 @@
 
         if (!token && !customOpenAi && !customEleven) {
           stopAudio();
-          alert("Please sign in or enter your custom API key in Options.");
+          showAuthAlert("Please sign in or enter your custom API key in Options.", "error");
           authModal.style.display = 'flex';
           return;
         }
@@ -2117,6 +2238,14 @@
               speed: playbackSpeed
             })
           });
+
+          if (res.status === 401) {
+            if (supabaseClient) await supabaseClient.auth.signOut().catch(() => {});
+            updateAuthBadge();
+            authModal.style.display = 'flex';
+            showAuthAlert("Session expired. Please sign in again.", "error");
+            return;
+          }
 
           const data = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
@@ -2353,7 +2482,7 @@
       const token = await getFreshAuthToken();
 
       if (!token && !customOpenAi) {
-        alert("Please sign in or enter your OpenAI key in Options to analyze diagrams.");
+        showAuthAlert("Please sign in or enter your OpenAI key in Options to analyze diagrams.", "error");
         authModal.style.display = 'flex';
         return;
       }
@@ -2371,6 +2500,15 @@
           headers,
           body: JSON.stringify({ imageBase64: imgSrc })
         });
+
+        if (res.status === 401) {
+          if (supabaseClient) await supabaseClient.auth.signOut().catch(() => {});
+          updateAuthBadge();
+          authModal.style.display = 'flex';
+          showAuthAlert("Your session expired. Please sign in again.", "error");
+          renderPage(currentPage);
+          return;
+        }
 
         const data = await res.json();
         if (res.status === 402 || data.trialExhausted) {
@@ -2418,8 +2556,9 @@
       const token = await getFreshAuthToken();
 
       if (!token && !customOpenAi) {
-        alert("Please sign in or enter your OpenAI key in Options to use AI summaries.");
+        authStatusAlert.style.display = 'none';
         authModal.style.display = 'flex';
+        showAuthAlert("Please sign in or enter your personal OpenAI key in Options.", "info");
         return;
       }
 
@@ -2459,7 +2598,11 @@
       const customOpenAi = localStorage.getItem('marginalia_byok_openai') || '';
       const token = await getFreshAuthToken();
 
-      if (!token && !customOpenAi) return;
+      if (!token && !customOpenAi) {
+        authModal.style.display = 'flex';
+        showAuthAlert("Please sign in to generate document summaries.", "error");
+        return;
+      }
 
       const flattenItems = (items) => items.map(it => typeof it === 'string' ? it : (it?.caption || '')).join(' ');
       let text = mode === 'chapter' ? flattenItems(bookPages[currentPage] || []) : flattenItems(bookPages.flat());
@@ -2477,6 +2620,15 @@
           headers,
           body: JSON.stringify({ text, mode })
         });
+
+        if (res.status === 401) {
+          if (supabaseClient) await supabaseClient.auth.signOut().catch(() => {});
+          updateAuthBadge();
+          authModal.style.display = 'flex';
+          showAuthAlert("Your session expired. Please sign in again.", "error");
+          renderPage(currentPage);
+          return;
+        }
 
         const data = await res.json();
         if (res.status === 402 || data.trialExhausted) {
