@@ -197,15 +197,37 @@
     }
 
     .credit-badge {
-      font-size: 0.74rem;
-      padding: 0.32rem 0.55rem;
+      font-size: 0.76rem;
+      padding: 0.3rem 0.55rem;
       border-radius: 20px;
-      background: rgba(56, 189, 248, 0.1);
+      background: rgba(56, 189, 248, 0.12);
       border: 1px solid var(--border);
       color: var(--accent);
       font-weight: 600;
       cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
       white-space: nowrap;
+      user-select: none;
+      transition: background-color var(--transition);
+    }
+    .credit-badge:hover {
+      background: rgba(56, 189, 248, 0.2);
+    }
+
+    .user-avatar-mini {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #fff;
+      font-size: 0.65rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-transform: uppercase;
     }
 
     /* CONTROLS */
@@ -545,14 +567,15 @@
       align-items: center;
       justify-content: center;
       overflow: hidden;
+      cursor: pointer;
     }
 
     .scenic-moon {
       position: absolute;
-      top: 32px;
-      right: 48px;
-      width: 62px;
-      height: 62px;
+      top: 26px;
+      right: 42px;
+      width: 58px;
+      height: 58px;
       border-radius: 50%;
       box-shadow: -10px 10px 0 2px #dbe7f5;
       transform: rotate(-12deg);
@@ -561,14 +584,32 @@
 
     .star { position: absolute; background: #fff; border-radius: 50%; opacity: 0.6; }
 
-    .drawer-header-title {
+    .drawer-user-info {
       position: absolute;
       bottom: 14px;
       left: 18px;
-      font-size: 1.1rem;
+      right: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .drawer-header-title {
+      font-size: 1.05rem;
       font-weight: 700;
       color: #ffffff;
       text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .drawer-header-subtitle {
+      font-size: 0.72rem;
+      color: rgba(255, 255, 255, 0.78);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .drawer-body {
@@ -779,7 +820,7 @@
       background: rgba(56, 189, 248, 0.08);
     }
 
-    /* AUTH INPUTS & AUTOFILL FIX */
+    /* AUTH INPUTS & AUTOFILL */
     .auth-input-field {
       width: 100%;
       padding: 0.65rem 0.8rem;
@@ -803,6 +844,96 @@
       -webkit-box-shadow: 0 0 0px 1000px var(--bg-main) inset !important;
       transition: background-color 5000s ease-in-out 0s;
     }
+
+    /* PROFILE STYLES */
+    .profile-hero {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+      padding: 0.5rem 0 0.85rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .profile-avatar-circle {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), #a855f7);
+      color: #ffffff;
+      font-size: 1.25rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-transform: uppercase;
+      flex-shrink: 0;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+
+    .profile-hero-text {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+      min-width: 0;
+    }
+
+    .profile-email-title {
+      font-size: 0.95rem;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .profile-tier-pill {
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 0.18rem 0.55rem;
+      border-radius: 12px;
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--accent);
+      display: inline-flex;
+      width: fit-content;
+      border: 1px solid var(--border);
+    }
+
+    .profile-quota-box {
+      background: var(--bg-main);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.85rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .quota-meter-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+
+    .quota-meter-label-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.8rem;
+    }
+
+    .quota-progress-track {
+      width: 100%;
+      height: 7px;
+      border-radius: 10px;
+      background: var(--border);
+      overflow: hidden;
+    }
+
+    .quota-progress-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 10px;
+      transition: width 0.3s ease;
+    }
   </style>
 </head>
 <body>
@@ -821,7 +952,8 @@
 
         <button id="summarizeBtn" class="btn-header btn-summarize">✨ Summary</button>
 
-        <div id="creditBadge" class="credit-badge">
+        <!-- DYNAMIC PROFILE / AUTH BADGE -->
+        <div id="creditBadge" class="credit-badge" title="Account & Quota Status">
           <span id="creditDisplay">Sign In</span>
         </div>
       </div>
@@ -831,16 +963,25 @@
   <!-- NAVIGATION DRAWER -->
   <div id="drawerOverlay" class="drawer-overlay"></div>
   <aside id="sideDrawer" class="side-drawer">
-    <div class="drawer-header">
+    <div class="drawer-header" id="drawerHeaderProfileClick" title="Tap to view Profile">
       <div class="scenic-moon"></div>
       <div class="star" style="top:25px; left:30px; width:2px; height:2px;"></div>
       <div class="star" style="top:60px; left:75px; width:3px; height:3px; opacity:0.8;"></div>
       <div class="star" style="top:40px; left:140px; width:2px; height:2px;"></div>
       <div class="star" style="top:85px; left:190px; width:2px; height:2px; opacity:0.7;"></div>
-      <div class="drawer-header-title">Marginalia Library</div>
+
+      <div class="drawer-user-info">
+        <div class="drawer-header-title" id="drawerUserTitle">Marginalia Library</div>
+        <div class="drawer-header-subtitle" id="drawerUserSubtitle">Tap to manage account</div>
+      </div>
     </div>
 
     <div class="drawer-body">
+      <div class="drawer-nav-item" id="navProfileItem">
+        <span style="font-size:1.2rem;">👤</span>
+        <span>My Account</span>
+      </div>
+
       <div class="drawer-nav-item" id="navRecentList">
         <span style="font-size:1.2rem;">🕒</span>
         <span>Recent list</span>
@@ -983,6 +1124,63 @@
     </div>
   </div>
 
+  <!-- USER PROFILE MODAL (NEW) -->
+  <div id="profileModal" class="modal-overlay">
+    <div class="modal-card" style="max-width:400px;">
+      <div class="modal-header-bar" style="margin-bottom:0.4rem; padding-bottom:0.6rem;">
+        <div class="modal-title">👤 Account & Profile</div>
+        <button class="bookmark-ribbon-btn" data-close="profileModal" style="font-size:1.1rem;">✕</button>
+      </div>
+
+      <div class="profile-hero">
+        <div class="profile-avatar-circle" id="profileModalAvatar">U</div>
+        <div class="profile-hero-text">
+          <span class="profile-email-title" id="profileModalEmail">user@example.com</span>
+          <span class="profile-tier-pill" id="profileModalTier">Free Tier</span>
+        </div>
+      </div>
+
+      <div style="padding: 0.75rem 0; display:flex; flex-direction:column; gap:0.75rem;">
+        <div class="profile-quota-box">
+          <div class="quota-meter-group">
+            <div class="quota-meter-label-row">
+              <span style="color:var(--text-muted); font-size:0.8rem;">⚡ Neural TTS Voice Quota</span>
+              <strong style="color:var(--text-main); font-size:0.8rem;" id="profileNeuralCount">5,000 / 5,000 Chars</strong>
+            </div>
+            <div class="quota-progress-track">
+              <div class="quota-progress-fill" id="profileNeuralProgress" style="width: 100%;"></div>
+            </div>
+          </div>
+
+          <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px dashed var(--border); padding-top:0.6rem; font-size:0.82rem;">
+            <span style="color:var(--text-muted);">✨ Summary & Vision Balance:</span>
+            <strong style="color:var(--accent);" id="profileSummaryCount">3 Credits</strong>
+          </div>
+
+          <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px dashed var(--border); padding-top:0.6rem; font-size:0.82rem;">
+            <span style="color:var(--text-muted);">🔑 Custom API Key (BYOK):</span>
+            <strong id="profileByokStatus" style="color:var(--text-muted);">Disabled</strong>
+          </div>
+        </div>
+
+        <div style="display:flex; flex-direction:column; gap:0.5rem; margin-top:0.25rem;">
+          <button id="profileOpenOptionsBtn" style="width:100%; padding:0.6rem; border-radius:8px; border:1px solid var(--border); background:var(--bg-main); color:var(--text-main); font-size:0.85rem; font-weight:500; cursor:pointer; text-align:center;">
+            ⚙️ Manage Custom API Keys & Settings
+          </button>
+          
+          <button id="profileUpgradeBtn" style="width:100%; padding:0.6rem; border-radius:8px; border:none; background:linear-gradient(135deg, rgba(56,189,248,0.2), rgba(168,85,247,0.2)); color:var(--accent); font-size:0.85rem; font-weight:600; cursor:pointer; text-align:center;">
+            🌟 Upgrade to Pro ($9/mo)
+          </button>
+        </div>
+      </div>
+
+      <div class="modal-footer-bar" style="margin-top:0.2rem; display:flex; justify-content:space-between;">
+        <button id="profileSignOutBtn" style="padding:0.45rem 0.85rem; border-radius:6px; background:rgba(239,68,68,0.12); color:#ef4444; border:1px solid rgba(239,68,68,0.25); font-size:0.82rem; font-weight:600; cursor:pointer;">Sign Out</button>
+        <button data-close="profileModal" style="padding:0.45rem 1rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:0.82rem; cursor:pointer;">Done</button>
+      </div>
+    </div>
+  </div>
+
   <!-- MY SHELF MODAL -->
   <div id="shelfModal" class="modal-overlay">
     <div class="modal-card">
@@ -1098,7 +1296,7 @@
         Marginalia is an adaptive read-along reader with client-side document processing, native and neural TTS, and AI summaries.
       </p>
       <div style="font-size:0.8rem; background:var(--bg-main); padding:0.75rem; border-radius:8px; border:1px solid var(--border);">
-        <div style="margin-bottom:0.3rem;"><strong>Version:</strong> 2.9.3 (Auth-Resolved Edition)</div>
+        <div style="margin-bottom:0.3rem;"><strong>Version:</strong> 3.0.0 (Profile Edition)</div>
         <div><strong>Storage:</strong> IndexedDB Offline Bookshelf</div>
       </div>
       <div style="display:flex; justify-content:flex-end;">
@@ -1148,11 +1346,11 @@
     </div>
   </div>
 
-  <!-- AUTH MODAL: FIXED SPACING, DEDICATED LABELS & STATUS BANNER -->
+  <!-- AUTH MODAL -->
   <div id="authModal" class="modal-overlay">
     <div class="modal-card" style="max-width:390px; gap:0.75rem;">
       <div class="modal-header-bar" style="margin-bottom:0; padding-bottom:0.5rem;">
-        <div class="modal-title">Account & Quota Access</div>
+        <div class="modal-title">Account Access</div>
         <button class="bookmark-ribbon-btn" data-close="authModal" style="font-size:1.1rem;">✕</button>
       </div>
 
@@ -1187,7 +1385,7 @@
   <script>
     // --- SUPABASE CONFIGURATION ---
     const SUPABASE_PROJECT_URL = "https://nnxphilhkhvwnitxvzdi.supabase.co"; 
-    const SUPABASE_ANON_KEY = "sb_publishable_ekzdgLR6FSDHnP2DZNklMQ_n3-k0ZLN";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ueHBoaWxoa2h2d25pdHh2emRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA5NzQzMDYsImV4cCI6MjEwNjU1MDMwNn0.LQetUHa6Os7UJl2NxvAph58vrvWNWbF_kcL9R2l-o3Y";
 
     let supabaseClient = null;
     if (SUPABASE_PROJECT_URL && !SUPABASE_PROJECT_URL.includes("your-project")) {
@@ -1228,7 +1426,7 @@
       toggleCaret.textContent = isCollapsed ? 'Settings ▾' : 'Hide ▴';
     });
 
-    // --- INDEXEDDB STORAGE (WITH DELETE) ---
+    // --- INDEXEDDB STORAGE ---
     const DB_NAME = "MarginaliaBookDB";
     const DB_VERSION = 1;
     let dbInstance = null;
@@ -1417,6 +1615,10 @@
     const navMyShelf = document.getElementById('navMyShelf');
     const navBookmarks = document.getElementById('navBookmarks');
     const navUploadFile = document.getElementById('navUploadFile');
+    const navProfileItem = document.getElementById('navProfileItem');
+    const drawerHeaderProfileClick = document.getElementById('drawerHeaderProfileClick');
+    const drawerUserTitle = document.getElementById('drawerUserTitle');
+    const drawerUserSubtitle = document.getElementById('drawerUserSubtitle');
     const btnDrawerNightToggle = document.getElementById('btnDrawerNightToggle');
     const btnDrawerOptions = document.getElementById('btnDrawerOptions');
     const btnDrawerAbout = document.getElementById('btnDrawerAbout');
@@ -1444,6 +1646,19 @@
     const summaryTrialNotice = document.getElementById('summaryTrialNotice');
     const sumChapterBtn = document.getElementById('sumChapterBtn');
     const sumKeyTakeawaysBtn = document.getElementById('sumKeyTakeawaysBtn');
+
+    // Profile Elements
+    const profileModal = document.getElementById('profileModal');
+    const profileModalAvatar = document.getElementById('profileModalAvatar');
+    const profileModalEmail = document.getElementById('profileModalEmail');
+    const profileModalTier = document.getElementById('profileModalTier');
+    const profileNeuralCount = document.getElementById('profileNeuralCount');
+    const profileNeuralProgress = document.getElementById('profileNeuralProgress');
+    const profileSummaryCount = document.getElementById('profileSummaryCount');
+    const profileByokStatus = document.getElementById('profileByokStatus');
+    const profileOpenOptionsBtn = document.getElementById('profileOpenOptionsBtn');
+    const profileUpgradeBtn = document.getElementById('profileUpgradeBtn');
+    const profileSignOutBtn = document.getElementById('profileSignOutBtn');
 
     // Auth Elements
     const authModal = document.getElementById('authModal');
@@ -1478,7 +1693,7 @@
     closeDrawerBtn.addEventListener('click', closeDrawer);
     drawerOverlay.addEventListener('click', closeDrawer);
 
-    // --- SHELF & RECENT MODALS (WITH DELETE) ---
+    // --- SHELF & RECENT MODALS ---
     async function showShelfModal(mode = "shelf") {
       closeDrawer();
       const books = await getAllBooksFromShelf();
@@ -1656,7 +1871,7 @@
       renderPage(currentPage);
     });
 
-    // --- QUICK DRAWER THEME & OPTIONS (PERSISTED) ---
+    // --- DRAWER QUICK ACTIONS ---
     btnDrawerNightToggle.addEventListener('click', () => {
       const current = document.documentElement.getAttribute('data-theme');
       const nextTheme = current === 'dark' ? 'oled' : (current === 'oled' ? 'sepia' : (current === 'sepia' ? 'light' : 'dark'));
@@ -1667,6 +1882,15 @@
 
     btnDrawerOptions.addEventListener('click', () => {
       closeDrawer();
+      openOptionsModal();
+    });
+
+    btnDrawerAbout.addEventListener('click', () => {
+      closeDrawer();
+      aboutModal.style.display = 'flex';
+    });
+
+    function openOptionsModal() {
       optionThemeSelect.value = document.documentElement.getAttribute('data-theme') || 'dark';
       fontSelect.value = localStorage.getItem('marginalia_font_face') || 'serif';
       fontSizeSelect.value = localStorage.getItem('marginalia_font_size') || '1.15rem';
@@ -1677,12 +1901,7 @@
       karaokeCalibrationSlider.value = userManualCalibration;
       updateSyncCalibrationLabel(userManualCalibration);
       optionsModal.style.display = 'flex';
-    });
-
-    btnDrawerAbout.addEventListener('click', () => {
-      closeDrawer();
-      aboutModal.style.display = 'flex';
-    });
+    }
 
     function applyFontFace(val) {
       contentPane.style.fontFamily = val === 'serif' ? 'var(--font-reader)' :
@@ -1721,7 +1940,6 @@
       localStorage.setItem('marginalia_sync_calibration', val.toString());
     });
 
-    // UNIFIED SAVE & PERSISTENCE CONTROLLER
     saveOptionsBtn.addEventListener('click', () => {
       const selectedFont = fontSelect.value;
       const selectedSize = fontSizeSelect.value;
@@ -1755,7 +1973,101 @@
       }, 350);
     });
 
-    // --- AUTHENTICATION CONTROLLER (LIVE BANNER + AUTO-REFRESH) ---
+    // --- PROFILE & AUTH CONTROLLER ---
+    async function openProfileModal() {
+      if (!supabaseClient) {
+        authModal.style.display = 'flex';
+        return;
+      }
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      if (!session || !session.user) {
+        authStatusAlert.style.display = 'none';
+        authModal.style.display = 'flex';
+        return;
+      }
+
+      const user = session.user;
+      const email = user.email || 'Reader';
+      const initial = email.charAt(0).toUpperCase();
+
+      profileModalAvatar.textContent = initial;
+      profileModalEmail.textContent = email;
+
+      const { data: profile } = await supabaseClient
+        .from('profiles')
+        .select('neural_chars_remaining, summary_credits_remaining, tier')
+        .eq('id', user.id)
+        .single();
+
+      const tier = profile?.tier || 'free';
+      profileModalTier.textContent = tier === 'pro' ? '🌟 Pro Subscriber' : '⚡ Free Trial Account';
+
+      const chars = profile?.neural_chars_remaining ?? 5000;
+      profileNeuralCount.textContent = `${chars.toLocaleString()} / 5,000 Chars`;
+      const fillPct = Math.max(0, Math.min(100, (chars / 5000) * 100));
+      profileNeuralProgress.style.width = `${fillPct}%`;
+
+      const summaries = profile?.summary_credits_remaining ?? 3;
+      profileSummaryCount.textContent = `${summaries} Remaining`;
+
+      const hasByok = Boolean(localStorage.getItem('marginalia_byok_openai') || localStorage.getItem('marginalia_byok_eleven'));
+      if (hasByok) {
+        profileByokStatus.textContent = "Active (Keys Configured)";
+        profileByokStatus.style.color = "var(--accent)";
+      } else {
+        profileByokStatus.textContent = "None Added";
+        profileByokStatus.style.color = "var(--text-muted)";
+      }
+
+      profileModal.style.display = 'flex';
+    }
+
+    // Trigger profile or login when badge or drawer account item is tapped
+    creditBadge.addEventListener('click', async () => {
+      if (!supabaseClient) {
+        authModal.style.display = 'flex';
+        return;
+      }
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      if (session && session.user) {
+        openProfileModal();
+      } else {
+        authStatusAlert.style.display = 'none';
+        authModal.style.display = 'flex';
+      }
+    });
+
+    navProfileItem.addEventListener('click', () => {
+      closeDrawer();
+      openProfileModal();
+    });
+
+    drawerHeaderProfileClick.addEventListener('click', () => {
+      closeDrawer();
+      openProfileModal();
+    });
+
+    profileOpenOptionsBtn.addEventListener('click', () => {
+      closeModalById('profileModal');
+      openOptionsModal();
+    });
+
+    profileUpgradeBtn.addEventListener('click', () => {
+      closeModalById('profileModal');
+      paywallModal.style.display = 'flex';
+    });
+
+    profileSignOutBtn.addEventListener('click', async () => {
+      if (confirm("Are you sure you want to sign out of your account?")) {
+        if (supabaseClient) {
+          await supabaseClient.auth.signOut();
+        }
+        closeModalById('profileModal');
+        updateAuthBadge();
+        alert("Signed out successfully.");
+      }
+    });
+
     function showAuthAlert(msg, type = "error") {
       authStatusAlert.style.display = 'block';
       authStatusAlert.textContent = msg;
@@ -1796,36 +2108,48 @@
     async function updateAuthBadge(explicitRemaining = null) {
       const hasByok = Boolean(localStorage.getItem('marginalia_byok_openai') || localStorage.getItem('marginalia_byok_eleven'));
       if (hasByok) {
-        creditDisplay.textContent = "⚡ BYOK Active";
-        return;
+        creditDisplay.innerHTML = `<span class="user-avatar-mini">🔑</span> BYOK Active`;
       }
+
       if (!supabaseClient) {
-        creditDisplay.textContent = "⚡ Free Tier";
+        if (!hasByok) creditDisplay.textContent = "⚡ Free Tier";
+        drawerUserTitle.textContent = "Marginalia Library";
+        drawerUserSubtitle.textContent = "Tap to sign in";
         return;
       }
-      if (explicitRemaining !== null) {
-        creditDisplay.textContent = `⚡ ${explicitRemaining.toLocaleString()} Chars`;
-        return;
-      }
+
       const { data: { session } } = await supabaseClient.auth.getSession();
       if (session && session.user) {
+        const email = session.user.email || 'Reader';
+        const initial = email.charAt(0).toUpperCase();
+
+        drawerUserTitle.textContent = email;
+        drawerUserSubtitle.textContent = "Signed In • Tap for Profile";
+
+        if (hasByok) {
+          creditDisplay.innerHTML = `<span class="user-avatar-mini">${initial}</span> BYOK Active`;
+          return;
+        }
+
+        if (explicitRemaining !== null) {
+          creditDisplay.innerHTML = `<span class="user-avatar-mini">${initial}</span> ${explicitRemaining.toLocaleString()}`;
+          return;
+        }
+
         const { data: profile } = await supabaseClient
           .from('profiles')
-          .select('neural_chars_remaining, summary_credits_remaining, tier')
+          .select('neural_chars_remaining')
           .eq('id', session.user.id)
           .single();
 
         const remaining = profile ? profile.neural_chars_remaining : 5000;
-        creditDisplay.textContent = `⚡ ${remaining.toLocaleString()} Chars`;
+        creditDisplay.innerHTML = `<span class="user-avatar-mini">${initial}</span> ${remaining.toLocaleString()}`;
       } else {
-        creditDisplay.textContent = "Sign In";
+        if (!hasByok) creditDisplay.textContent = "Sign In";
+        drawerUserTitle.textContent = "Marginalia Library";
+        drawerUserSubtitle.textContent = "Tap to sign in";
       }
     }
-
-    creditBadge.addEventListener('click', () => { 
-      authStatusAlert.style.display = 'none';
-      authModal.style.display = 'flex'; 
-    });
 
     authSignInBtn.addEventListener('click', async () => {
       authStatusAlert.style.display = 'none';
@@ -2931,7 +3255,7 @@
       const sents = splitIntoSentences(raw);
       if (sents.length === 0) throw new Error("Document is empty.");
       const pages = [];
-      for (let i = 0; i < sents.length; i += 5) pages.push(sents.slice(i, i + 5));
+      for (let i = 0; i < sents.length; i += 5) pages.push(blocks.slice(i, i + 5));
       return { pages, chapters: [{ title: "Beginning", pageIndex: 0 }] };
     }
 
