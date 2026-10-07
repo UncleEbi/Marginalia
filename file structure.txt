@@ -1,0 +1,7 @@
+marginalia/
+├── api/
+│   ├── summarize.js
+│   ├── describe-image.js
+│   └── tts.js
+└── public/
+    └── index.html
