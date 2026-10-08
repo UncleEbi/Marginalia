@@ -212,9 +212,7 @@
       user-select: none;
       transition: background-color var(--transition);
     }
-    .credit-badge:hover {
-      background: rgba(56, 189, 248, 0.2);
-    }
+    .credit-badge:hover { background: rgba(56, 189, 248, 0.2); }
 
     .user-avatar-mini {
       width: 18px;
@@ -823,7 +821,7 @@
     /* AUTH INPUTS & AUTOFILL */
     .auth-input-field {
       width: 100%;
-      padding: 0.65rem 0.8rem;
+      padding: 0.72rem 0.85rem;
       border-radius: 8px;
       font-size: 15px;
       border: 1px solid var(--border);
@@ -831,11 +829,11 @@
       color: var(--text-main) !important;
       box-sizing: border-box;
       outline: none;
-      transition: border-color var(--transition);
+      transition: border-color var(--transition), box-shadow var(--transition);
     }
     .auth-input-field:focus {
       border-color: var(--accent);
-      box-shadow: 0 0 0 1px var(--accent);
+      box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25);
     }
     .auth-input-field:-webkit-autofill,
     .auth-input-field:-webkit-autofill:hover, 
@@ -952,7 +950,6 @@
 
         <button id="summarizeBtn" class="btn-header btn-summarize">✨ Summary</button>
 
-        <!-- DYNAMIC PROFILE / AUTH BADGE -->
         <div id="creditBadge" class="credit-badge" title="Account & Quota Status">
           <span id="creditDisplay">Sign In</span>
         </div>
@@ -1027,7 +1024,6 @@
   </aside>
 
   <main>
-    <!-- VOICE & ENGINE BAR -->
     <div class="controls-panel">
       <div class="controls-toggle-bar" id="controlsToggleBar">
         <span id="activeVoiceBadge" style="font-weight:600; color:var(--accent);">🎙️ Native Voice</span>
@@ -1124,7 +1120,7 @@
     </div>
   </div>
 
-  <!-- USER PROFILE MODAL (NEW) -->
+  <!-- USER PROFILE MODAL -->
   <div id="profileModal" class="modal-overlay">
     <div class="modal-card" style="max-width:400px;">
       <div class="modal-header-bar" style="margin-bottom:0.4rem; padding-bottom:0.6rem;">
@@ -1206,7 +1202,7 @@
     </div>
   </div>
 
-  <!-- OPTIONS MODAL: SCROLLABLE WITH PINNED SAVE BUTTON -->
+  <!-- OPTIONS MODAL -->
   <div id="optionsModal" class="modal-overlay">
     <div class="modal-card">
       <div class="modal-header-bar">
@@ -1296,7 +1292,7 @@
         Marginalia is an adaptive read-along reader with client-side document processing, native and neural TTS, and AI summaries.
       </p>
       <div style="font-size:0.8rem; background:var(--bg-main); padding:0.75rem; border-radius:8px; border:1px solid var(--border);">
-        <div style="margin-bottom:0.3rem;"><strong>Version:</strong> 3.0.0 (Profile Edition)</div>
+        <div style="margin-bottom:0.3rem;"><strong>Version:</strong> 3.0.1 (Auth-Fixed Edition)</div>
         <div><strong>Storage:</strong> IndexedDB Offline Bookshelf</div>
       </div>
       <div style="display:flex; justify-content:flex-end;">
@@ -1346,7 +1342,7 @@
     </div>
   </div>
 
-  <!-- AUTH MODAL -->
+  <!-- AUTH MODAL: CLEAN SPACING & AUTOFILL DARK MODE STYLING -->
   <div id="authModal" class="modal-overlay">
     <div class="modal-card" style="max-width:390px; gap:0.75rem;">
       <div class="modal-header-bar" style="margin-bottom:0; padding-bottom:0.5rem;">
@@ -1360,7 +1356,7 @@
 
       <div id="authStatusAlert" style="display:none; font-size:0.8rem; padding:0.6rem 0.75rem; border-radius:6px; line-height:1.35;"></div>
 
-      <div style="display:flex; flex-direction:column; gap:0.75rem;">
+      <div style="display:flex; flex-direction:column; gap:0.85rem;">
         <div>
           <label style="font-size:0.78rem; font-weight:600; color:var(--text-muted); display:block; margin-bottom:0.35rem;">Email Address</label>
           <input type="email" id="authEmail" class="auth-input-field" placeholder="you@example.com" autocomplete="email" />
@@ -1372,7 +1368,7 @@
         </div>
       </div>
 
-      <div class="modal-footer-bar" style="margin-top:0.3rem;">
+      <div class="modal-footer-bar" style="margin-top:0.4rem;">
         <button id="authCloseBtn" data-close="authModal" style="padding:0.45rem 0.85rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:0.85rem; cursor:pointer;">Cancel</button>
         <button id="authSignUpBtn" style="padding:0.45rem 0.85rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:0.85rem; font-weight:500; cursor:pointer;">Sign Up</button>
         <button id="authSignInBtn" style="background:var(--accent); color:#fff; border:none; font-weight:600; padding:0.45rem 1rem; border-radius:6px; font-size:0.85rem; cursor:pointer;">Sign In</button>
@@ -1390,7 +1386,14 @@
     let supabaseClient = null;
     if (SUPABASE_PROJECT_URL && !SUPABASE_PROJECT_URL.includes("your-project")) {
       try {
-        supabaseClient = supabase.createClient(SUPABASE_PROJECT_URL, SUPABASE_ANON_KEY);
+        supabaseClient = supabase.createClient(SUPABASE_PROJECT_URL, SUPABASE_ANON_KEY, {
+          auth: {
+            persistSession: true,
+            autoRefreshToken: true,
+            detectSessionInUrl: true,
+            storage: window.localStorage
+          }
+        });
       } catch (err) {
         console.warn("Supabase init error:", err);
       }
@@ -2022,7 +2025,6 @@
       profileModal.style.display = 'flex';
     }
 
-    // Trigger profile or login when badge or drawer account item is tapped
     creditBadge.addEventListener('click', async () => {
       if (!supabaseClient) {
         authModal.style.display = 'flex';
@@ -2552,6 +2554,11 @@
           if (customOpenAi) headers['x-custom-openai-key'] = customOpenAi;
           if (customEleven) headers['x-custom-elevenlabs-key'] = customEleven;
 
+          if (SUPABASE_PROJECT_URL && !SUPABASE_PROJECT_URL.includes("your-project")) {
+            headers['x-supabase-url'] = SUPABASE_PROJECT_URL;
+            headers['x-supabase-key'] = SUPABASE_ANON_KEY;
+          }
+
           const res = await fetch('/api/tts', {
             method: 'POST',
             headers,
@@ -2563,15 +2570,15 @@
             })
           });
 
+          const data = await res.json().catch(() => ({}));
+
           if (res.status === 401) {
-            if (supabaseClient) await supabaseClient.auth.signOut().catch(() => {});
             updateAuthBadge();
             authModal.style.display = 'flex';
-            showAuthAlert("Session expired. Please sign in again.", "error");
+            showAuthAlert(data.error || "Session expired. Please sign in again.", "error");
             return;
           }
 
-          const data = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
 
           audioSrc = data.audio_base64 
@@ -2819,22 +2826,27 @@
         if (token) headers['Authorization'] = `Bearer ${token}`;
         if (customOpenAi) headers['x-custom-openai-key'] = customOpenAi;
 
+        if (SUPABASE_PROJECT_URL && !SUPABASE_PROJECT_URL.includes("your-project")) {
+          headers['x-supabase-url'] = SUPABASE_PROJECT_URL;
+          headers['x-supabase-key'] = SUPABASE_ANON_KEY;
+        }
+
         const res = await fetch('/api/describe-image', {
           method: 'POST',
           headers,
           body: JSON.stringify({ imageBase64: imgSrc })
         });
 
+        const data = await res.json().catch(() => ({}));
+
         if (res.status === 401) {
-          if (supabaseClient) await supabaseClient.auth.signOut().catch(() => {});
           updateAuthBadge();
           authModal.style.display = 'flex';
-          showAuthAlert("Your session expired. Please sign in again.", "error");
+          showAuthAlert(data.error || "Session authentication expired. Please sign in again.", "error");
           renderPage(currentPage);
           return;
         }
 
-        const data = await res.json();
         if (res.status === 402 || data.trialExhausted) {
           paywallModal.style.display = 'flex';
           renderPage(currentPage);
@@ -2939,22 +2951,27 @@
         if (token) headers['Authorization'] = `Bearer ${token}`;
         if (customOpenAi) headers['x-custom-openai-key'] = customOpenAi;
 
+        if (SUPABASE_PROJECT_URL && !SUPABASE_PROJECT_URL.includes("your-project")) {
+          headers['x-supabase-url'] = SUPABASE_PROJECT_URL;
+          headers['x-supabase-key'] = SUPABASE_ANON_KEY;
+        }
+
         const res = await fetch('/api/summarize', {
           method: 'POST',
           headers,
           body: JSON.stringify({ text, mode })
         });
 
+        const data = await res.json().catch(() => ({}));
+
         if (res.status === 401) {
-          if (supabaseClient) await supabaseClient.auth.signOut().catch(() => {});
           updateAuthBadge();
           authModal.style.display = 'flex';
-          showAuthAlert("Your session expired. Please sign in again.", "error");
+          showAuthAlert(data.error || "Authentication error. Please sign in again.", "error");
           renderPage(currentPage);
           return;
         }
 
-        const data = await res.json();
         if (res.status === 402 || data.trialExhausted) {
           paywallModal.style.display = 'flex';
           renderPage(currentPage);
@@ -3027,298 +3044,3 @@
           const segmenter = new Intl.Segmenter('en', { granularity: 'sentence' });
           const segments = Array.from(segmenter.segment(text));
           return segments.map(s => s.segment.replace(/\s+/g, ' ').trim()).filter(s => s.length > 0);
-        } catch (e) {}
-      }
-      return text.replace(/([.?!]+)(\s+)/g, "$1\n---BREAK---\n").split("\n---BREAK---\n").map(s => s.replace(/\s+/g, ' ').trim()).filter(s => s.length > 0);
-    }
-
-    function parseHtmlToBlocks(htmlString) {
-      const doc = new DOMParser().parseFromString(htmlString, 'text/html');
-      doc.querySelectorAll('script, style, head, nav, [role="doc-toc"]').forEach(el => el.remove());
-
-      const blocks = [];
-      const elements = doc.body ? Array.from(doc.body.children) : [];
-
-      if (elements.length === 0) {
-        const rawText = (doc.body ? doc.body.textContent : doc.documentElement.textContent) || '';
-        return splitIntoSentences(rawText);
-      }
-
-      elements.forEach(el => {
-        const imgs = el.querySelectorAll('img, image');
-        if (el.tagName.toLowerCase() === 'img' || imgs.length > 0) {
-          const imgEl = el.tagName.toLowerCase() === 'img' ? el : imgs[0];
-          const src = imgEl.getAttribute('src');
-          if (src && src.startsWith('data:')) {
-            const caption = imgEl.getAttribute('alt') || el.querySelector('figcaption')?.textContent || '';
-            blocks.push({ type: 'image', src, caption: caption.trim() });
-            return;
-          }
-        }
-
-        const txt = el.textContent.replace(/\s+/g, ' ').trim();
-        if (txt.length > 0) {
-          const sents = splitIntoSentences(txt);
-          sents.forEach(s => blocks.push(s));
-        }
-      });
-
-      return blocks.length > 0 ? blocks : splitIntoSentences(doc.body ? doc.body.textContent : '');
-    }
-
-    // --- EPUB EXTRACTOR WITH TABLE OF CONTENTS ---
-    async function parseEpubArchive(zip) {
-      const allKeys = Object.keys(zip.files);
-      const containerKey = allKeys.find(k => k.toLowerCase().endsWith('container.xml'));
-      let opfKey = null;
-
-      if (containerKey) {
-        const containerXml = await zip.files[containerKey].async("text");
-        const m = containerXml.match(/full-path=["']([^"']+)["']/i);
-        if (m) {
-          const target = m[1].trim();
-          opfKey = allKeys.find(k => k.toLowerCase() === target.toLowerCase()) || target;
-        }
-      }
-      if (!opfKey) opfKey = allKeys.find(k => k.toLowerCase().endsWith('.opf'));
-
-      let orderedFiles = [];
-      let manifest = {};
-
-      if (opfKey && zip.files[opfKey]) {
-        const opfXml = await zip.files[opfKey].async("text");
-        const opfDir = opfKey.includes('/') ? opfKey.substring(0, opfKey.lastIndexOf('/') + 1) : '';
-
-        const itemRegex = /<item\b[^>]*>/gi;
-        let match;
-        while ((match = itemRegex.exec(opfXml)) !== null) {
-          const tag = match[0];
-          const idMatch = tag.match(/\bid=["']([^"']+)["']/i);
-          const hrefMatch = tag.match(/\bhref=["']([^"']+)["']/i);
-          if (idMatch && hrefMatch) {
-            const rawHref = decodeURIComponent(hrefMatch[1].split('#')[0]);
-            const fullPath = (opfDir + rawHref).replace(/\/+/g, '/');
-            const exact = allKeys.find(k => k.toLowerCase() === fullPath.toLowerCase()) || fullPath;
-            manifest[idMatch[1]] = exact;
-          }
-        }
-
-        const spineRegex = /<itemref\b[^>]*\bidref=["']([^"']+)["']/gi;
-        while ((match = spineRegex.exec(opfXml)) !== null) {
-          const idref = match[1];
-          if (manifest[idref] && zip.files[manifest[idref]]) {
-            orderedFiles.push(manifest[idref]);
-          }
-        }
-      }
-
-      if (orderedFiles.length === 0) {
-        orderedFiles = allKeys.filter(k => {
-          const lower = k.toLowerCase();
-          return (lower.endsWith('.xhtml') || lower.endsWith('.html') || lower.endsWith('.htm')) &&
-                 !lower.includes('toc') && !lower.includes('nav') && !lower.endsWith('.ncx');
-        }).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
-      }
-
-      const chaptersList = [];
-      const extractedPages = [];
-      const perPage = 5;
-
-      for (let fIdx = 0; fIdx < orderedFiles.length; fIdx++) {
-        const chapterKey = orderedFiles[fIdx];
-        if (!zip.files[chapterKey] || zip.files[chapterKey].dir) continue;
-
-        const rawHtml = await zip.files[chapterKey].async("text");
-        const chapterDir = chapterKey.includes('/') ? chapterKey.substring(0, chapterKey.lastIndexOf('/') + 1) : '';
-
-        let chapTitle = "";
-        const titleMatch = rawHtml.match(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/i) || rawHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-        if (titleMatch) {
-          chapTitle = titleMatch[1].replace(/<[^>]+>/g, '').trim();
-        }
-        if (!chapTitle || chapTitle.length < 2) {
-          chapTitle = `Section ${fIdx + 1}`;
-        }
-
-        const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
-        const images = Array.from(doc.querySelectorAll('img, image'));
-
-        for (const img of images) {
-          const srcAttr = img.getAttribute('src') || img.getAttribute('xlink:href');
-          if (!srcAttr || srcAttr.startsWith('data:') || srcAttr.startsWith('http')) continue;
-
-          const resolved = normalizeZipPath(chapterDir, decodeURIComponent(srcAttr.split('#')[0]));
-          const matchedImgKey = allKeys.find(k => k.toLowerCase() === resolved.toLowerCase()) || resolved;
-
-          if (zip.files[matchedImgKey] && !zip.files[matchedImgKey].dir) {
-            const ext = matchedImgKey.split('.').pop().toLowerCase();
-            const mime = ext === 'png' ? 'image/png' : ext === 'svg' ? 'image/svg+xml' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
-            const base64Data = await zip.files[matchedImgKey].async('base64');
-            img.setAttribute('src', `data:${mime};base64,${base64Data}`);
-          }
-        }
-
-        const chapterBlocks = parseHtmlToBlocks(doc.body ? doc.body.innerHTML : rawHtml);
-        if (chapterBlocks.length > 0) {
-          const startPageIndex = extractedPages.length;
-          chaptersList.push({ title: chapTitle, pageIndex: startPageIndex });
-
-          for (let i = 0; i < chapterBlocks.length; i += perPage) {
-            extractedPages.push(chapterBlocks.slice(i, i + perPage));
-          }
-        }
-      }
-
-      if (extractedPages.length === 0) {
-        throw new Error("No readable text found in EPUB.");
-      }
-
-      return { pages: extractedPages, chapters: chaptersList };
-    }
-
-    // --- SECURE MULTI-FORMAT DOCUMENT DISPATCHER ---
-    async function processUploadedDocument(file) {
-      const buffer = await file.arrayBuffer();
-      const uint8 = new Uint8Array(buffer);
-
-      const isZip = uint8.length > 4 && uint8[0] === 0x50 && uint8[1] === 0x4B && (uint8[2] === 0x03 || uint8[2] === 0x05);
-      const isPdf = uint8.length > 4 && uint8[0] === 0x25 && uint8[1] === 0x50 && uint8[2] === 0x44 && uint8[3] === 0x46;
-      const lowerName = (file.name || "").toLowerCase();
-
-      if (isZip || lowerName.endsWith('.epub') || lowerName.endsWith('.docx')) {
-        const zip = await JSZip.loadAsync(buffer);
-
-        if (zip.files['word/document.xml']) {
-          if (typeof mammoth === 'undefined') throw new Error("Word reader engine is still loading. Please try again.");
-          const res = await mammoth.convertToHtml(
-            { arrayBuffer: buffer },
-            {
-              convertImage: mammoth.images.imgElement(async (img) => {
-                const b64 = await img.read("base64");
-                return { src: `data:${img.contentType};base64,${b64}` };
-              })
-            }
-          );
-          const blocks = parseHtmlToBlocks(res.value || "");
-          const pages = [];
-          for (let i = 0; i < blocks.length; i += 5) pages.push(blocks.slice(i, i + 5));
-          return { pages, chapters: [{ title: "Start of Document", pageIndex: 0 }] };
-        }
-
-        return await parseEpubArchive(zip);
-      }
-
-      if (isPdf || lowerName.endsWith('.pdf')) {
-        if (typeof pdfjsLib === 'undefined') throw new Error("PDF engine is still loading. Please try again.");
-        const pdf = await pdfjsLib.getDocument({ data: uint8 }).promise;
-        const pages = [];
-        const chapters = [];
-
-        for (let i = 1; i <= pdf.numPages; i++) {
-          const page = await pdf.getPage(i);
-          const content = await page.getTextContent();
-          const pageStr = content.items.map(it => it.str).join(' ');
-          if (pageStr.trim().length > 0) {
-            const sents = splitIntoSentences(pageStr);
-            if (sents.length > 0) {
-              chapters.push({ title: `PDF Page ${i}`, pageIndex: pages.length });
-              for (let s = 0; s < sents.length; s += 5) {
-                pages.push(sents.slice(s, s + 5));
-              }
-            }
-          }
-        }
-        if (pages.length === 0) throw new Error("No readable digital text found. This PDF may be a flat image scan.");
-        return { pages, chapters };
-      }
-
-      if (lowerName.endsWith('.html') || lowerName.endsWith('.htm')) {
-        const raw = new TextDecoder('utf-8').decode(uint8);
-        const blocks = parseHtmlToBlocks(raw);
-        const pages = [];
-        for (let i = 0; i < blocks.length; i += 5) pages.push(blocks.slice(i, i + 5));
-        return { pages, chapters: [{ title: "HTML Document", pageIndex: 0 }] };
-      }
-
-      let nonPrintable = 0;
-      const sampleLen = Math.min(uint8.length, 1000);
-      for (let i = 0; i < sampleLen; i++) {
-        if (uint8[i] === 0 || (uint8[i] < 32 && uint8[i] !== 9 && uint8[i] !== 10 && uint8[i] !== 13)) {
-          nonPrintable++;
-        }
-      }
-      if (nonPrintable > 15) {
-        throw new Error("Unable to read file: The file contains binary or DRM-protected data. Please ensure it is an unlocked EPUB, PDF, Word, or TXT file.");
-      }
-
-      const raw = new TextDecoder('utf-8').decode(uint8);
-      const sents = splitIntoSentences(raw);
-      if (sents.length === 0) throw new Error("Document is empty.");
-      const pages = [];
-      for (let i = 0; i < sents.length; i += 5) pages.push(blocks.slice(i, i + 5));
-      return { pages, chapters: [{ title: "Beginning", pageIndex: 0 }] };
-    }
-
-    // PRIMARY FILE IMPORT LISTENER
-    fileInput.addEventListener('change', async (event) => {
-      const file = event.target.files && event.target.files[0];
-      if (!file) return;
-
-      stopAudio();
-      currentDocName = file.name;
-      docTitle.textContent = currentDocName;
-      preloadStatus.textContent = "Opening...";
-      contentPane.innerHTML = `<div style="text-align:center; padding:3rem; color:var(--text-muted); font-style:italic;">Processing "${file.name}"...</div>`;
-
-      try {
-        const result = await processUploadedDocument(file);
-        bookPages = result.pages;
-        bookChapters = result.chapters || [{ title: "Beginning", pageIndex: 0 }];
-
-        currentPage = 0;
-        currentSentenceIdx = 0;
-        learnedCadenceMultiplier = 1.0;
-        preloadStatus.textContent = "Ready";
-        renderPage(0);
-        saveBookToShelf(currentDocName, bookPages, bookChapters);
-
-      } catch (err) {
-        preloadStatus.textContent = "Error";
-        alert(err.message);
-        renderPage(currentPage);
-      } finally {
-        fileInput.value = '';
-      }
-    });
-
-    // STARTUP PREFERENCES RESTORATION
-    const savedTheme = localStorage.getItem('marginalia_theme') || 'dark';
-    document.documentElement.setAttribute('data-theme', savedTheme);
-    optionThemeSelect.value = savedTheme;
-
-    const savedFont = localStorage.getItem('marginalia_font_face') || 'serif';
-    fontSelect.value = savedFont;
-    applyFontFace(savedFont);
-
-    const savedFontSize = localStorage.getItem('marginalia_font_size') || '1.15rem';
-    fontSizeSelect.value = savedFontSize;
-    document.documentElement.style.setProperty('--reader-font-size', savedFontSize);
-
-    const savedHighlight = localStorage.getItem('marginalia_highlight_mode') || 'word';
-    highlightMode = savedHighlight;
-    highlightModeSelect.value = savedHighlight;
-
-    const savedCalibration = localStorage.getItem('marginalia_sync_calibration');
-    if (savedCalibration) {
-      userManualCalibration = parseFloat(savedCalibration) || 1.0;
-      karaokeCalibrationSlider.value = userManualCalibration;
-      updateSyncCalibrationLabel(userManualCalibration);
-    }
-
-    initIndexedDB();
-    populateVoices();
-    renderPage(0);
-    updateAuthBadge();
-  </script>
-</body>
-</html>
