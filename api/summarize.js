@@ -1,46 +1,62 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.SUPABASE_URL || process.env.SUPABASE_PROJECT_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY;
-
-const supabase = (supabaseUrl && supabaseKey) ? createClient(supabaseUrl, supabaseKey) : null;
-
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { text, mode = 'chapter' } = req.body || {};
   const customOpenAiKey = req.headers['x-custom-openai-key'];
-  const token = req.headers.authorization?.replace('Bearer ', '');
+  const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
 
   if (!text || !text.trim()) {
     return res.status(400).json({ error: 'No text provided for summarization.' });
   }
 
+  // 1. Resolve Supabase project URL and Key (Environment Variables or Client Fallback)
+  const supabaseUrl = process.env.SUPABASE_URL || 
+                      process.env.SUPABASE_PROJECT_URL || 
+                      req.headers['x-supabase-url'];
+
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 
+                      process.env.SUPABASE_ANON_KEY || 
+                      req.headers['x-supabase-key'];
+
   let isPro = false;
   let user = null;
   let trialLeft = 3;
 
-  // Enforce Supabase account quotas if user is not using their own key
+  // 2. Enforce Supabase account quotas if user is not using their own key
   if (!customOpenAiKey) {
     if (!token) {
-      return res.status(401).json({ error: 'No active session. Please sign in or enter your OpenAI key in Options.' });
+      return res.status(401).json({ error: 'No active session token. Please sign in.' });
     }
 
-    if (!supabase) {
+    if (!supabaseUrl || !supabaseKey) {
       return res.status(500).json({ 
-        error: 'Backend error: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing in Vercel environment variables.' 
+        error: 'Backend error: Supabase URL or Key is not configured. Add SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Vercel.' 
       });
     }
 
-    const { data: authData, error: authErr } = await supabase.auth.getUser(token);
+    // Verify token against Supabase Auth
+    const authClient = createClient(supabaseUrl, supabaseKey);
+    const { data: authData, error: authErr } = await authClient.auth.getUser(token);
+
     if (authErr || !authData?.user) {
       return res.status(401).json({ 
-        error: authErr?.message ? `Auth error: ${authErr.message}. Please sign in again.` : 'Invalid or expired user session. Please sign in again.' 
+        error: authErr?.message 
+          ? `Authentication error: ${authErr.message}. Please sign in again.` 
+          : 'Invalid or expired user session. Please sign in again.' 
       });
     }
     user = authData.user;
 
-    const { data: profile } = await supabase
+    // Use admin client if service role key is present, otherwise use user-scoped client
+    const dbClient = process.env.SUPABASE_SERVICE_ROLE_KEY
+      ? createClient(supabaseUrl, process.env.SUPABASE_SERVICE_ROLE_KEY)
+      : createClient(supabaseUrl, supabaseKey, {
+          global: { headers: { Authorization: `Bearer ${token}` } }
+        });
+
+    const { data: profile } = await dbClient
       .from('profiles')
       .select('summary_credits_remaining, tier')
       .eq('id', user.id)
@@ -50,8 +66,7 @@ export default async function handler(req, res) {
       isPro = profile.tier === 'pro';
       trialLeft = profile.summary_credits_remaining ?? 3;
     } else {
-      // Auto-provision a default free-tier profile row if one does not exist
-      await supabase.from('profiles').upsert({
+      await dbClient.from('profiles').upsert({
         id: user.id,
         email: user.email,
         summary_credits_remaining: 3,
@@ -105,11 +120,18 @@ export default async function handler(req, res) {
     if (!summary) throw new Error('AI returned an empty response.');
 
     // Deduct credit only for free-tier users utilizing host keys
-    if (!customOpenAiKey && !isPro && user) {
-      await supabase
+    if (!customOpenAiKey && !isPro && user && supabaseUrl && supabaseKey) {
+      const dbClient = process.env.SUPABASE_SERVICE_ROLE_KEY
+        ? createClient(supabaseUrl, process.env.SUPABASE_SERVICE_ROLE_KEY)
+        : createClient(supabaseUrl, supabaseKey, {
+            global: { headers: { Authorization: `Bearer ${token}` } }
+          });
+
+      await dbClient
         .from('profiles')
         .update({ summary_credits_remaining: Math.max(0, trialLeft - 1) })
-        .eq('id', user.id);
+        .eq('id', user.id)
+        .catch(() => {});
     }
 
     return res.status(200).json({ summary });
