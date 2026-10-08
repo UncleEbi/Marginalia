@@ -5,6 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Marginalia — Read-Along Reader</title>
 
+  <!-- PWA Manifest & App Config -->
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="theme-color" content="#0b1120" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Marginalia" />
+
+  <!-- App Icons -->
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
+  <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png" />
+
   <!-- Client-Side Document Parsers -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
@@ -451,6 +464,40 @@
       white-space: nowrap;
     }
 
+    /* FLOATING TEXT SELECTION POPOVER */
+    .selection-popover {
+      position: absolute;
+      display: none;
+      background: var(--panel-bg);
+      border: 1px solid var(--border);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+      border-radius: 8px;
+      padding: 0.3rem;
+      z-index: 90;
+      gap: 0.25rem;
+      align-items: center;
+      transform: translate(-50%, -100%);
+    }
+
+    .btn-popover-action {
+      background: var(--bg-main);
+      color: var(--text-main);
+      border: 1px solid var(--border);
+      padding: 0.3rem 0.55rem;
+      border-radius: 6px;
+      font-size: 0.76rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+      white-space: nowrap;
+    }
+    .btn-popover-action:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
     /* BOTTOM PLAYER */
     .mobile-player-bar {
       position: fixed;
@@ -552,7 +599,7 @@
       z-index: 210;
       display: flex;
       flex-direction: column;
-      box-shadow: 4px 0 25px rgba(0,0,0,0.35);
+      box-shadow: 4px 0 25px rgba(0, 0, 0, 0.35);
       transition: transform var(--transition);
     }
     .side-drawer.open { transform: translateX(310px); }
@@ -596,7 +643,7 @@
       font-size: 1.05rem;
       font-weight: 700;
       color: #ffffff;
-      text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+      text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -655,7 +702,7 @@
     }
     .drawer-quick-btn span.icon { font-size: 1.15rem; color: var(--text-main); }
 
-    /* MODAL ARCHITECTURE: SCROLLABLE WITH PINNED HEADER/FOOTER */
+    /* MODAL ARCHITECTURE */
     .modal-overlay {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
@@ -676,7 +723,7 @@
       max-height: 88vh;
       border-radius: 14px;
       padding: 1.25rem 1.35rem;
-      box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
       display: flex;
       flex-direction: column;
       overflow: hidden;
@@ -818,7 +865,21 @@
       background: rgba(56, 189, 248, 0.08);
     }
 
-    /* AUTH INPUTS & AUTOFILL */
+    /* AUTH INPUT FORM GROUPS */
+    .auth-form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+      margin-bottom: 0.85rem;
+      width: 100%;
+    }
+
+    .auth-label {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+
     .auth-input-field {
       width: 100%;
       padding: 0.72rem 0.85rem;
@@ -837,9 +898,11 @@
     }
     .auth-input-field:-webkit-autofill,
     .auth-input-field:-webkit-autofill:hover, 
-    .auth-input-field:-webkit-autofill:focus {
+    .auth-input-field:-webkit-autofill:focus,
+    .auth-input-field:-webkit-autofill:active {
       -webkit-text-fill-color: var(--text-main) !important;
       -webkit-box-shadow: 0 0 0px 1000px var(--bg-main) inset !important;
+      box-shadow: 0 0 0px 1000px var(--bg-main) inset !important;
       transition: background-color 5000s ease-in-out 0s;
     }
 
@@ -998,6 +1061,11 @@
         <span style="font-size:1.2rem;">📂</span>
         <span>Import New Document</span>
       </div>
+
+      <div class="drawer-nav-item" id="navInstallPwa" style="display:none;">
+        <span style="font-size:1.2rem;">📲</span>
+        <span>Install App</span>
+      </div>
     </div>
 
     <div class="drawer-footer">
@@ -1066,6 +1134,13 @@
       </div>
 
       <div id="contentPane" class="book-content"></div>
+
+      <!-- TEXT SELECTION QUICK ACTIONS -->
+      <div id="selectionPopover" class="selection-popover">
+        <button class="btn-popover-action" id="btnSelectionSpeak">🗣️ Speak</button>
+        <button class="btn-popover-action" id="btnSelectionDefine">📖 Define</button>
+        <button class="btn-popover-action" id="btnSelectionCopy">📋 Copy</button>
+      </div>
     </div>
   </main>
 
@@ -1224,7 +1299,7 @@
           <label style="font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:0.35rem;">Font Size</label>
           <select id="fontSizeSelect" style="width:100%; padding:0.45rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:16px;">
             <option value="1.05rem">Small</option>
-            <option value="1.15rem">Standard</option>
+            <option value="1.15rem" selected>Standard</option>
             <option value="1.35rem">Large</option>
             <option value="1.55rem">Extra Large</option>
           </select>
@@ -1292,7 +1367,7 @@
         Marginalia is an adaptive read-along reader with client-side document processing, native and neural TTS, and AI summaries.
       </p>
       <div style="font-size:0.8rem; background:var(--bg-main); padding:0.75rem; border-radius:8px; border:1px solid var(--border);">
-        <div style="margin-bottom:0.3rem;"><strong>Version:</strong> 3.0.1 (Auth-Fixed Edition)</div>
+        <div style="margin-bottom:0.3rem;"><strong>Version:</strong> 3.1.2 (PWA & MediaSession Edition)</div>
         <div><strong>Storage:</strong> IndexedDB Offline Bookshelf</div>
       </div>
       <div style="display:flex; justify-content:flex-end;">
@@ -1342,30 +1417,28 @@
     </div>
   </div>
 
-  <!-- AUTH MODAL: CLEAN SPACING & AUTOFILL DARK MODE STYLING -->
+  <!-- AUTH MODAL: FIXED ISOLATED FORM GROUPS -->
   <div id="authModal" class="modal-overlay">
-    <div class="modal-card" style="max-width:390px; gap:0.75rem;">
-      <div class="modal-header-bar" style="margin-bottom:0; padding-bottom:0.5rem;">
+    <div class="modal-card" style="max-width:390px;">
+      <div class="modal-header-bar" style="margin-bottom:0.25rem; padding-bottom:0.5rem;">
         <div class="modal-title">Account Access</div>
         <button class="bookmark-ribbon-btn" data-close="authModal" style="font-size:1.1rem;">✕</button>
       </div>
 
-      <p style="font-size:0.83rem; color:var(--text-muted); line-height:1.4;">
+      <p style="font-size:0.83rem; color:var(--text-muted); line-height:1.4; margin-bottom:0.75rem;">
         Sign in to access your free trial summaries and neural voice quota.
       </p>
 
-      <div id="authStatusAlert" style="display:none; font-size:0.8rem; padding:0.6rem 0.75rem; border-radius:6px; line-height:1.35;"></div>
+      <div id="authStatusAlert" style="display:none; font-size:0.8rem; padding:0.6rem 0.75rem; border-radius:6px; line-height:1.35; margin-bottom:0.75rem;"></div>
 
-      <div style="display:flex; flex-direction:column; gap:0.85rem;">
-        <div>
-          <label style="font-size:0.78rem; font-weight:600; color:var(--text-muted); display:block; margin-bottom:0.35rem;">Email Address</label>
-          <input type="email" id="authEmail" class="auth-input-field" placeholder="you@example.com" autocomplete="email" />
-        </div>
+      <div class="auth-form-group">
+        <label class="auth-label">Email Address</label>
+        <input type="email" id="authEmail" class="auth-input-field" placeholder="you@example.com" autocomplete="email" />
+      </div>
 
-        <div>
-          <label style="font-size:0.78rem; font-weight:600; color:var(--text-muted); display:block; margin-bottom:0.35rem;">Password</label>
-          <input type="password" id="authPass" class="auth-input-field" placeholder="••••••••" autocomplete="current-password" />
-        </div>
+      <div class="auth-form-group">
+        <label class="auth-label">Password</label>
+        <input type="password" id="authPass" class="auth-input-field" placeholder="••••••••" autocomplete="current-password" />
       </div>
 
       <div class="modal-footer-bar" style="margin-top:0.4rem;">
@@ -1376,7 +1449,9 @@
     </div>
   </div>
 
-  <audio id="neuralAudio" style="display:none;" playsinline></audio>
+  <!-- BACKGROUND AUDIO KEEP-ALIVE ANCHORS -->
+  <audio id="neuralAudio" playsinline style="display:none;"></audio>
+  <audio id="silentAudioLoop" loop playsinline style="display:none;" src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA="></audio>
 
   <script>
     // --- SUPABASE CONFIGURATION ---
@@ -1397,6 +1472,36 @@
       } catch (err) {
         console.warn("Supabase init error:", err);
       }
+    }
+
+    // --- SERVICE WORKER & PWA INSTALL CONTROLLER ---
+    let deferredPrompt = null;
+    const navInstallPwa = document.getElementById('navInstallPwa');
+
+    if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').catch(() => {});
+      });
+    }
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      if (navInstallPwa) navInstallPwa.style.display = 'flex';
+    });
+
+    if (navInstallPwa) {
+      navInstallPwa.addEventListener('click', async () => {
+        closeDrawer();
+        if (deferredPrompt) {
+          deferredPrompt.prompt();
+          const { outcome } = await deferredPrompt.userChoice;
+          if (outcome === 'accepted') navInstallPwa.style.display = 'none';
+          deferredPrompt = null;
+        } else {
+          alert("To install Marginalia, tap Share in Safari or the three dots in Chrome, then select 'Add to Home Screen'.");
+        }
+      });
     }
 
     // --- MODAL CONTROLLER ---
@@ -1556,8 +1661,8 @@
       [
         "Welcome to Marginalia Mobile Reader.",
         "Tap the Open button above to import any EPUB, PDF, Word, or text file.",
-        "You can now customize your reading rhythm: choose between synchronized word karaoke, sentence-only focus, or clean text.",
-        "Your documents and progress are saved automatically on your device."
+        "Select any phrase in the book to immediately define, speak, or copy it.",
+        "Lock your phone screen while reading and enjoy uninterrupted background voice narration."
       ]
     ];
     let bookChapters = [
@@ -1586,7 +1691,15 @@
     const browserSpeech = window.speechSynthesis;
     let currentUtterance = null;
     const audioElement = document.getElementById('neuralAudio');
+    const silentAudioLoop = document.getElementById('silentAudioLoop');
     const audioPreloadCache = new Map();
+
+    // Selection elements
+    const selectionPopover = document.getElementById('selectionPopover');
+    const btnSelectionSpeak = document.getElementById('btnSelectionSpeak');
+    const btnSelectionDefine = document.getElementById('btnSelectionDefine');
+    const btnSelectionCopy = document.getElementById('btnSelectionCopy');
+    let currentSelectedText = "";
 
     // DOM Elements
     const contentPane = document.getElementById('contentPane');
@@ -1682,199 +1795,181 @@
     const karaokeCalibrationContainer = document.getElementById('karaokeCalibrationContainer');
     const saveOptionsBtn = document.getElementById('saveOptionsBtn');
 
-    // --- DRAWER CONTROLLER ---
-    function openDrawer() {
-      sideDrawer.classList.add('open');
-      drawerOverlay.classList.add('active');
+    // --- MEDIA SESSION CONTROLLER (Lock Screen Audio) ---
+    var keepAliveAudio = null;
+
+    function makeSilentWavUrl() {
+      const sampleRate = 8000, n = sampleRate;
+      const buf = new ArrayBuffer(44 + n);
+      const v = new DataView(buf);
+      const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+      w(0, 'RIFF'); v.setUint32(4, 36 + n, true); w(8, 'WAVE'); w(12, 'fmt ');
+      v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+      v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate, true);
+      v.setUint16(32, 1, true); v.setUint16(34, 8, true); w(36, 'data'); v.setUint32(40, n, true);
+      new Uint8Array(buf, 44).fill(128);
+      return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
     }
-    function closeDrawer() {
-      sideDrawer.classList.remove('open');
-      drawerOverlay.classList.remove('active');
-    }
 
-    openDrawerBtn.addEventListener('click', openDrawer);
-    closeDrawerBtn.addEventListener('click', closeDrawer);
-    drawerOverlay.addEventListener('click', closeDrawer);
-
-    // --- SHELF & RECENT MODALS ---
-    async function showShelfModal(mode = "shelf") {
-      closeDrawer();
-      const books = await getAllBooksFromShelf();
-      shelfModalTitle.textContent = mode === "recent" ? "🕒 Recent list" : "📚 My Shelf";
-      shelfModalList.innerHTML = '';
-
-      if (books.length === 0) {
-        shelfModalList.innerHTML = '<div style="text-align:center; padding:2rem; color:var(--text-muted); font-size:0.85rem;">No books saved yet. Tap "Open" to load a file.</div>';
-      } else {
-        const displayBooks = mode === "recent" ? books.slice(0, 5) : books;
-        displayBooks.forEach(b => {
-          const card = document.createElement('div');
-          card.className = 'shelf-card';
-          card.innerHTML = `
-            <div class="shelf-card-info">
-              <span class="shelf-card-title">${b.title}</span>
-              <span class="shelf-card-sub">Page ${(b.currentPage || 0) + 1} of ${b.pages.length}</span>
-            </div>
-            <div class="shelf-action-group">
-              <button class="shelf-delete-btn" title="Delete document">🗑️</button>
-              <span style="font-size:0.8rem; color:var(--accent); font-weight:600; padding:0.2rem 0.4rem;">Open →</span>
-            </div>
-          `;
-
-          const delBtn = card.querySelector('.shelf-delete-btn');
-          delBtn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            if (confirm(`Remove "${b.title}" from My Shelf?`)) {
-              await deleteBookFromShelf(b.id);
-              showShelfModal(mode);
-            }
-          });
-
-          card.addEventListener('click', () => {
-            stopAudio();
-            bookPages = b.pages;
-            bookChapters = b.chapters || [{ title: "Beginning", pageIndex: 0 }];
-            currentDocName = b.title;
-            currentPage = b.currentPage || 0;
-            currentSentenceIdx = b.currentSentenceIdx || 0;
-            docTitle.textContent = currentDocName;
-            shelfModal.style.display = 'none';
-            renderPage(currentPage);
-          });
-
-          shelfModalList.appendChild(card);
+    function updateMediaMetadata() {
+      if (!('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
+      try {
+        const ch = getCurrentChapter();
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: (ch && ch.title) || currentDocName,
+          artist: currentDocName,
+          album: 'Marginalia',
+          artwork: [
+            { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
+            { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' }
+          ]
         });
-      }
-      shelfModal.style.display = 'flex';
+      } catch (e) { console.warn('Media metadata failed:', e); }
     }
 
-    navRecentList.addEventListener('click', () => showShelfModal("recent"));
-    navMyShelf.addEventListener('click', () => showShelfModal("shelf"));
-    navUploadFile.addEventListener('click', () => {
-      closeDrawer();
-      fileInput.value = '';
-      fileInput.click();
-    });
-
-    // --- BOOKMARKS ---
-    addBookmarkBtn.addEventListener('click', async () => {
-      const activeItem = bookPages[currentPage]?.[currentSentenceIdx];
-      const snippet = typeof activeItem === 'string' ? activeItem : (activeItem?.caption || "Diagram");
-      await saveBookmarkToDB(currentDocName, currentPage, currentSentenceIdx, snippet);
-      alert(`Bookmark saved: Page ${currentPage + 1}`);
-    });
-
-    navBookmarks.addEventListener('click', async () => {
-      closeDrawer();
-      const marks = await getBookmarksFromDB();
-      bookmarksModalList.innerHTML = '';
-
-      if (marks.length === 0) {
-        bookmarksModalList.innerHTML = '<div style="text-align:center; padding:2rem; color:var(--text-muted); font-size:0.85rem;">No bookmarks saved yet.</div>';
-      } else {
-        marks.reverse().forEach(m => {
-          const card = document.createElement('div');
-          card.className = 'shelf-card';
-          card.innerHTML = `
-            <div class="shelf-card-info">
-              <span class="shelf-card-title">${m.bookTitle} — Page ${m.page + 1}</span>
-              <span class="shelf-card-sub" style="font-style:italic;">"${m.snippet.slice(0, 42)}..."</span>
-            </div>
-            <span style="font-size:0.8rem; color:var(--accent); font-weight:600;">Jump →</span>
-          `;
-          card.addEventListener('click', () => {
-            if (currentDocName === m.bookTitle) {
-              stopAudio();
-              currentPage = m.page;
-              currentSentenceIdx = m.sentenceIdx;
-              bookmarksModal.style.display = 'none';
-              renderPage(currentPage);
-            } else {
-              alert(`Bookmark is in "${m.bookTitle}". Open it first from My Shelf.`);
-            }
-          });
-          bookmarksModalList.appendChild(card);
-        });
-      }
-      bookmarksModal.style.display = 'flex';
-    });
-
-    // --- CHAPTER & PAGE JUMP MODAL HANDLERS ---
-    function getCurrentChapter() {
-      if (!bookChapters || bookChapters.length === 0) return { title: "Chapter 1", pageIndex: 0 };
-      let active = bookChapters[0];
-      for (const ch of bookChapters) {
-        if (currentPage >= ch.pageIndex) active = ch;
-        else break;
-      }
-      return active;
+    function syncMediaSessionState(playing) {
+      if (!('mediaSession' in navigator)) return;
+      try {
+        navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+        if (playing && activeEngine === 'browser') {
+          if (!keepAliveAudio) {
+            keepAliveAudio = new Audio(makeSilentWavUrl());
+            keepAliveAudio.loop = true;
+          }
+          keepAliveAudio.play().catch(() => {});
+        } else if (keepAliveAudio) {
+          keepAliveAudio.pause();
+        }
+      } catch (e) {}
     }
 
-    openJumpModalBtn.addEventListener('click', () => {
-      pageJumpSlider.max = bookPages.length;
-      pageJumpSlider.value = currentPage + 1;
-      pageDirectInput.max = bookPages.length;
-      pageDirectInput.value = currentPage + 1;
-      sliderValueDisplay.textContent = `Page ${currentPage + 1} of ${bookPages.length}`;
+    function skipSentence(delta) {
+      const wasPlaying = isPlaying;
+      isPlaying = false;
+      if (currentUtterance) { currentUtterance.onend = null; currentUtterance.onerror = null; }
+      audioElement.onended = null;
+      browserSpeech.cancel();
+      audioElement.pause();
+      cancelWordAnimation();
 
-      chapterListView.innerHTML = '';
-      if (!bookChapters || bookChapters.length === 0) {
-        chapterListView.innerHTML = '<div style="text-align:center; padding:1.5rem; color:var(--text-muted);">No separate chapters found.</div>';
-      } else {
-        const currentCh = getCurrentChapter();
-        bookChapters.forEach((ch) => {
-          const item = document.createElement('div');
-          item.className = `chapter-item ${ch.pageIndex === currentCh.pageIndex ? 'active' : ''}`;
-          item.innerHTML = `
-            <span>${ch.title}</span>
-            <span style="font-size:0.75rem; color:var(--text-muted);">Pg ${ch.pageIndex + 1}</span>
-          `;
-          item.addEventListener('click', () => {
-            stopAudio();
-            currentPage = ch.pageIndex;
-            currentSentenceIdx = 0;
-            jumpModal.style.display = 'none';
-            renderPage(currentPage);
-          });
-          chapterListView.appendChild(item);
-        });
+      let idx = currentSentenceIdx + delta;
+      const len = () => (bookPages[currentPage] || []).length;
+      if (idx < 0) {
+        if (currentPage > 0) { currentPage--; renderPage(currentPage); idx = Math.max(0, len() - 1); }
+        else idx = 0;
+      } else if (idx >= len()) {
+        if (currentPage < bookPages.length - 1) { currentPage++; renderPage(currentPage); idx = 0; }
+        else idx = Math.max(0, len() - 1);
+      }
+      currentSentenceIdx = idx;
+      highlightActiveSentence();
+      if (wasPlaying) { isPlaying = true; playCurrentSentence(); }
+    }
+
+    (function registerMediaSessionHandlers() {
+      if (!('mediaSession' in navigator)) return;
+      const set = (action, fn) => { try { navigator.mediaSession.setActionHandler(action, fn); } catch (e) {} };
+      set('play', () => { if (!isPlaying) { isPlaying = true; playCurrentSentence(); } });
+      set('pause', () => stopAudio());
+      set('stop', () => stopAudio());
+      set('previoustrack', () => skipSentence(-1));
+      set('nexttrack', () => skipSentence(1));
+      set('seekbackward', () => prevPageBtn.click());
+      set('seekforward', () => nextPageBtn.click());
+    })();
+
+    // --- TEXT SELECTION QUICK ACTIONS ---
+    function handleTextSelection() {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.rangeCount) {
+        selectionPopover.style.display = 'none';
+        return;
       }
 
-      jumpModal.style.display = 'flex';
+      const text = sel.toString().trim();
+      if (!text || text.length < 2) {
+        selectionPopover.style.display = 'none';
+        return;
+      }
+
+      currentSelectedText = text;
+      const range = sel.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
+      const cardRect = contentPane.getBoundingClientRect();
+
+      selectionPopover.style.left = `${rect.left + rect.width / 2 - cardRect.left}px`;
+      selectionPopover.style.top = `${rect.top - cardRect.top - 8}px`;
+      selectionPopover.style.display = 'flex';
+    }
+
+    contentPane.addEventListener('mouseup', handleTextSelection);
+    contentPane.addEventListener('touchend', () => setTimeout(handleTextSelection, 100));
+
+    document.addEventListener('selectionchange', () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) {
+        selectionPopover.style.display = 'none';
+      }
     });
 
-    tabChaptersBtn.addEventListener('click', () => {
-      tabChaptersBtn.classList.add('active');
-      tabPagesBtn.classList.remove('active');
-      chapterListView.style.display = 'flex';
-      pageJumpView.style.display = 'none';
-    });
-
-    tabPagesBtn.addEventListener('click', () => {
-      tabPagesBtn.classList.add('active');
-      tabChaptersBtn.classList.remove('active');
-      chapterListView.style.display = 'none';
-      pageJumpView.style.display = 'flex';
-    });
-
-    pageJumpSlider.addEventListener('input', (e) => {
-      const val = parseInt(e.target.value, 10);
-      sliderValueDisplay.textContent = `Page ${val} of ${bookPages.length}`;
-      pageDirectInput.value = val;
-    });
-
-    btnExecuteDirectJump.addEventListener('click', () => {
-      let target = parseInt(pageDirectInput.value, 10);
-      if (isNaN(target) || target < 1) target = 1;
-      if (target > bookPages.length) target = bookPages.length;
+    btnSelectionSpeak.addEventListener('click', (e) => {
+      e.stopPropagation();
+      selectionPopover.style.display = 'none';
+      if (!currentSelectedText) return;
       stopAudio();
-      currentPage = target - 1;
-      currentSentenceIdx = 0;
-      jumpModal.style.display = 'none';
-      renderPage(currentPage);
+      if (activeEngine === 'browser') {
+        const utter = new SpeechSynthesisUtterance(currentSelectedText);
+        utter.rate = playbackSpeed;
+        const voices = browserSpeech.getVoices();
+        if (voices.length > 0 && voicePicker.value && voicePicker.value !== "default") {
+          const v = voices.find(vx => (vx.voiceURI === voicePicker.value) || (`${vx.name}:::${vx.lang}` === voicePicker.value));
+          if (v) { utter.voice = v; utter.lang = v.lang; }
+        }
+        browserSpeech.speak(utter);
+      } else {
+        speakServerless(currentSelectedText);
+      }
     });
 
-    // --- DRAWER QUICK ACTIONS ---
+    btnSelectionDefine.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      selectionPopover.style.display = 'none';
+      const cleanWord = currentSelectedText.split(/\s+/)[0].replace(/[^a-zA-Z]/g, '').toLowerCase();
+      if (!cleanWord) return;
+
+      try {
+        const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${cleanWord}`);
+        if (!res.ok) throw new Error("No definition found.");
+        const data = await res.json();
+        const def = data[0]?.meanings[0]?.definitions[0]?.definition || "Definition not found.";
+        const part = data[0]?.meanings[0]?.partOfSpeech || "";
+        alert(`📖 "${cleanWord}" (${part}):\n\n${def}`);
+      } catch (err) {
+        alert(`Could not find a dictionary entry for "${cleanWord}".`);
+      }
+    });
+
+    btnSelectionCopy.addEventListener('click', (e) => {
+      e.stopPropagation();
+      selectionPopover.style.display = 'none';
+      navigator.clipboard.writeText(currentSelectedText);
+      alert("Text copied to clipboard!");
+    });
+
+    // --- DRAWER ACTIONS ---
+    function openOptionsModal() {
+      optionThemeSelect.value = document.documentElement.getAttribute('data-theme') || 'dark';
+      fontSelect.value = localStorage.getItem('marginalia_font_face') || 'serif';
+      fontSizeSelect.value = localStorage.getItem('marginalia_font_size') || '1.15rem';
+      highlightModeSelect.value = highlightMode;
+      karaokeCalibrationContainer.style.display = highlightMode === 'word' ? 'block' : 'none';
+      customOpenAiKeyInput.value = localStorage.getItem('marginalia_byok_openai') || '';
+      customElevenKeyInput.value = localStorage.getItem('marginalia_byok_eleven') || '';
+      karaokeCalibrationSlider.value = userManualCalibration;
+      updateSyncCalibrationLabel(userManualCalibration);
+      optionsModal.style.display = 'flex';
+    }
+
     btnDrawerNightToggle.addEventListener('click', () => {
       const current = document.documentElement.getAttribute('data-theme');
       const nextTheme = current === 'dark' ? 'oled' : (current === 'oled' ? 'sepia' : (current === 'sepia' ? 'light' : 'dark'));
@@ -1892,19 +1987,6 @@
       closeDrawer();
       aboutModal.style.display = 'flex';
     });
-
-    function openOptionsModal() {
-      optionThemeSelect.value = document.documentElement.getAttribute('data-theme') || 'dark';
-      fontSelect.value = localStorage.getItem('marginalia_font_face') || 'serif';
-      fontSizeSelect.value = localStorage.getItem('marginalia_font_size') || '1.15rem';
-      highlightModeSelect.value = highlightMode;
-      karaokeCalibrationContainer.style.display = highlightMode === 'word' ? 'block' : 'none';
-      customOpenAiKeyInput.value = localStorage.getItem('marginalia_byok_openai') || '';
-      customElevenKeyInput.value = localStorage.getItem('marginalia_byok_eleven') || '';
-      karaokeCalibrationSlider.value = userManualCalibration;
-      updateSyncCalibrationLabel(userManualCalibration);
-      optionsModal.style.display = 'flex';
-    }
 
     function applyFontFace(val) {
       contentPane.style.fontFamily = val === 'serif' ? 'var(--font-reader)' :
@@ -1976,7 +2058,7 @@
       }, 350);
     });
 
-    // --- PROFILE & AUTH CONTROLLER ---
+    // --- PROFILE & AUTHENTICATION CONTROLLER ---
     async function openProfileModal() {
       if (!supabaseClient) {
         authModal.style.display = 'flex';
@@ -2000,7 +2082,7 @@
         .from('profiles')
         .select('neural_chars_remaining, summary_credits_remaining, tier')
         .eq('id', user.id)
-        .single();
+        .maybeSingle();
 
       const tier = profile?.tier || 'free';
       profileModalTier.textContent = tier === 'pro' ? '🌟 Pro Subscriber' : '⚡ Free Trial Account';
@@ -2062,8 +2144,10 @@
     profileSignOutBtn.addEventListener('click', async () => {
       if (confirm("Are you sure you want to sign out of your account?")) {
         if (supabaseClient) {
-          await supabaseClient.auth.signOut();
+          await supabaseClient.auth.signOut().catch(() => {});
         }
+        localStorage.removeItem('marginalia_auth_token');
+        localStorage.removeItem('marginalia_auth_user');
         closeModalById('profileModal');
         updateAuthBadge();
         alert("Signed out successfully.");
@@ -2089,22 +2173,17 @@
     }
 
     async function getFreshAuthToken() {
-      if (!supabaseClient) return null;
-      try {
-        let { data: { session } } = await supabaseClient.auth.getSession();
-        if (!session) return null;
-
-        const nowSec = Math.floor(Date.now() / 1000);
-        if (session.expires_at && (session.expires_at - nowSec < 90)) {
-          const { data: refreshed, error } = await supabaseClient.auth.refreshSession();
-          if (!error && refreshed?.session) {
-            session = refreshed.session;
+      const cachedToken = localStorage.getItem('marginalia_auth_token');
+      if (supabaseClient) {
+        try {
+          let { data: { session } } = await supabaseClient.auth.getSession();
+          if (session?.access_token) {
+            localStorage.setItem('marginalia_auth_token', session.access_token);
+            return session.access_token;
           }
-        }
-        return session?.access_token || null;
-      } catch (e) {
-        return null;
+        } catch (e) {}
       }
+      return cachedToken || null;
     }
 
     async function updateAuthBadge(explicitRemaining = null) {
@@ -2142,7 +2221,7 @@
           .from('profiles')
           .select('neural_chars_remaining')
           .eq('id', session.user.id)
-          .single();
+          .maybeSingle();
 
         const remaining = profile ? profile.neural_chars_remaining : 5000;
         creditDisplay.innerHTML = `<span class="user-avatar-mini">${initial}</span> ${remaining.toLocaleString()}`;
@@ -2172,16 +2251,20 @@
         const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
         if (error) {
           if (error.message.toLowerCase().includes('email not confirmed')) {
-            showAuthAlert("Email not confirmed. Check your inbox or turn off 'Confirm email' in Supabase Authentication settings.", "error");
+            showAuthAlert("Email not confirmed. Check your email inbox or turn off 'Confirm email' in Supabase Dashboard (Authentication -> Providers -> Email).", "error");
           } else {
             showAuthAlert(error.message, "error");
           }
         } else {
+          if (data?.session?.access_token) {
+            localStorage.setItem('marginalia_auth_token', data.session.access_token);
+            localStorage.setItem('marginalia_auth_user', JSON.stringify(data.session.user));
+          }
           showAuthAlert("Success! Signed in.", "success");
           setTimeout(() => {
             authModal.style.display = 'none';
             updateAuthBadge();
-          }, 600);
+          }, 500);
         }
       } catch (err) {
         showAuthAlert(err.message, "error");
@@ -2211,13 +2294,17 @@
         if (error) {
           showAuthAlert(error.message, "error");
         } else if (data?.user && !data?.session) {
-          showAuthAlert("Account created! Please check your email inbox to confirm your account (or disable 'Confirm email' in Supabase Dashboard), then sign in.", "info");
+          showAuthAlert("Account created! Check your email inbox to confirm your email, or turn off 'Confirm email' in Supabase Dashboard (Authentication -> Providers -> Email) to sign in immediately.", "info");
         } else {
+          if (data?.session?.access_token) {
+            localStorage.setItem('marginalia_auth_token', data.session.access_token);
+            localStorage.setItem('marginalia_auth_user', JSON.stringify(data.session.user));
+          }
           showAuthAlert("Account created & signed in!", "success");
           setTimeout(() => {
             authModal.style.display = 'none';
             updateAuthBadge();
-          }, 700);
+          }, 500);
         }
       } catch (err) {
         showAuthAlert(err.message, "error");
@@ -2227,7 +2314,225 @@
       }
     });
 
-    // --- ACCURATE SYLLABLE-INFORMED CADENCE ENGINE ---
+    // --- AI SUMMARIZER (3-TIER RESILIENT PIPELINE) ---
+    const SUMMARY_STOPWORDS = new Set(("a about above after again all also am an and any are as at be because been before being below between both but by can could did do does doing down during each few for from further had has have having he her here hers him his how i if in into is it its just me more most my no nor not of off on once only or other our out over own same she should so some such than that the their them then there these they this those through to too under until up very was we were what when where which while who whom why will with would you your").split(' '));
+
+    function showToast(msg) {
+      const t = document.createElement('div');
+      t.textContent = msg;
+      t.style.cssText = 'position:fixed; left:50%; bottom:calc(var(--safe-bottom) + 90px); transform:translateX(-50%); max-width:90vw; background:var(--panel-bg); color:var(--text-main); border:1px solid var(--border); padding:0.55rem 0.9rem; border-radius:8px; font-size:0.8rem; z-index:9999; box-shadow:0 4px 14px rgba(0,0,0,0.35);';
+      document.body.appendChild(t);
+      setTimeout(() => t.remove(), 4500);
+    }
+
+    function extractiveSummary(text, mode) {
+      const sents = splitIntoSentences(text).map(s => s.trim()).filter(s => s.split(/\s+/).length >= 5);
+      if (sents.length <= 4) return sents.join(' ');
+
+      const tokenize = s => (s.toLowerCase().match(/[a-z][a-z'-]+/g) || []).filter(w => w.length > 2 && !SUMMARY_STOPWORDS.has(w));
+      const freq = new Map();
+      sents.forEach(s => tokenize(s).forEach(w => freq.set(w, (freq.get(w) || 0) + 1)));
+      let maxF = 1;
+      freq.forEach(v => { if (v > maxF) maxF = v; });
+
+      const scored = sents.map((s, i) => {
+        const toks = tokenize(s);
+        if (!toks.length) return { s, i, score: 0 };
+        let sum = 0;
+        toks.forEach(w => { sum += freq.get(w) / maxF; });
+        let score = sum / Math.sqrt(toks.length);
+        if (s.split(/\s+/).length > 60) score *= 0.6;
+        return { s, i, score };
+      });
+
+      let picked;
+      if (mode === 'chapter') {
+        const target = Math.min(10, Math.max(4, Math.round(sents.length * 0.2)));
+        picked = scored.slice(0, 3).map(x => ({ ...x, score: x.score * 1.15 }))
+          .concat(scored.slice(3))
+          .sort((a, b) => b.score - a.score).slice(0, target);
+      } else {
+        const target = Math.min(14, Math.max(6, Math.round(sents.length / 40)));
+        const bucketSize = Math.ceil(scored.length / target);
+        picked = [];
+        for (let b = 0; b < scored.length; b += bucketSize) {
+          const bucket = scored.slice(b, b + bucketSize);
+          picked.push(bucket.reduce((best, x) => (x.score > best.score ? x : best), bucket[0]));
+        }
+      }
+      return picked.sort((a, b) => a.i - b.i).map(p => p.s).join(' ');
+    }
+
+    async function summarizeWithOpenAI(text, mode, apiKey) {
+      const system = mode === 'chapter'
+        ? "Summarize the given text faithfully in 1-3 short paragraphs of plain prose. No markdown, no bullet points, no headings."
+        : "Write the key takeaways of the given text as 6-10 complete sentences of plain prose. No markdown, no bullet points, no headings.";
+      const call = async (user) => {
+        const res = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            temperature: 0.3,
+            messages: [{ role: 'system', content: system }, { role: 'user', content: user }]
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error?.message || `OpenAI error ${res.status}`);
+        return (data.choices?.[0]?.message?.content || '').trim();
+      };
+
+      const CHUNK = 24000, MAX_CHUNKS = 8;
+      const chunks = [];
+      for (let i = 0; i < text.length && chunks.length < MAX_CHUNKS; i += CHUNK) chunks.push(text.slice(i, i + CHUNK));
+      const parts = [];
+      for (const c of chunks) parts.push(await call(c));
+      let out = parts.length === 1 ? parts[0] : await call("Combine these partial summaries into one coherent summary:\n\n" + parts.join('\n\n'));
+      return out.replace(/^[\s>*#•\-]+/gm, '').trim();
+    }
+
+    function getActiveChapterText() {
+      const flatten = (items) => items.map(it => typeof it === 'string' ? it : (it?.caption || '')).join(' ');
+      if (!originalBookPages && bookChapters && bookChapters.length > 1) {
+        const ch = getCurrentChapter();
+        const idx = bookChapters.indexOf(ch);
+        const start = ch.pageIndex;
+        const end = idx >= 0 && idx < bookChapters.length - 1 ? bookChapters[idx + 1].pageIndex : bookPages.length;
+        return flatten(bookPages.slice(start, end).flat());
+      }
+      return flatten(bookPages[currentPage] || []);
+    }
+
+    summarizeBtn.addEventListener('click', async () => {
+      if (originalBookPages) { showToast("Return to the book first (← Book) to summarize it again."); return; }
+      const customOpenAi = localStorage.getItem('marginalia_byok_openai') || '';
+      let notice = "Free offline summary: no key or account needed";
+      if (customOpenAi) {
+        notice = "Using your OpenAI key (AI summary)";
+      } else {
+        const token = await getFreshAuthToken();
+        if (token && supabaseClient) {
+          try {
+            const { data: { session } } = await supabaseClient.auth.getSession();
+            if (session) {
+              const { data: profile } = await supabaseClient.from('profiles').select('summary_credits_remaining, tier').eq('id', session.user.id).maybeSingle();
+              if (profile) {
+                if (profile.tier === 'pro') notice = "Plan: Pro (unlimited AI summaries)";
+                else {
+                  const trials = profile.summary_credits_remaining ?? 3;
+                  notice = trials > 0 ? `Free trial: ${trials} AI summaries left` : "AI trial used up: offline summary active";
+                }
+              }
+            }
+          } catch (e) {}
+        }
+      }
+      summaryTrialNotice.textContent = notice;
+      summaryModal.style.display = 'flex';
+    });
+
+    async function triggerSummarize(mode) {
+      summaryModal.style.display = 'none';
+      stopAudio();
+
+      const customOpenAi = localStorage.getItem('marginalia_byok_openai') || '';
+      const flatten = (items) => items.map(it => typeof it === 'string' ? it : (it?.caption || '')).join(' ');
+      const text = mode === 'chapter' ? getActiveChapterText() : flatten(bookPages.flat());
+      if (!text.trim()) { alert("No text to summarize."); return; }
+
+      contentPane.innerHTML = `<div style="text-align:center; padding:3rem; color:var(--text-muted); font-style:italic;">Generating summary...</div>`;
+
+      let summary = '';
+      let label = 'Summary';
+
+      try {
+        if (customOpenAi) {
+          try {
+            summary = await summarizeWithOpenAI(text, mode, customOpenAi);
+            label = 'AI Summary';
+          } catch (e) {
+            console.warn('OpenAI summary fallback:', e);
+            showToast(`OpenAI key error (${e.message}). Using offline summary.`);
+          }
+        } else {
+          const token = await getFreshAuthToken();
+          if (token) {
+            try {
+              const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
+              if (SUPABASE_PROJECT_URL && !SUPABASE_PROJECT_URL.includes("your-project")) {
+                headers['x-supabase-url'] = SUPABASE_PROJECT_URL;
+                headers['x-supabase-key'] = SUPABASE_ANON_KEY;
+              }
+              const res = await fetch('/api/summarize', { method: 'POST', headers, body: JSON.stringify({ text, mode }) });
+              const data = await res.json().catch(() => null);
+              if (data && res.status === 401) {
+                updateAuthBadge();
+                authModal.style.display = 'flex';
+                showAuthAlert(data.error || "Authentication error. Please sign in again.", "error");
+                renderPage(currentPage);
+                return;
+              }
+              if (data && (res.status === 402 || data.trialExhausted)) {
+                showToast("AI trial balance exhausted. Using offline summary.");
+              } else if (res.ok && data && data.summary) {
+                summary = data.summary;
+                label = 'AI Summary';
+              }
+            } catch (e) {
+              console.warn('Backend summary network fallback:', e);
+            }
+          }
+        }
+
+        if (!summary) {
+          summary = extractiveSummary(text, mode);
+          label = 'Offline Summary';
+        }
+        if (!summary.trim()) throw new Error("Couldn't find enough text to summarize.");
+
+        if (!originalBookPages) {
+          originalBookPages = bookPages;
+          originalDocName = currentDocName;
+          originalPage = currentPage;
+        }
+
+        const sents = splitIntoSentences(summary);
+        bookPages = [];
+        for (let i = 0; i < sents.length; i += 4) bookPages.push(sents.slice(i, i + 4));
+
+        currentDocName = `${label}: ${originalDocName}`;
+        docTitle.textContent = currentDocName;
+        summaryReturnSpan.style.display = 'inline-block';
+
+        currentPage = 0;
+        currentSentenceIdx = 0;
+        renderPage(0);
+
+        isPlaying = true;
+        playCurrentSentence();
+      } catch (e) {
+        alert(e.message);
+        renderPage(currentPage);
+      }
+    }
+
+    sumChapterBtn.addEventListener('click', () => triggerSummarize('chapter'));
+    sumKeyTakeawaysBtn.addEventListener('click', () => triggerSummarize('key_takeaways'));
+
+    exitSummaryBtn.addEventListener('click', () => {
+      if (originalBookPages) {
+        stopAudio();
+        bookPages = originalBookPages;
+        currentDocName = originalDocName;
+        currentPage = originalPage;
+        originalBookPages = null;
+        docTitle.textContent = currentDocName;
+        summaryReturnSpan.style.display = 'none';
+        renderPage(currentPage);
+      }
+    });
+
+    // --- CADENCE TIMING ENGINE ---
     function computeWordTimeline(words, speed, totalDuration = null) {
       const effectiveCadenceFactor = learnedCadenceMultiplier * userManualCalibration;
       const timeline = [];
@@ -2369,6 +2674,7 @@
       nextPageBtn.disabled = idx >= bookPages.length - 1;
       highlightActiveSentence();
       updateBookProgressInDB(currentDocName, currentPage, currentSentenceIdx);
+      updateMediaMetadata();
     }
 
     function highlightActiveSentence() {
@@ -2419,6 +2725,7 @@
 
       highlightActiveSentence();
       mainPlayToggle.textContent = '⏸';
+      syncMediaSessionState(true);
 
       const currentItem = pageItems[currentSentenceIdx];
 
@@ -2628,6 +2935,7 @@
     function stopAudio() {
       isPlaying = false;
       mainPlayToggle.textContent = '▶';
+      syncMediaSessionState(false);
       cancelWordAnimation();
       browserSpeech.cancel();
       audioElement.pause();
@@ -2806,224 +3114,6 @@
       });
     });
 
-    // --- AI VISION: EXPLAIN DIAGRAM ---
-    async function explainDiagram(imgSrc, captionText = "") {
-      stopAudio();
-      const customOpenAi = localStorage.getItem('marginalia_byok_openai') || '';
-      const token = await getFreshAuthToken();
-
-      if (!token && !customOpenAi) {
-        showAuthAlert("Please sign in or enter your OpenAI key in Options to analyze diagrams.", "error");
-        authModal.style.display = 'flex';
-        return;
-      }
-
-      preloadStatus.textContent = "Analyzing figure...";
-      contentPane.innerHTML = `<div style="text-align:center; padding:3rem; color:var(--text-muted); font-style:italic;">Analyzing diagram with Vision AI...</div>`;
-
-      try {
-        const headers = { 'Content-Type': 'application/json' };
-        if (token) headers['Authorization'] = `Bearer ${token}`;
-        if (customOpenAi) headers['x-custom-openai-key'] = customOpenAi;
-
-        if (SUPABASE_PROJECT_URL && !SUPABASE_PROJECT_URL.includes("your-project")) {
-          headers['x-supabase-url'] = SUPABASE_PROJECT_URL;
-          headers['x-supabase-key'] = SUPABASE_ANON_KEY;
-        }
-
-        const res = await fetch('/api/describe-image', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ imageBase64: imgSrc })
-        });
-
-        const data = await res.json().catch(() => ({}));
-
-        if (res.status === 401) {
-          updateAuthBadge();
-          authModal.style.display = 'flex';
-          showAuthAlert(data.error || "Session authentication expired. Please sign in again.", "error");
-          renderPage(currentPage);
-          return;
-        }
-
-        if (res.status === 402 || data.trialExhausted) {
-          paywallModal.style.display = 'flex';
-          renderPage(currentPage);
-          return;
-        }
-
-        if (!res.ok) throw new Error(data.error || "Failed to analyze diagram.");
-
-        if (!originalBookPages) {
-          originalBookPages = bookPages;
-          originalDocName = currentDocName;
-          originalPage = currentPage;
-        }
-
-        const descSentences = splitIntoSentences(data.explanation);
-        bookPages = [];
-        for (let i = 0; i < descSentences.length; i += 3) {
-          bookPages.push(descSentences.slice(i, i + 3));
-        }
-
-        currentDocName = `Figure Explanation: ${captionText || 'Diagram'}`;
-        docTitle.textContent = currentDocName;
-        summaryReturnSpan.style.display = 'inline-block';
-
-        currentPage = 0;
-        currentSentenceIdx = 0;
-        renderPage(0);
-
-        isPlaying = true;
-        playCurrentSentence();
-
-      } catch (err) {
-        alert(err.message);
-        renderPage(currentPage);
-      } finally {
-        preloadStatus.textContent = "Ready";
-      }
-    }
-
-    // --- AI DOCUMENT SUMMARIZER ---
-    summarizeBtn.addEventListener('click', async () => {
-      const customOpenAi = localStorage.getItem('marginalia_byok_openai') || '';
-      const token = await getFreshAuthToken();
-
-      if (!token && !customOpenAi) {
-        authStatusAlert.style.display = 'none';
-        authModal.style.display = 'flex';
-        showAuthAlert("Please sign in or enter your personal OpenAI key in Options.", "info");
-        return;
-      }
-
-      if (customOpenAi) {
-        summaryTrialNotice.textContent = "Status: Using custom OpenAI Key (Unlimited)";
-      } else if (supabaseClient) {
-        const { data: { session } } = await supabaseClient.auth.getSession();
-        if (session) {
-          const { data: profile } = await supabaseClient
-            .from('profiles')
-            .select('summary_credits_remaining, tier')
-            .eq('id', session.user.id)
-            .single();
-
-          if (profile) {
-            if (profile.tier === 'pro') {
-              summaryTrialNotice.textContent = "Plan: Pro Subscriber (Unlimited Summaries)";
-            } else {
-              const trials = profile.summary_credits_remaining ?? 3;
-              summaryTrialNotice.textContent = `Free Trial: ${trials} summaries remaining`;
-              if (trials <= 0) {
-                paywallModal.style.display = 'flex';
-                return;
-              }
-            }
-          }
-        }
-      }
-
-      summaryModal.style.display = 'flex';
-    });
-
-    async function triggerSummarize(mode) {
-      summaryModal.style.display = 'none';
-      stopAudio();
-
-      const customOpenAi = localStorage.getItem('marginalia_byok_openai') || '';
-      const token = await getFreshAuthToken();
-
-      if (!token && !customOpenAi) {
-        authModal.style.display = 'flex';
-        showAuthAlert("Please sign in to generate document summaries.", "error");
-        return;
-      }
-
-      const flattenItems = (items) => items.map(it => typeof it === 'string' ? it : (it?.caption || '')).join(' ');
-      let text = mode === 'chapter' ? flattenItems(bookPages[currentPage] || []) : flattenItems(bookPages.flat());
-      if (!text.trim()) { alert("No text to summarize."); return; }
-
-      contentPane.innerHTML = `<div style="text-align:center; padding:3rem; color:var(--text-muted); font-style:italic;">Generating AI Summary...</div>`;
-
-      try {
-        const headers = { 'Content-Type': 'application/json' };
-        if (token) headers['Authorization'] = `Bearer ${token}`;
-        if (customOpenAi) headers['x-custom-openai-key'] = customOpenAi;
-
-        if (SUPABASE_PROJECT_URL && !SUPABASE_PROJECT_URL.includes("your-project")) {
-          headers['x-supabase-url'] = SUPABASE_PROJECT_URL;
-          headers['x-supabase-key'] = SUPABASE_ANON_KEY;
-        }
-
-        const res = await fetch('/api/summarize', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ text, mode })
-        });
-
-        const data = await res.json().catch(() => ({}));
-
-        if (res.status === 401) {
-          updateAuthBadge();
-          authModal.style.display = 'flex';
-          showAuthAlert(data.error || "Authentication error. Please sign in again.", "error");
-          renderPage(currentPage);
-          return;
-        }
-
-        if (res.status === 402 || data.trialExhausted) {
-          paywallModal.style.display = 'flex';
-          renderPage(currentPage);
-          return;
-        }
-
-        if (!res.ok) throw new Error(data.error || "Summary request failed");
-
-        if (!originalBookPages) {
-          originalBookPages = bookPages;
-          originalDocName = currentDocName;
-          originalPage = currentPage;
-        }
-
-        const sents = splitIntoSentences(data.summary);
-        bookPages = [];
-        for (let i = 0; i < sents.length; i += 4) {
-          bookPages.push(sents.slice(i, i + 4));
-        }
-
-        currentDocName = `Summary: ${originalDocName}`;
-        docTitle.textContent = currentDocName;
-        summaryReturnSpan.style.display = 'inline-block';
-
-        currentPage = 0;
-        currentSentenceIdx = 0;
-        renderPage(0);
-
-        isPlaying = true;
-        playCurrentSentence();
-      } catch (e) {
-        alert(e.message);
-        renderPage(currentPage);
-      }
-    }
-
-    sumChapterBtn.addEventListener('click', () => triggerSummarize('chapter'));
-    sumKeyTakeawaysBtn.addEventListener('click', () => triggerSummarize('key_takeaways'));
-
-    exitSummaryBtn.addEventListener('click', () => {
-      if (originalBookPages) {
-        stopAudio();
-        bookPages = originalBookPages;
-        currentDocName = originalDocName;
-        currentPage = originalPage;
-        originalBookPages = null;
-        docTitle.textContent = currentDocName;
-        summaryReturnSpan.style.display = 'none';
-        renderPage(currentPage);
-      }
-    });
-
     // --- MULTIMODAL UTILITIES ---
     function normalizeZipPath(basePath, relativePath) {
       const combined = basePath ? `${basePath}/${relativePath}` : relativePath;
@@ -3044,3 +3134,186 @@
           const segmenter = new Intl.Segmenter('en', { granularity: 'sentence' });
           const segments = Array.from(segmenter.segment(text));
           return segments.map(s => s.segment.replace(/\s+/g, ' ').trim()).filter(s => s.length > 0);
+        } catch (e) {}
+      }
+      const matches = text.match(/[^.!?]+[.!?]+["')\]]*\s*|[^.!?]+$/g) || [text];
+      return matches.map(s => s.replace(/\s+/g, ' ').trim()).filter(s => s.length > 0);
+    }
+
+    function parseHtmlToBlocks(htmlString) {
+      const doc = new DOMParser().parseFromString(htmlString, 'text/html');
+      doc.querySelectorAll('script, style, head, nav, [role="doc-toc"]').forEach(el => el.remove());
+
+      const blocks = [];
+      const elements = doc.body ? Array.from(doc.body.children) : [];
+
+      if (elements.length === 0) {
+        const rawText = (doc.body ? doc.body.textContent : doc.documentElement.textContent) || '';
+        return splitIntoSentences(rawText);
+      }
+
+      elements.forEach(el => {
+        const imgs = el.querySelectorAll('img, image');
+        if (el.tagName.toLowerCase() === 'img' || imgs.length > 0) {
+          const imgEl = el.tagName.toLowerCase() === 'img' ? el : imgs[0];
+          const src = imgEl.getAttribute('src');
+          if (src && src.startsWith('data:')) {
+            const caption = imgEl.getAttribute('alt') || el.querySelector('figcaption')?.textContent || '';
+            blocks.push({ type: 'image', src, caption: caption.trim() });
+            return;
+          }
+        }
+
+        const txt = el.textContent.replace(/\s+/g, ' ').trim();
+        if (txt.length > 0) {
+          const sents = splitIntoSentences(txt);
+          sents.forEach(s => blocks.push(s));
+        }
+      });
+
+      return blocks.length > 0 ? blocks : splitIntoSentences(doc.body ? doc.body.textContent : '');
+    }
+
+    // --- EPUB EXTRACTOR WITH TABLE OF CONTENTS ---
+    async function parseEpubArchive(zip) {
+      const allKeys = Object.keys(zip.files);
+      const containerKey = allKeys.find(k => k.toLowerCase().endsWith('container.xml'));
+      let opfKey = null;
+
+      if (containerKey) {
+        const containerXml = await zip.files[containerKey].async("text");
+        const m = containerXml.match(/full-path=["']([^"']+)["']/i);
+        if (m) {
+          const target = m[1].trim();
+          opfKey = allKeys.find(k => k.toLowerCase() === target.toLowerCase()) || target;
+        }
+      }
+      if (!opfKey) opfKey = allKeys.find(k => k.toLowerCase().endsWith('.opf'));
+
+      let orderedFiles = [];
+      let manifest = {};
+
+      if (opfKey && zip.files[opfKey]) {
+        const opfXml = await zip.files[opfKey].async("text");
+        const opfDir = opfKey.includes('/') ? opfKey.substring(0, opfKey.lastIndexOf('/') + 1) : '';
+
+        const itemRegex = /<item\b[^>]*>/gi;
+        let match;
+        while ((match = itemRegex.exec(opfXml)) !== null) {
+          const tag = match[0];
+          const idMatch = tag.match(/\bid=["']([^"']+)["']/i);
+          const hrefMatch = tag.match(/\bhref=["']([^"']+)["']/i);
+          if (idMatch && hrefMatch) {
+            const rawHref = decodeURIComponent(hrefMatch[1].split('#')[0]);
+            const fullPath = (opfDir + rawHref).replace(/\/+/g, '/');
+            const exact = allKeys.find(k => k.toLowerCase() === fullPath.toLowerCase()) || fullPath;
+            manifest[idMatch[1]] = exact;
+          }
+        }
+
+        const spineRegex = /<itemref\b[^>]*\bidref=["']([^"']+)["']/gi;
+        while ((match = spineRegex.exec(opfXml)) !== null) {
+          const idref = match[1];
+          if (manifest[idref] && zip.files[manifest[idref]]) {
+            orderedFiles.push(manifest[idref]);
+          }
+        }
+      }
+
+      if (orderedFiles.length === 0) {
+        orderedFiles = allKeys.filter(k => {
+          const lower = k.toLowerCase();
+          return (lower.endsWith('.xhtml') || lower.endsWith('.html') || lower.endsWith('.htm')) &&
+                 !lower.includes('toc') && !lower.includes('nav') && !lower.endsWith('.ncx');
+        }).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+      }
+
+      const chaptersList = [];
+      const extractedPages = [];
+      const perPage = 5;
+
+      for (let fIdx = 0; fIdx < orderedFiles.length; fIdx++) {
+        const chapterKey = orderedFiles[fIdx];
+        if (!zip.files[chapterKey] || zip.files[chapterKey].dir) continue;
+
+        const rawHtml = await zip.files[chapterKey].async("text");
+        const chapterDir = chapterKey.includes('/') ? chapterKey.substring(0, chapterKey.lastIndexOf('/') + 1) : '';
+
+        let chapTitle = "";
+        const titleMatch = rawHtml.match(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/i) || rawHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+        if (titleMatch) {
+          chapTitle = titleMatch[1].replace(/<[^>]+>/g, '').trim();
+        }
+        if (!chapTitle || chapTitle.length < 2) {
+          chapTitle = `Section ${fIdx + 1}`;
+        }
+
+        const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
+        const images = Array.from(doc.querySelectorAll('img, image'));
+
+        for (const img of images) {
+          const srcAttr = img.getAttribute('src') || img.getAttribute('xlink:href');
+          if (!srcAttr || srcAttr.startsWith('data:') || srcAttr.startsWith('http')) continue;
+
+          const resolved = normalizeZipPath(chapterDir, decodeURIComponent(srcAttr.split('#')[0]));
+          const matchedImgKey = allKeys.find(k => k.toLowerCase() === resolved.toLowerCase()) || resolved;
+
+          if (zip.files[matchedImgKey] && !zip.files[matchedImgKey].dir) {
+            const ext = matchedImgKey.split('.').pop().toLowerCase();
+            const mime = ext === 'png' ? 'image/png' : ext === 'svg' ? 'image/svg+xml' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+            const base64Data = await zip.files[matchedImgKey].async('base64');
+            img.setAttribute('src', `data:${mime};base64,${base64Data}`);
+          }
+        }
+
+        const chapterBlocks = parseHtmlToBlocks(doc.body ? doc.body.innerHTML : rawHtml);
+        if (chapterBlocks.length > 0) {
+          const startPageIndex = extractedPages.length;
+          chaptersList.push({ title: chapTitle, pageIndex: startPageIndex });
+
+          for (let i = 0; i < chapterBlocks.length; i += perPage) {
+            extractedPages.push(chapterBlocks.slice(i, i + perPage));
+          }
+        }
+      }
+
+      if (extractedPages.length === 0) {
+        throw new Error("No readable text found in EPUB.");
+      }
+
+      return { pages: extractedPages, chapters: chaptersList };
+    }
+
+    // --- SECURE MULTI-FORMAT DOCUMENT DISPATCHER ---
+    async function processUploadedDocument(file) {
+      const buffer = await file.arrayBuffer();
+      const uint8 = new Uint8Array(buffer);
+
+      const isZip = uint8.length > 4 && uint8[0] === 0x50 && uint8[1] === 0x4B && (uint8[2] === 0x03 || uint8[2] === 0x05);
+      const isPdf = uint8.length > 4 && uint8[0] === 0x25 && uint8[1] === 0x50 && uint8[2] === 0x44 && uint8[3] === 0x46;
+      const lowerName = (file.name || "").toLowerCase();
+
+      if (isZip || lowerName.endsWith('.epub') || lowerName.endsWith('.docx')) {
+        const zip = await JSZip.loadAsync(buffer);
+
+        if (zip.files['word/document.xml']) {
+          if (typeof mammoth === 'undefined') throw new Error("Word reader engine is still loading. Please try again.");
+          const res = await mammoth.convertToHtml(
+            { arrayBuffer: buffer },
+            {
+              convertImage: mammoth.images.imgElement(async (img) => {
+                const b64 = await img.read("base64");
+                return { src: `data:${img.contentType};base64,${b64}` };
+              })
+            }
+          );
+          const blocks = parseHtmlToBlocks(res.value || "");
+          const pages = [];
+          for (let i = 0; i < blocks.length; i += 5) pages.push(blocks.slice(i, i + 5));
+          return { pages, chapters: [{ title: "Start of Document", pageIndex: 0 }] };
+        }
+
+        return await parseEpubArchive(zip);
+      }
+
+      if (isPdf || lower
