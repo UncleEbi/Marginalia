@@ -2189,6 +2189,29 @@ async function processUploadedDocument(file) {
   return { pages, chapters: [{ title: "Beginning", pageIndex: 0 }] };
 }
 
+function splitIntoSentences(text) {
+  if (!text || !text.trim()) return [];
+
+  // --- Clean raw HTML/XML entities here before splitting ---
+  text = text
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+
+  if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+    try {
+      const segmenter = new Intl.Segmenter('en', { granularity: 'sentence' });
+      const segments = Array.from(segmenter.segment(text));
+      return segments.map(s => s.segment.replace(/\s+/g, ' ').trim()).filter(s => s.length > 0);
+    } catch (e) {}
+  }
+  const matches = text.match(/[^.!?]+[.!?]+["')\]]*\s*|[^.!?]+$/g) || [text];
+  return matches.map(s => s.replace(/\s+/g, ' ').trim()).filter(s => s.length > 0);
+}
+
 // PRIMARY FILE IMPORT LISTENER
 fileInput.addEventListener('change', async (event) => {
   const file = event.target.files && event.target.files[0];
