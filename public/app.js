@@ -182,6 +182,44 @@ async function deleteBookFromShelf(bookId) {
   });
 }
 
+async function initiateProUpgrade() {
+  const token = await getFreshAuthToken();
+  if (!token || !supabaseClient) {
+    authModal.style.display = 'flex';
+    return;
+  }
+
+  const { data: { session } } = await supabaseClient.auth.getSession();
+  if (!session?.user) {
+    authModal.style.display = 'flex';
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/paystack-init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: session.user.email,
+        userId: session.user.id
+      })
+    });
+
+    const data = await res.json();
+    if (data.authorization_url) {
+      window.location.href = data.authorization_url;
+    } else {
+      alert(data.error || 'Could not start checkout.');
+    }
+  } catch (err) {
+    alert('Payment checkout error: ' + err.message);
+  }
+}
+
+// Attach to upgrade buttons
+document.getElementById('profileUpgradeBtn')?.addEventListener('click', initiateProUpgrade);
+document.getElementById('upgradeProBtn')?.addEventListener('click', initiateProUpgrade);
+
 async function updateBookProgressInDB(title, page, sentenceIdx) {
   if (!dbInstance) return;
   try {
