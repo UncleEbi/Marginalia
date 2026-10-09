@@ -23,6 +23,22 @@ export default async function handler(req, res) {
   let isPro = false;
   let user = null;
   let trialLeft = 3;
+  
+  const rawUrl = process.env.SUPABASE_URL || 
+                 process.env.SUPABASE_PROJECT_URL || 
+                 process.env.NEXT_PUBLIC_SUPABASE_URL ||
+                 req.headers['x-supabase-url'] || '';
+
+  // Sanitize to the root origin only
+  let supabaseUrl = '';
+  try {
+    if (rawUrl) {
+      const parsed = new URL(rawUrl.trim());
+      supabaseUrl = parsed.origin; // strips trailing slashes, /auth/v1, /rest/v1, etc.
+    }
+  } catch (e) {
+    supabaseUrl = rawUrl.replace(/\/+$/, '');
+  }
 
   // 2. Enforce Supabase account quotas if user is not using their own key
   if (!customOpenAiKey) {
