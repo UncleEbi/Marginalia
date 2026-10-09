@@ -5,6 +5,21 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 );
 
+const rawUrl = process.env.SUPABASE_URL || 
+                 process.env.SUPABASE_PROJECT_URL || 
+                 process.env.NEXT_PUBLIC_SUPABASE_URL ||
+                 req.headers['x-supabase-url'] || '';
+
+  // Sanitize to the root origin only
+  let supabaseUrl = '';
+  try {
+    if (rawUrl) {
+      const parsed = new URL(rawUrl.trim());
+      supabaseUrl = parsed.origin; // strips trailing slashes, /auth/v1, /rest/v1, etc.
+    }
+  } catch (e) {
+    supabaseUrl = rawUrl.replace(/\/+$/, '');
+  }
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
