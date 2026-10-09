@@ -133,6 +133,27 @@ async function saveBookToShelf(title, pages, chapters = []) {
   }
 }
 
+// Sync progress to cloud when logged in, fallback to local storage
+async function syncProgressToCloud(title, page, sentenceIdx) {
+  // Always update local IndexedDB first
+  await updateBookProgressInDB(title, page, sentenceIdx);
+
+  if (!supabaseClient) return;
+  const token = await getFreshAuthToken();
+  if (!token) return;
+
+  const { data: { session } } = await supabaseClient.auth.getSession();
+  if (!session?.user) return;
+
+  await supabaseClient.from('user_books').upsert({
+    user_id: session.user.id,
+    title: title,
+    current_page: page,
+    current_sentence: sentenceIdx,
+    updated_at: new Date().toISOString()
+  }, { onConflict: 'user_id,title' }).catch(() => {});
+}
+
 async function getAllBooksFromShelf() {
   if (!dbInstance) await initIndexedDB();
   if (!dbInstance) return [];
