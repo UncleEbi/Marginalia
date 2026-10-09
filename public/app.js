@@ -499,6 +499,198 @@ btnSelectionCopy.addEventListener('click', (e) => {
   alert("Text copied to clipboard!");
 });
 
+// --- DRAWER CONTROLLER ---
+function openDrawer() {
+  sideDrawer.classList.add('open');
+  drawerOverlay.classList.add('active');
+}
+function closeDrawer() {
+  sideDrawer.classList.remove('open');
+  drawerOverlay.classList.remove('active');
+}
+
+openDrawerBtn.addEventListener('click', openDrawer);
+closeDrawerBtn.addEventListener('click', closeDrawer);
+drawerOverlay.addEventListener('click', closeDrawer);
+
+// --- SHELF & RECENT MODALS ---
+async function showShelfModal(mode = "shelf") {
+  closeDrawer();
+  const books = await getAllBooksFromShelf();
+  shelfModalTitle.textContent = mode === "recent" ? "🕒 Recent list" : "📚 My Shelf";
+  shelfModalList.innerHTML = '';
+
+  if (books.length === 0) {
+    shelfModalList.innerHTML = '<div style="text-align:center; padding:2rem; color:var(--text-muted); font-size:0.85rem;">No books saved yet. Tap "Open" to load a file.</div>';
+  } else {
+    const displayBooks = mode === "recent" ? books.slice(0, 5) : books;
+    displayBooks.forEach(b => {
+      const card = document.createElement('div');
+      card.className = 'shelf-card';
+      card.innerHTML = `
+        <div class="shelf-card-info">
+          <span class="shelf-card-title">${b.title}</span>
+          <span class="shelf-card-sub">Page ${(b.currentPage || 0) + 1} of ${b.pages.length}</span>
+        </div>
+        <div class="shelf-action-group">
+          <button class="shelf-delete-btn" title="Delete document">🗑️</button>
+          <span style="font-size:0.8rem; color:var(--accent); font-weight:600; padding:0.2rem 0.4rem;">Open →</span>
+        </div>
+      `;
+
+      const delBtn = card.querySelector('.shelf-delete-btn');
+      delBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (confirm(`Remove "${b.title}" from My Shelf?`)) {
+          await deleteBookFromShelf(b.id);
+          showShelfModal(mode);
+        }
+      });
+
+      card.addEventListener('click', () => {
+        stopAudio();
+        bookPages = b.pages;
+        bookChapters = b.chapters || [{ title: "Beginning", pageIndex: 0 }];
+        currentDocName = b.title;
+        currentPage = b.currentPage || 0;
+        currentSentenceIdx = b.currentSentenceIdx || 0;
+        docTitle.textContent = currentDocName;
+        shelfModal.style.display = 'none';
+        renderPage(currentPage);
+      });
+
+      shelfModalList.appendChild(card);
+    });
+  }
+  shelfModal.style.display = 'flex';
+}
+
+navRecentList.addEventListener('click', () => showShelfModal("recent"));
+navMyShelf.addEventListener('click', () => showShelfModal("shelf"));
+navUploadFile.addEventListener('click', () => {
+  closeDrawer();
+  fileInput.value = '';
+  fileInput.click();
+});
+
+// --- BOOKMARKS ---
+addBookmarkBtn.addEventListener('click', async () => {
+  const activeItem = bookPages[currentPage]?.[currentSentenceIdx];
+  const snippet = typeof activeItem === 'string' ? activeItem : (activeItem?.caption || "Diagram");
+  await saveBookmarkToDB(currentDocName, currentPage, currentSentenceIdx, snippet);
+  alert(`Bookmark saved: Page ${currentPage + 1}`);
+});
+
+navBookmarks.addEventListener('click', async () => {
+  closeDrawer();
+  const marks = await getBookmarksFromDB();
+  bookmarksModalList.innerHTML = '';
+
+  if (marks.length === 0) {
+    bookmarksModalList.innerHTML = '<div style="text-align:center; padding:2rem; color:var(--text-muted); font-size:0.85rem;">No bookmarks saved yet.</div>';
+  } else {
+    marks.reverse().forEach(m => {
+      const card = document.createElement('div');
+      card.className = 'shelf-card';
+      card.innerHTML = `
+        <div class="shelf-card-info">
+          <span class="shelf-card-title">${m.bookTitle} — Page ${m.page + 1}</span>
+          <span class="shelf-card-sub" style="font-style:italic;">"${m.snippet.slice(0, 42)}..."</span>
+        </div>
+        <span style="font-size:0.8rem; color:var(--accent); font-weight:600;">Jump →</span>
+      `;
+      card.addEventListener('click', () => {
+        if (currentDocName === m.bookTitle) {
+          stopAudio();
+          currentPage = m.page;
+          currentSentenceIdx = m.sentenceIdx;
+          bookmarksModal.style.display = 'none';
+          renderPage(currentPage);
+        } else {
+          alert(`Bookmark is in "${m.bookTitle}". Open it first from My Shelf.`);
+        }
+      });
+      bookmarksModalList.appendChild(card);
+    });
+  }
+  bookmarksModal.style.display = 'flex';
+});
+
+// --- CHAPTER & PAGE JUMP MODAL HANDLERS ---
+function getCurrentChapter() {
+  if (!bookChapters || bookChapters.length === 0) return { title: "Chapter 1", pageIndex: 0 };
+  let active = bookChapters[0];
+  for (const ch of bookChapters) {
+    if (currentPage >= ch.pageIndex) active = ch;
+    else break;
+  }
+  return active;
+}
+
+openJumpModalBtn.addEventListener('click', () => {
+  pageJumpSlider.max = bookPages.length;
+  pageJumpSlider.value = currentPage + 1;
+  pageDirectInput.max = bookPages.length;
+  pageDirectInput.value = currentPage + 1;
+  sliderValueDisplay.textContent = `Page ${currentPage + 1} of ${bookPages.length}`;
+
+  chapterListView.innerHTML = '';
+  if (!bookChapters || bookChapters.length === 0) {
+    chapterListView.innerHTML = '<div style="text-align:center; padding:1.5rem; color:var(--text-muted);">No separate chapters found.</div>';
+  } else {
+    const currentCh = getCurrentChapter();
+    bookChapters.forEach((ch) => {
+      const item = document.createElement('div');
+      item.className = `chapter-item ${ch.pageIndex === currentCh.pageIndex ? 'active' : ''}`;
+      item.innerHTML = `
+        <span>${ch.title}</span>
+        <span style="font-size:0.75rem; color:var(--text-muted);">Pg ${ch.pageIndex + 1}</span>
+      `;
+      item.addEventListener('click', () => {
+        stopAudio();
+        currentPage = ch.pageIndex;
+        currentSentenceIdx = 0;
+        jumpModal.style.display = 'none';
+        renderPage(currentPage);
+      });
+      chapterListView.appendChild(item);
+    });
+  }
+
+  jumpModal.style.display = 'flex';
+});
+
+tabChaptersBtn.addEventListener('click', () => {
+  tabChaptersBtn.classList.add('active');
+  tabPagesBtn.classList.remove('active');
+  chapterListView.style.display = 'flex';
+  pageJumpView.style.display = 'none';
+});
+
+tabPagesBtn.addEventListener('click', () => {
+  tabPagesBtn.classList.add('active');
+  tabChaptersBtn.classList.remove('active');
+  chapterListView.style.display = 'none';
+  pageJumpView.style.display = 'flex';
+});
+
+pageJumpSlider.addEventListener('input', (e) => {
+  const val = parseInt(e.target.value, 10);
+  sliderValueDisplay.textContent = `Page ${val} of ${bookPages.length}`;
+  pageDirectInput.value = val;
+});
+
+btnExecuteDirectJump.addEventListener('click', () => {
+  let target = parseInt(pageDirectInput.value, 10);
+  if (isNaN(target) || target < 1) target = 1;
+  if (target > bookPages.length) target = bookPages.length;
+  stopAudio();
+  currentPage = target - 1;
+  currentSentenceIdx = 0;
+  jumpModal.style.display = 'none';
+  renderPage(currentPage);
+});
+
 // --- DRAWER ACTIONS ---
 function openOptionsModal() {
   optionThemeSelect.value = document.documentElement.getAttribute('data-theme') || 'dark';
