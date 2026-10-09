@@ -2092,6 +2092,13 @@ async function parseEpubArchive(zip) {
     }
   }
 
+  function decodeHtmlEntities(str) {
+  if (!str) return '';
+  const txt = document.createElement('textarea');
+  txt.innerHTML = str;
+  return txt.value;
+}
+  
   if (extractedPages.length === 0) {
     throw new Error("No readable text found in EPUB.");
   }
