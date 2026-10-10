@@ -546,6 +546,27 @@ btnSelectionSpeak.addEventListener('click', (e) => {
   selectionPopover.style.display = 'none';
   if (!currentSelectedText) return;
   stopAudio();
+
+  // At the top of this click listener:
+  unlockAndStartBackgroundLoop();
+
+  if (activeEngine === 'browser') { // (or your existing engine check)
+    browserSpeech.speak(utter);
+  } else {
+    speakServerless(currentSelectedText);
+  }
+});
+
+utter.onend = () => {
+  // If there are more sentences, the loop stays running.
+  // Only pause if this was the last sentence and playback is completely finished:
+  if (!hasNextSentence()) {
+    isPlaying = false;
+    if (silentAudioLoop) silentAudioLoop.pause();
+    updatePlayButtonUI(false);
+  }
+};
+
   if (activeEngine === 'browser') {
     const utter = new SpeechSynthesisUtterance(currentSelectedText);
     utter.rate = playbackSpeed;
