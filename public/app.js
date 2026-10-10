@@ -397,6 +397,28 @@ const syncCalibrationDisplay = document.getElementById('syncCalibrationDisplay')
 const karaokeCalibrationContainer = document.getElementById('karaokeCalibrationContainer');
 const saveOptionsBtn = document.getElementById('saveOptionsBtn');
 
+// 1. Generate an almost-silent (near-zero volume) looping data URI
+// (A tiny non-zero sample prevents iOS Safari from detecting a dead track)
+function createSilentAudioElement() {
+  const audio = new Audio();
+  // Minimal valid 1-second WAV data URI
+  audio.src = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAP8A';
+  audio.loop = true;
+  audio.volume = 0.01; // Keep it barely above 0 so the OS media engine stays engaged
+  return audio;
+}
+
+const silentAudioLoop = createSilentAudioElement();
+
+// 2. Unlock & play immediately inside the Play button click handler
+function unlockAndStartBackgroundLoop() {
+  if (silentAudioLoop.paused) {
+    silentAudioLoop.play().catch((err) => {
+      console.warn("Could not start background audio anchor:", err);
+    });
+  }
+}
+
 // --- MEDIA SESSION CONTROLLER (Lock Screen Audio) ---
 var keepAliveAudio = null;
 
@@ -538,6 +560,25 @@ btnSelectionSpeak.addEventListener('click', (e) => {
     speakServerless(currentSelectedText);
   }
 });
+
+playBtn.addEventListener('click', () => {
+  // CRITICAL: Call this synchronously at the top of the tap event
+  unlockAndStartBackgroundLoop();
+
+  // Then resume or start reading
+  if (isPlaying) {
+    pausePlayback();
+  } else {
+    startPlayback();
+  }
+});
+
+function pausePlayback() {
+  isPlaying = false;
+  window.speechSynthesis.cancel();
+  silentAudioLoop.pause(); // Only pause when the user deliberately pauses
+  updatePlayButtonUI(false);
+}
 
 btnSelectionDefine.addEventListener('click', async (e) => {
   e.stopPropagation();
