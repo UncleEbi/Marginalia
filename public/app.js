@@ -293,7 +293,6 @@ let wordAnimFrameId = null;
 const browserSpeech = window.speechSynthesis;
 let currentUtterance = null;
 const audioElement = document.getElementById('neuralAudio');
-const silentAudioLoop = document.getElementById('silentAudioLoop');
 const audioPreloadCache = new Map();
 
 // Selection elements
