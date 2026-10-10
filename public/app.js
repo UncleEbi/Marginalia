@@ -555,7 +555,6 @@ btnSelectionSpeak.addEventListener('click', (e) => {
   } else {
     speakServerless(currentSelectedText);
   }
-});
 
 utter.onend = () => {
   // If there are more sentences, the loop stays running.
