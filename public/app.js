@@ -560,19 +560,7 @@ btnSelectionSpeak.addEventListener('click', (e) => {
   }
 });
 
-playBtn.addEventListener('click', () => {
-  // CRITICAL: Call this synchronously at the top of the tap event
-  unlockAndStartBackgroundLoop();
-
-  // Then resume or start reading
-  if (isPlaying) {
-    pausePlayback();
-  } else {
-    startPlayback();
-  }
-});
-
-function pausePlayback() {
+function back() {
   isPlaying = false;
   window.speechSynthesis.cancel();
   silentAudioLoop.pause(); // Only pause when the user deliberately pauses
