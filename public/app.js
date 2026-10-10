@@ -216,7 +216,59 @@ async function initiateProUpgrade() {
   }
 }
 
-// Attach to upgrade buttons
+// ==============================
+// PAYSTACK CHECKOUT HELPER
+// ==============================
+async function startPaystackCheckout(userEmail, userId) {
+  try {
+    const res = await fetch('/api/paystack-init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: userEmail,
+        amount: 5000, // 5,000 NGN
+        userId: userId,
+        plan: 'pro_monthly'
+      })
+    });
+
+    const data = await res.json();
+    if (data.authorization_url) {
+      window.location.href = data.authorization_url; // Redirects to Paystack checkout
+    } else {
+      alert(data.error || 'Unable to initiate payment.');
+    }
+  } catch (err) {
+    console.error('Checkout error:', err);
+    alert('Payment error. Please check your connection and try again.');
+  }
+}
+
+// Handler triggered by the upgrade buttons
+async function initiateProUpgrade() {
+  try {
+    // 1. Check logged-in user if using Supabase auth
+    let user = null;
+    if (typeof supabase !== 'undefined' && supabase.auth) {
+      const { data } = await supabase.auth.getUser();
+      user = data?.user;
+    }
+
+    // 2. Prompt for an email if user isn't logged in
+    const userEmail = user?.email || prompt("Enter your email address to continue to payment:");
+    if (!userEmail) return;
+
+    const userId = user?.id || `guest_${Date.now()}`;
+
+    // 3. Launch Paystack Checkout
+    await startPaystackCheckout(userEmail, userId);
+  } catch (err) {
+    console.error('Upgrade initiation error:', err);
+    alert('Failed to launch checkout.');
+  }
+}
+
+// Button listeners
 document.getElementById('profileUpgradeBtn')?.addEventListener('click', initiateProUpgrade);
 document.getElementById('upgradeProBtn')?.addEventListener('click', initiateProUpgrade);
 
