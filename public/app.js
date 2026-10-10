@@ -514,6 +514,12 @@ document.addEventListener('selectionchange', () => {
   }
 });
 
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && isPlaying && activeEngine === 'browser') {
+    syncMediaSessionState(true);
+  }
+});
+
 btnSelectionSpeak.addEventListener('click', (e) => {
   e.stopPropagation();
   selectionPopover.style.display = 'none';
