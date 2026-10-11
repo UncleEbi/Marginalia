@@ -459,8 +459,8 @@ function createSilentAudioElement() {
   return audio;
 }
 
-const silentAudioLoop = createSilentAudioElement();
-
+const silentAudioLoop = new Audio('data:audio/wav;base64,UklGRjIAAABXQVZFZm10IBIAAAABAAEAQB8AAEAfAAABAAgAAABmYWN0BAAAAAAAAABkYXRhAAAAAA==');
+silentAudioLoop.loop = true;
 // 2. Unlock & play immediately inside the Play button click handler
 function unlockAndStartBackgroundLoop() {
   if (silentAudioLoop.paused) {
@@ -468,6 +468,44 @@ function unlockAndStartBackgroundLoop() {
       console.warn("Could not start background audio anchor:", err);
     });
   }
+}
+
+// Ensure this only runs on user click, never inside visibilitychange
+function handlePlayPause() {
+  if (isPlaying) {
+    pausePlayback();
+  } else {
+    // Start audio anchor once on user gesture
+    if (silentAudioLoop && silentAudioLoop.paused) {
+      silentAudioLoop.play().catch(() => {});
+    }
+    startPlayback();
+  }
+}
+// 1. Declare a top-level global variable outside any function
+let activeUtterance = null;
+
+function speakSentence(text) {
+  window.speechSynthesis.cancel();
+
+  // 2. Assign to the global variable instead of a local const/let
+  activeUtterance = new SpeechSynthesisUtterance(text);
+  
+  // Set voice, rate, pitch
+  if (selectedVoice) activeUtterance.voice = selectedVoice;
+  activeUtterance.rate = playbackRate || 1.0;
+
+  activeUtterance.onend = () => {
+    activeUtterance = null;
+    advanceToNextSentence();
+  };
+
+  activeUtterance.onerror = (e) => {
+    console.error("SpeechSynthesis error:", e);
+    activeUtterance = null;
+  };
+
+  window.speechSynthesis.speak(activeUtterance);
 }
 
 // --- MEDIA SESSION CONTROLLER (Lock Screen Audio) ---
