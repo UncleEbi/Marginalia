@@ -2027,8 +2027,23 @@ function populateVoices() {
     }
 
     const userLang = (navigator.language || 'en').toLowerCase().split('-')[0];
-    const indexed = voices.map(v => v);
 
+    // Apple ships novelty + legacy robotic voices alongside the good ones. Hide them.
+    const NOVELTY = new Set(['albert','bad news','bahh','bells','boing','bubbles','cellos','deranged',
+      'good news','hysterical','jester','organ','pipe organ','superstar','trinoids','whisper','wobble',
+      'zarvox','fred','junior','kathy','ralph','agnes','bruce','vicki','victoria','princess']);
+    const baseName = v => v.name.replace(/\s*\(.*\)\s*$/, '').trim().toLowerCase();
+    const quality = v => {
+      const n = v.name.toLowerCase();
+      if (/premium|siri/.test(n)) return 3;
+      if (/enhanced|neural|natural/.test(n)) return 2;
+      return 1;
+    };
+
+    let pool = voices.filter(v => !NOVELTY.has(baseName(v)));
+    if (pool.length === 0) pool = voices.slice(); // never leave the list empty
+
+    const indexed = pool.slice();
     indexed.sort((a, b) => {
       const aL = a.lang.toLowerCase();
       const bL = b.lang.toLowerCase();
@@ -2040,22 +2055,22 @@ function populateVoices() {
       if (!aU && bU) return 1;
       if (aE && !bE) return -1;
       if (!aE && bE) return 1;
+      const qd = quality(b) - quality(a); // best-sounding first
+      if (qd) return qd;
       return a.name.localeCompare(b.name);
     });
 
-    const defVoice = indexed.find(v => v.lang.toLowerCase().startsWith('en')) || indexed[0];
+    const savedKey = localStorage.getItem('marginalia_browser_voice') || '';
+    const keyOf = v => v.voiceURI || `${v.name}:::${v.lang}`;
+    const wanted = [prevChoice, savedKey].find(k => k && k !== 'default' && indexed.some(v => keyOf(v) === k));
+    const defVoice = wanted ? indexed.find(v => keyOf(v) === wanted) : indexed[0];
 
     indexed.forEach(v => {
       const opt = document.createElement('option');
-      const vKey = v.voiceURI || `${v.name}:::${v.lang}`;
+      const vKey = keyOf(v);
       opt.value = vKey;
-      opt.textContent = `${v.name} (${v.lang})`;
-
-      if (prevChoice && vKey === prevChoice) {
-        opt.selected = true;
-      } else if (!prevChoice && defVoice && vKey === (defVoice.voiceURI || `${defVoice.name}:::${defVoice.lang}`)) {
-        opt.selected = true;
-      }
+      opt.textContent = `${quality(v) >= 2 ? '★ ' : ''}${v.name} (${v.lang})`;
+      if (defVoice && vKey === keyOf(defVoice)) opt.selected = true;
       voicePicker.appendChild(opt);
     });
 
@@ -2085,6 +2100,7 @@ if (typeof speechSynthesis !== 'undefined') {
 });
 
 voicePicker.addEventListener('change', () => {
+  if (activeEngine === 'browser') localStorage.setItem('marginalia_browser_voice', voicePicker.value);
   audioPreloadCache.clear();
   learnedCadenceMultiplier = 1.0;
   const selectedOption = voicePicker.options[voicePicker.selectedIndex];
