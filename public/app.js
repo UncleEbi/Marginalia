@@ -48,6 +48,12 @@ if (navInstallPwa) {
   });
 }
 
+function escapeHtml(str) {
+  return String(str == null ? '' : str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 // --- MODAL CONTROLLER ---
 function closeModalById(id) {
   const modal = document.getElementById(id);
@@ -145,13 +151,15 @@ async function syncProgressToCloud(title, page, sentenceIdx) {
   const { data: { session } } = await supabaseClient.auth.getSession();
   if (!session?.user) return;
 
-  await supabaseClient.from('user_books').upsert({
-    user_id: session.user.id,
-    title: title,
-    current_page: page,
-    current_sentence: sentenceIdx,
-    updated_at: new Date().toISOString()
-  }, { onConflict: 'user_id,title' }).catch(() => {});
+  try {
+    await supabaseClient.from('user_books').upsert({
+      user_id: session.user.id,
+      title: title,
+      current_page: page,
+      current_sentence: sentenceIdx,
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'user_id,title' });
+  } catch (e) {}
 }
 
 async function getAllBooksFromShelf() {
@@ -182,48 +190,18 @@ async function deleteBookFromShelf(bookId) {
   });
 }
 
-async function initiateProUpgrade() {
-  const token = await getFreshAuthToken();
-  if (!token || !supabaseClient) {
-    authModal.style.display = 'flex';
-    return;
-  }
-
-  const { data: { session } } = await supabaseClient.auth.getSession();
-  if (!session?.user) {
-    authModal.style.display = 'flex';
-    return;
-  }
-
-  try {
-    const res = await fetch('/api/paystack-init', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email: session.user.email,
-        userId: session.user.id
-      })
-    });
-
-    const data = await res.json();
-    if (data.authorization_url) {
-      window.location.href = data.authorization_url;
-    } else {
-      alert(data.error || 'Could not start checkout.');
-    }
-  } catch (err) {
-    alert('Payment checkout error: ' + err.message);
-  }
-}
-
 // ==============================
 // PAYSTACK CHECKOUT HELPER
 // ==============================
 async function startPaystackCheckout(userEmail, userId) {
   try {
+    const token = await getFreshAuthToken();
     const res = await fetch('/api/paystack-init', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      },
       body: JSON.stringify({
         email: userEmail,
         amount: 5000, // 5,000 NGN
@@ -244,32 +222,25 @@ async function startPaystackCheckout(userEmail, userId) {
   }
 }
 
-// Handler triggered by the upgrade buttons
+// Handler triggered by the upgrade buttons (requires a signed-in account so the payment can be linked)
 async function initiateProUpgrade() {
   try {
-    // 1. Check logged-in user if using Supabase auth
-    let user = null;
-    if (typeof supabase !== 'undefined' && supabase.auth) {
-      const { data } = await supabase.auth.getUser();
-      user = data?.user;
+    if (!supabaseClient) { authModal.style.display = 'flex'; return; }
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    if (!session?.user) {
+      closeModalById('paywallModal');
+      showAuthAlert("Please sign in first so your Pro upgrade can be linked to your account.", "info");
+      authModal.style.display = 'flex';
+      return;
     }
-
-    // 2. Prompt for an email if user isn't logged in
-    const userEmail = user?.email || prompt("Enter your email address to continue to payment:");
-    if (!userEmail) return;
-
-    const userId = user?.id || `guest_${Date.now()}`;
-
-    // 3. Launch Paystack Checkout
-    await startPaystackCheckout(userEmail, userId);
+    await startPaystackCheckout(session.user.email, session.user.id);
   } catch (err) {
     console.error('Upgrade initiation error:', err);
     alert('Failed to launch checkout.');
   }
 }
 
-// Button listeners
-document.getElementById('profileUpgradeBtn')?.addEventListener('click', initiateProUpgrade);
+// Button listener (profileUpgradeBtn is handled further down: it opens the paywall)
 document.getElementById('upgradeProBtn')?.addEventListener('click', initiateProUpgrade);
 
 async function updateBookProgressInDB(title, page, sentenceIdx) {
@@ -448,64 +419,47 @@ const syncCalibrationDisplay = document.getElementById('syncCalibrationDisplay')
 const karaokeCalibrationContainer = document.getElementById('karaokeCalibrationContainer');
 const saveOptionsBtn = document.getElementById('saveOptionsBtn');
 
-// 1. Generate an almost-silent (near-zero volume) looping data URI
-// (A tiny non-zero sample prevents iOS Safari from detecting a dead track)
-function createSilentAudioElement() {
-  const audio = new Audio();
-  // Minimal valid 1-second WAV data URI
-  audio.src = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAP8A';
-  audio.loop = true;
-  audio.volume = 0.01; // Keep it barely above 0 so the OS media engine stays engaged
-  return audio;
-}
+// --- iOS AUDIO UNLOCK ---
+// iOS only allows <audio>.play() from inside a tap. The neural engines fetch audio over the
+// network first, so by the time play() runs the tap has expired. Fix: during the tap, play a
+// silent clip on the SAME element; once unlocked, later play() calls on it are allowed.
+let audioUnlocked = false;
+let silentUnlockUrl = null;
 
-const silentAudioLoop = new Audio('data:audio/wav;base64,UklGRjIAAABXQVZFZm10IBIAAAABAAEAQB8AAEAfAAABAAgAAABmYWN0BAAAAAAAAABkYXRhAAAAAA==');
-silentAudioLoop.loop = true;
-// 2. Unlock & play immediately inside the Play button click handler
-function unlockAndStartBackgroundLoop() {
-  if (silentAudioLoop.paused) {
-    silentAudioLoop.play().catch((err) => {
-      console.warn("Could not start background audio anchor:", err);
-    });
-  }
-}
-
-// Ensure this only runs on user click, never inside visibilitychange
-function handlePlayPause() {
-  if (isPlaying) {
-    pausePlayback();
-  } else {
-    // Start audio anchor once on user gesture
-    if (silentAudioLoop && silentAudioLoop.paused) {
-      silentAudioLoop.play().catch(() => {});
+function unlockAudioForIOS() {
+  if (audioUnlocked) return;
+  try {
+    if (!silentUnlockUrl) silentUnlockUrl = makeSilentWavUrl();
+    audioElement.src = silentUnlockUrl;
+    const p = audioElement.play();
+    if (p && typeof p.then === 'function') {
+      p.then(() => {
+        audioUnlocked = true;
+        if (audioElement.src === silentUnlockUrl) audioElement.pause();
+      }).catch(() => {});
     }
-    startPlayback();
-  }
+  } catch (e) {}
 }
-// 1. Declare a top-level global variable outside any function
-let activeUtterance = null;
 
-function speakSentence(text) {
-  window.speechSynthesis.cancel();
+// Bumped on every stop/skip so late network responses and stale speech callbacks are ignored
+let speakToken = 0;
 
-  // 2. Assign to the global variable instead of a local const/let
-  activeUtterance = new SpeechSynthesisUtterance(text);
-  
-  // Set voice, rate, pitch
-  if (selectedVoice) activeUtterance.voice = selectedVoice;
-  activeUtterance.rate = playbackRate || 1.0;
+function cancelAllSpeech() {
+  speakToken++;
+  currentUtterance = null;
+  audioElement.onended = null;
+  audioElement.ontimeupdate = null;
+  browserSpeech.cancel();
+  try { audioElement.pause(); } catch (e) {}
+  cancelWordAnimation();
+}
 
-  activeUtterance.onend = () => {
-    activeUtterance = null;
-    advanceToNextSentence();
-  };
-
-  activeUtterance.onerror = (e) => {
-    console.error("SpeechSynthesis error:", e);
-    activeUtterance = null;
-  };
-
-  window.speechSynthesis.speak(activeUtterance);
+function applyChosenVoice(utter) {
+  const voices = browserSpeech.getVoices();
+  if (voices.length > 0 && voicePicker.value && voicePicker.value !== "default") {
+    const v = voices.find(vx => (vx.voiceURI === voicePicker.value) || (`${vx.name}:::${vx.lang}` === voicePicker.value));
+    if (v) { utter.voice = v; utter.lang = v.lang; }
+  }
 }
 
 // --- MEDIA SESSION CONTROLLER (Lock Screen Audio) ---
@@ -559,11 +513,7 @@ function syncMediaSessionState(playing) {
 function skipSentence(delta) {
   const wasPlaying = isPlaying;
   isPlaying = false;
-  if (currentUtterance) { currentUtterance.onend = null; currentUtterance.onerror = null; }
-  audioElement.onended = null;
-  browserSpeech.cancel();
-  audioElement.pause();
-  cancelWordAnimation();
+  cancelAllSpeech();
 
   let idx = currentSentenceIdx + delta;
   const len = () => (bookPages[currentPage] || []).length;
@@ -582,7 +532,7 @@ function skipSentence(delta) {
 (function registerMediaSessionHandlers() {
   if (!('mediaSession' in navigator)) return;
   const set = (action, fn) => { try { navigator.mediaSession.setActionHandler(action, fn); } catch (e) {} };
-  set('play', () => { if (!isPlaying) { isPlaying = true; playCurrentSentence(); } });
+  set('play', () => { if (!isPlaying) { if (activeEngine !== 'browser') unlockAudioForIOS(); isPlaying = true; playCurrentSentence(); } });
   set('pause', () => stopAudio());
   set('stop', () => stopAudio());
   set('previoustrack', () => skipSentence(-1));
@@ -625,57 +575,51 @@ document.addEventListener('selectionchange', () => {
   }
 });
 
+// iOS silences/kills the system (browser) voice when the screen locks or the app is backgrounded,
+// and can't be prevented from a web page. Neural voices play through an <audio> element, which
+// iOS keeps alive on the lock screen. So: for the system voice, recover cleanly on return.
+let hiddenAt = 0;
+let lockHintShown = false;
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && isPlaying && activeEngine === 'browser') {
-    syncMediaSessionState(true);
+  if (document.hidden) {
+    hiddenAt = (isPlaying && activeEngine === 'browser') ? Date.now() : 0;
+    return;
   }
+  if (isPlaying && activeEngine === 'browser') {
+    syncMediaSessionState(true);
+    if (hiddenAt && Date.now() - hiddenAt > 1000) {
+      // speech was likely cut off while hidden: restart the current sentence
+      cancelAllSpeech();
+      playCurrentSentence();
+      if (!lockHintShown) {
+        lockHintShown = true;
+        showToast("The system voice pauses when the screen locks. Pick a neural voice for lock-screen listening.");
+      }
+    }
+  }
+  hiddenAt = 0;
 });
 
 btnSelectionSpeak.addEventListener('click', (e) => {
   e.stopPropagation();
   selectionPopover.style.display = 'none';
   if (!currentSelectedText) return;
+
+  const wasBusy = browserSpeech.speaking || browserSpeech.pending;
   stopAudio();
-
-  // At the top of this click listener:
-  unlockAndStartBackgroundLoop();
-
-  if (activeEngine === 'browser') { // (or your existing engine check)
-    browserSpeech.speak(utter);
-  } else {
-    speakServerless(currentSelectedText);
-  }
-
-utter.onend = () => {
-  // If there are more sentences, the loop stays running.
-  // Only pause if this was the last sentence and playback is completely finished:
-  if (!hasNextSentence()) {
-    isPlaying = false;
-    if (silentAudioLoop) silentAudioLoop.pause();
-    updatePlayButtonUI(false);
-  }
-};
 
   if (activeEngine === 'browser') {
     const utter = new SpeechSynthesisUtterance(currentSelectedText);
     utter.rate = playbackSpeed;
-    const voices = browserSpeech.getVoices();
-    if (voices.length > 0 && voicePicker.value && voicePicker.value !== "default") {
-      const v = voices.find(vx => (vx.voiceURI === voicePicker.value) || (`${vx.name}:::${vx.lang}` === voicePicker.value));
-      if (v) { utter.voice = v; utter.lang = v.lang; }
-    }
-    browserSpeech.speak(utter);
+    applyChosenVoice(utter);
+    // iOS drops a speak() issued right after cancel(); give it a beat
+    if (wasBusy) setTimeout(() => browserSpeech.speak(utter), 80);
+    else browserSpeech.speak(utter);
   } else {
-    speakServerless(currentSelectedText);
+    unlockAudioForIOS();
+    speakServerless(currentSelectedText, { standalone: true });
   }
 });
-
-function back() {
-  isPlaying = false;
-  window.speechSynthesis.cancel();
-  silentAudioLoop.pause(); // Only pause when the user deliberately pauses
-  updatePlayButtonUI(false);
-}
 
 btnSelectionDefine.addEventListener('click', async (e) => {
   e.stopPropagation();
@@ -732,7 +676,7 @@ async function showShelfModal(mode = "shelf") {
       card.className = 'shelf-card';
       card.innerHTML = `
         <div class="shelf-card-info">
-          <span class="shelf-card-title">${b.title}</span>
+          <span class="shelf-card-title">${escapeHtml(b.title)}</span>
           <span class="shelf-card-sub">Page ${(b.currentPage || 0) + 1} of ${b.pages.length}</span>
         </div>
         <div class="shelf-action-group">
@@ -797,8 +741,8 @@ navBookmarks.addEventListener('click', async () => {
       card.className = 'shelf-card';
       card.innerHTML = `
         <div class="shelf-card-info">
-          <span class="shelf-card-title">${m.bookTitle} — Page ${m.page + 1}</span>
-          <span class="shelf-card-sub" style="font-style:italic;">"${m.snippet.slice(0, 42)}..."</span>
+          <span class="shelf-card-title">${escapeHtml(m.bookTitle)} — Page ${m.page + 1}</span>
+          <span class="shelf-card-sub" style="font-style:italic;">"${escapeHtml((m.snippet || '').slice(0, 42))}..."</span>
         </div>
         <span style="font-size:0.8rem; color:var(--accent); font-weight:600;">Jump →</span>
       `;
@@ -846,7 +790,7 @@ openJumpModalBtn.addEventListener('click', () => {
       const item = document.createElement('div');
       item.className = `chapter-item ${ch.pageIndex === currentCh.pageIndex ? 'active' : ''}`;
       item.innerHTML = `
-        <span>${ch.title}</span>
+        <span>${escapeHtml(ch.title)}</span>
         <span style="font-size:0.75rem; color:var(--text-muted);">Pg ${ch.pageIndex + 1}</span>
       `;
       item.addEventListener('click', () => {
@@ -1604,7 +1548,7 @@ function renderPage(idx) {
     }
   });
 
-  pageIndicatorText.innerHTML = `Page ${idx + 1} of${bookPages.length} <span style="font-size:0.68rem; opacity:0.7;">▾</span>`;
+  pageIndicatorText.innerHTML = `Page ${idx + 1} of ${bookPages.length} <span style="font-size:0.68rem; opacity:0.7;">▾</span>`;
   const currentCh = getCurrentChapter();
   chapterIndicatorText.textContent = currentCh.title;
 
@@ -1687,20 +1631,14 @@ async function playCurrentSentence() {
 }
 
 function speakBrowser(text) {
+  const wasBusy = browserSpeech.speaking || browserSpeech.pending;
   browserSpeech.cancel();
   cancelWordAnimation();
 
-  currentUtterance = new SpeechSynthesisUtterance(text);
-  currentUtterance.rate = playbackSpeed;
-
-  const voices = browserSpeech.getVoices();
-  if (voices.length > 0 && voicePicker.value && voicePicker.value !== "default") {
-    const selectedVoice = voices.find(v => (v.voiceURI === voicePicker.value) || (`${v.name}:::${v.lang}` === voicePicker.value));
-    if (selectedVoice) {
-      currentUtterance.voice = selectedVoice;
-      currentUtterance.lang = selectedVoice.lang;
-    }
-  }
+  const utter = new SpeechSynthesisUtterance(text);
+  currentUtterance = utter;
+  utter.rate = playbackSpeed;
+  applyChosenVoice(utter);
 
   const wordsArr = text.trim().split(/\s+/).filter(w => w.length > 0);
   const computed = computeWordTimeline(wordsArr, playbackSpeed);
@@ -1710,7 +1648,8 @@ function speakBrowser(text) {
   let boundaryCount = 0;
   let usingNativeBoundaries = false;
 
-  currentUtterance.onboundary = (e) => {
+  utter.onboundary = (e) => {
+    if (currentUtterance !== utter) return;
     if (e.name === 'word') {
       boundaryCount++;
       if (boundaryCount > 1) {
@@ -1724,14 +1663,15 @@ function speakBrowser(text) {
     }
   };
 
-  currentUtterance.onstart = () => {
+  utter.onstart = () => {
+    if (currentUtterance !== utter) return;
     if (highlightMode === 'word') highlightActiveWord(0);
     sentenceSpeechStartTime = performance.now();
 
     const leadInDelayMs = 180 / playbackSpeed;
 
     function renderFrame() {
-      if (!isPlaying || usingNativeBoundaries || highlightMode !== 'word') return;
+      if (!isPlaying || usingNativeBoundaries || highlightMode !== 'word' || currentUtterance !== utter) return;
       const elapsedMs = performance.now() - sentenceSpeechStartTime;
       const effectiveElapsedSec = Math.max(0, (elapsedMs - leadInDelayMs) / 1000);
 
@@ -1755,7 +1695,9 @@ function speakBrowser(text) {
     }
   };
 
-  currentUtterance.onend = () => {
+  utter.onend = () => {
+    // Ignore callbacks from an utterance that was cancelled/replaced (Safari fires these late)
+    if (currentUtterance !== utter) return;
     cancelWordAnimation();
 
     if (sentenceSpeechStartTime && estimatedSentenceDurationMs > 400) {
@@ -1771,76 +1713,163 @@ function speakBrowser(text) {
     playCurrentSentence();
   };
 
-  currentUtterance.onerror = () => stopAudio();
-  browserSpeech.speak(currentUtterance);
+  utter.onerror = (e) => {
+    if (currentUtterance !== utter) return;
+    // cancel() reports 'interrupted'/'canceled' on iOS; that is not a real failure
+    if (e && (e.error === 'interrupted' || e.error === 'canceled')) return;
+    stopAudio();
+  };
+
+  // iOS drops a speak() issued immediately after cancel(); wait a beat only when we interrupted something
+  const go = () => { if (currentUtterance === utter) browserSpeech.speak(utter); };
+  if (wasBusy) setTimeout(go, 80);
+  else go();
 }
 
-async function speakServerless(text) {
-  try {
+// --- NEURAL AUDIO FETCH + PRELOAD ---
+// The next sentences are fetched while the current one plays, so playback is gapless and the
+// chain keeps running on the lock screen without waiting on the network between sentences.
+const audioInflight = new Map();
+const PRELOAD_AHEAD = 2;
+const AUDIO_CACHE_MAX = 12;
+
+function neuralCacheKey(text) {
+  return `${activeEngine}_${voicePicker.value}_${playbackSpeed}_${text}`;
+}
+
+function cacheAudio(key, src) {
+  audioPreloadCache.set(key, { src });
+  while (audioPreloadCache.size > AUDIO_CACHE_MAX) {
+    audioPreloadCache.delete(audioPreloadCache.keys().next().value);
+  }
+}
+
+async function getNeuralAudioSrc(text) {
+  const key = neuralCacheKey(text);
+  const hit = audioPreloadCache.get(key);
+  if (hit && hit.src) return hit.src;
+  if (audioInflight.has(key)) return audioInflight.get(key);
+
+  // capture settings now; they can change while we await
+  const engine = activeEngine, voiceId = voicePicker.value, speed = playbackSpeed;
+
+  const job = (async () => {
     const customOpenAi = localStorage.getItem('marginalia_byok_openai') || '';
     const customEleven = localStorage.getItem('marginalia_byok_eleven') || '';
     const token = await getFreshAuthToken();
 
-    if (!token && !customOpenAi && !customEleven) {
-      stopAudio();
-      showAuthAlert("Please sign in or enter your custom API key in Options.", "error");
-      authModal.style.display = 'flex';
-      return;
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (customOpenAi) headers['x-custom-openai-key'] = customOpenAi;
+    if (customEleven) headers['x-custom-elevenlabs-key'] = customEleven;
+    if (SUPABASE_PROJECT_URL && !SUPABASE_PROJECT_URL.includes("your-project")) {
+      headers['x-supabase-url'] = SUPABASE_PROJECT_URL;
+      headers['x-supabase-key'] = SUPABASE_ANON_KEY;
     }
 
-    const cacheKey = `${activeEngine}_${voicePicker.value}_${playbackSpeed}_${text}`;
-    let cached = audioPreloadCache.get(cacheKey);
-    let audioSrc = cached?.src;
+    const res = await fetch('/api/tts', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ text, voiceId, engine, speed })
+    });
+    const data = await res.json().catch(() => ({}));
+
+    if (res.status === 401) {
+      const err = new Error(data.error || "Session expired. Please sign in again.");
+      err.status = 401;
+      throw err;
+    }
+    if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+
+    const src = data.audio_base64
+      ? `data:audio/mp3;base64,${data.audio_base64}`
+      : (data.audioUrl || '');
+    if (!src) throw new Error("The voice server returned no audio.");
+
+    if (data.remaining_chars !== undefined) updateAuthBadge(data.remaining_chars);
+    cacheAudio(key, src);
+    return src;
+  })();
+
+  audioInflight.set(key, job);
+  try { return await job; } finally { audioInflight.delete(key); }
+}
+
+// The next few things that will be read aloud (follows auto page-flip like playback does)
+function upcomingNeuralTexts(limit) {
+  const out = [];
+  let page = currentPage;
+  let idx = currentSentenceIdx + 1;
+  while (out.length < limit) {
+    const items = bookPages[page];
+    if (!items) break;
+    if (idx >= items.length) {
+      if (autoFlipCheck.checked && page < bookPages.length - 1) { page++; idx = 0; continue; }
+      break;
+    }
+    const it = items[idx++];
+    if (typeof it === 'string') out.push(it);
+    else if (it && it.type === 'image' && it.caption && it.caption.trim().length > 3) out.push(`Figure: ${it.caption}`);
+  }
+  return out;
+}
+
+function preloadUpcoming(myToken) {
+  if (activeEngine === 'browser') return;
+  upcomingNeuralTexts(PRELOAD_AHEAD).forEach(t => {
+    if (myToken !== speakToken) return; // user paused/skipped
+    if (audioPreloadCache.has(neuralCacheKey(t))) return;
+    getNeuralAudioSrc(t).catch(() => {}); // best effort; the real play path reports errors
+  });
+}
+
+async function speakServerless(text, opts = {}) {
+  const standalone = Boolean(opts.standalone);
+  const myToken = ++speakToken;
+  const stale = () => myToken !== speakToken || (!standalone && !isPlaying);
+
+  try {
+    // Preloaded sentence: play immediately, no auth/network round-trip (important when locked)
+    let audioSrc = audioPreloadCache.get(neuralCacheKey(text))?.src;
 
     if (!audioSrc) {
-      preloadStatus.textContent = "Connecting...";
-      const headers = { 'Content-Type': 'application/json' };
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-      if (customOpenAi) headers['x-custom-openai-key'] = customOpenAi;
-      if (customEleven) headers['x-custom-elevenlabs-key'] = customEleven;
+      const customOpenAi = localStorage.getItem('marginalia_byok_openai') || '';
+      const customEleven = localStorage.getItem('marginalia_byok_eleven') || '';
+      const token = await getFreshAuthToken();
 
-      if (SUPABASE_PROJECT_URL && !SUPABASE_PROJECT_URL.includes("your-project")) {
-        headers['x-supabase-url'] = SUPABASE_PROJECT_URL;
-        headers['x-supabase-key'] = SUPABASE_ANON_KEY;
-      }
-
-      const res = await fetch('/api/tts', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          text,
-          voiceId: voicePicker.value,
-          engine: activeEngine,
-          speed: playbackSpeed
-        })
-      });
-
-      const data = await res.json().catch(() => ({}));
-
-      if (res.status === 401) {
-        updateAuthBadge();
+      if (!token && !customOpenAi && !customEleven) {
+        stopAudio();
+        showAuthAlert("Please sign in or enter your custom API key in Options.", "error");
         authModal.style.display = 'flex';
-        showAuthAlert(data.error || "Session expired. Please sign in again.", "error");
         return;
       }
 
-      if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
-
-      audioSrc = data.audio_base64 
-        ? `data:audio/mp3;base64,${data.audio_base64}`
-        : (data.audioUrl || '');
-
-      if (data.remaining_chars !== undefined) updateAuthBadge(data.remaining_chars);
+      preloadStatus.textContent = "Connecting...";
+      try {
+        audioSrc = await getNeuralAudioSrc(text);
+      } catch (e) {
+        if (e && e.status === 401) {
+          updateAuthBadge();
+          authModal.style.display = 'flex';
+          showAuthAlert(e.message, "error");
+          stopAudio();
+          return;
+        }
+        throw e;
+      }
     }
 
-    audioElement.src = audioSrc;
-    audioElement.playbackRate = playbackSpeed;
-    await audioElement.play();
+    preloadStatus.textContent = "Ready";
+
+    // User hit pause / skipped / switched voice while the audio was downloading
+    if (stale()) return;
 
     const wordsArr = text.trim().split(/\s+/).filter(w => w.length > 0);
     let timeline = null;
 
+    // Attach handlers BEFORE play() so a very short clip can't finish unobserved
     audioElement.ontimeupdate = () => {
+      if (myToken !== speakToken) return;
       if (!timeline && audioElement.duration) {
         timeline = computeWordTimeline(wordsArr, playbackSpeed, audioElement.duration).timeline;
       }
@@ -1859,14 +1888,27 @@ async function speakServerless(text) {
     };
 
     audioElement.onended = () => {
-      if (!isPlaying) return;
+      if (myToken !== speakToken || standalone || !isPlaying) return;
       currentSentenceIdx++;
       playCurrentSentence();
     };
 
+    audioElement.src = audioSrc;
+    audioElement.playbackRate = playbackSpeed;
+    await audioElement.play();
+
+    if (!standalone) preloadUpcoming(myToken);
+
   } catch (err) {
+    if (myToken !== speakToken) return; // we were cancelled on purpose
     stopAudio();
-    alert(err.message);
+    if (err && err.name === 'NotAllowedError') {
+      showToast("Your phone blocked audio. Tap play again to allow it.");
+    } else if (err && err.name === 'AbortError') {
+      // a newer load replaced this one; nothing to report
+    } else {
+      alert(err.message);
+    }
   }
 }
 
@@ -1874,9 +1916,7 @@ function stopAudio() {
   isPlaying = false;
   mainPlayToggle.textContent = '▶';
   syncMediaSessionState(false);
-  cancelWordAnimation();
-  browserSpeech.cancel();
-  audioElement.pause();
+  cancelAllSpeech();
   document.querySelectorAll('.word').forEach(el => el.classList.remove('active-word'));
 }
 
@@ -1884,6 +1924,7 @@ function stopAudio() {
 mainPlayToggle.addEventListener('click', () => {
   if (isPlaying) stopAudio();
   else {
+    if (activeEngine !== 'browser') unlockAudioForIOS();
     isPlaying = true;
     playCurrentSentence();
   }
@@ -1917,7 +1958,7 @@ speedCycleBtn.addEventListener('click', () => {
   speedCycleBtn.textContent = `${playbackSpeed.toFixed(1)}x`;
   if (isPlaying) {
     if (activeEngine === 'browser') {
-      browserSpeech.cancel();
+      cancelAllSpeech();
       playCurrentSentence();
     } else {
       audioElement.playbackRate = playbackSpeed;
@@ -2031,6 +2072,7 @@ voicePicker.addEventListener('change', () => {
   
   if (isPlaying) {
     stopAudio();
+    if (activeEngine !== 'browser') unlockAudioForIOS();
     isPlaying = true;
     setTimeout(() => { playCurrentSentence(); }, 60);
   }
@@ -2046,6 +2088,7 @@ document.querySelectorAll('.engine-tab').forEach(tab => {
     populateVoices();
     if (isPlaying) {
       stopAudio();
+      if (activeEngine !== 'browser') unlockAudioForIOS();
       isPlaying = true;
       playCurrentSentence();
     }
@@ -2145,51 +2188,60 @@ function normalizeZipPath(basePath, relativePath) {
   return stack.join('/');
 }
 
-function splitIntoSentences(text) {
-  if (!text || !text.trim()) return [];
-  if (typeof Intl !== 'undefined' && Intl.Segmenter) {
-    try {
-      const segmenter = new Intl.Segmenter('en', { granularity: 'sentence' });
-      const segments = Array.from(segmenter.segment(text));
-      return segments.map(s => s.segment.replace(/\s+/g, ' ').trim()).filter(s => s.length > 0);
-    } catch (e) {}
-  }
-  const matches = text.match(/[^.!?]+[.!?]+["')\]]*\s*|[^.!?]+$/g) || [text];
-  return matches.map(s => s.replace(/\s+/g, ' ').trim()).filter(s => s.length > 0);
-}
-
 function parseHtmlToBlocks(htmlString) {
   const doc = new DOMParser().parseFromString(htmlString, 'text/html');
   doc.querySelectorAll('script, style, head, nav, [role="doc-toc"]').forEach(el => el.remove());
 
   const blocks = [];
-  const elements = doc.body ? Array.from(doc.body.children) : [];
-
-  if (elements.length === 0) {
+  if (!doc.body || doc.body.children.length === 0) {
     const rawText = (doc.body ? doc.body.textContent : doc.documentElement.textContent) || '';
     return splitIntoSentences(rawText);
   }
 
-  elements.forEach(el => {
-    const imgs = el.querySelectorAll('img, image');
-    if (el.tagName.toLowerCase() === 'img' || imgs.length > 0) {
-      const imgEl = el.tagName.toLowerCase() === 'img' ? el : imgs[0];
-      const src = imgEl.getAttribute('src');
-      if (src && src.startsWith('data:')) {
-        const caption = imgEl.getAttribute('alt') || el.querySelector('figcaption')?.textContent || '';
-        blocks.push({ type: 'image', src, caption: caption.trim() });
-        return;
-      }
-    }
+  const BLOCK_TAGS = new Set(['p','div','section','article','main','aside','header','footer','ul','ol','li','table','tbody','thead','tr','td','th','blockquote','figure','pre','dl','dt','dd','h1','h2','h3','h4','h5','h6','hr']);
 
-    const txt = el.textContent.replace(/\s+/g, ' ').trim();
-    if (txt.length > 0) {
-      const sents = splitIntoSentences(txt);
-      sents.forEach(s => blocks.push(s));
-    }
-  });
+  const pushText = (raw) => {
+    const t = (raw || '').replace(/\s+/g, ' ').trim();
+    if (t) splitIntoSentences(t).forEach(s => blocks.push(s));
+  };
 
-  return blocks.length > 0 ? blocks : splitIntoSentences(doc.body ? doc.body.textContent : '');
+  const pushImage = (imgEl) => {
+    const src = imgEl.getAttribute('src');
+    if (!src || !src.startsWith('data:')) return;
+    const fig = imgEl.closest ? imgEl.closest('figure') : null;
+    const caption = imgEl.getAttribute('alt') || fig?.querySelector('figcaption')?.textContent || '';
+    blocks.push({ type: 'image', src, caption: caption.trim() });
+  };
+
+  // Reads one inline-level element in document order: text becomes sentences, images become image blocks
+  const readInline = (el) => {
+    let buf = '';
+    const flush = () => { pushText(buf); buf = ''; };
+    const visit = (n) => {
+      if (n.nodeType === 3) { buf += n.textContent; return; }
+      if (n.nodeType !== 1) return;
+      const tag = n.tagName.toLowerCase();
+      if (tag === 'img' || tag === 'image') { flush(); pushImage(n); return; }
+      if (tag === 'figcaption') return; // used as the image caption instead of being read twice
+      if (tag === 'br') { buf += ' '; return; }
+      n.childNodes.forEach(visit);
+    };
+    visit(el);
+    flush();
+  };
+
+  // Wrapper elements (divs/sections around the real paragraphs) are walked into, not flattened
+  const walk = (parent) => {
+    Array.from(parent.children).forEach(el => {
+      const tag = el.tagName.toLowerCase();
+      const hasBlockChild = Array.from(el.children).some(c => BLOCK_TAGS.has(c.tagName.toLowerCase()));
+      if (tag !== 'figure' && hasBlockChild) walk(el);
+      else readInline(el);
+    });
+  };
+  walk(doc.body);
+
+  return blocks.length > 0 ? blocks : splitIntoSentences(doc.body.textContent || '');
 }
 
 // --- EPUB EXTRACTOR WITH TABLE OF CONTENTS ---
@@ -2295,13 +2347,6 @@ async function parseEpubArchive(zip) {
     }
   }
 
-  function decodeHtmlEntities(str) {
-  if (!str) return '';
-  const txt = document.createElement('textarea');
-  txt.innerHTML = str;
-  return txt.value;
-}
-  
   if (extractedPages.length === 0) {
     throw new Error("No readable text found in EPUB.");
   }
@@ -2400,9 +2445,9 @@ function splitIntoSentences(text) {
     .replace(/&apos;/g, "'")
     .replace(/&#39;/g, "'")
     .replace(/&quot;/g, '"')
-    .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>');
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
 
   if (typeof Intl !== 'undefined' && Intl.Segmenter) {
     try {
@@ -2424,7 +2469,7 @@ fileInput.addEventListener('change', async (event) => {
   currentDocName = file.name;
   docTitle.textContent = currentDocName;
   preloadStatus.textContent = "Opening...";
-  contentPane.innerHTML = `<div style="text-align:center; padding:3rem; color:var(--text-muted); font-style:italic;">Processing "${file.name}"...</div>`;
+  contentPane.innerHTML = `<div style="text-align:center; padding:3rem; color:var(--text-muted); font-style:italic;">Processing "${escapeHtml(file.name)}"...</div>`;
 
   try {
     const result = await processUploadedDocument(file);
