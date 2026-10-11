@@ -80,17 +80,22 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; touch-action: manipulation; }
 
+html {
+  height: 100%;
+  overflow: hidden; /* the page never scrolls; only <main> does */
+}
+
 body {
   background-color: var(--bg-main);
   color: var(--text-main);
   font-family: var(--font-ui);
-  min-height: 100dvh;
+  height: 100vh;   /* fallback for old browsers */
+  height: 100dvh;  /* iPhone: exactly the visible area, even as the browser toolbar shows/hides */
   display: flex;
   flex-direction: column;
   transition: background-color var(--transition), color var(--transition);
   -webkit-tap-highlight-color: transparent;
-  padding-bottom: calc(84px + var(--safe-bottom));
-  overflow-x: hidden;
+  overflow: hidden;
 }
 
 /* TOP HEADER */
@@ -98,8 +103,8 @@ header {
   padding: 0.55rem 0.85rem;
   background: var(--panel-bg);
   border-bottom: 1px solid var(--border);
-  position: sticky;
-  top: 0;
+  position: relative;
+  flex: 0 0 auto;
   z-index: 50;
   backdrop-filter: blur(10px);
 }
@@ -219,6 +224,10 @@ header {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
+  flex: 0 0 auto;
+  max-height: 40dvh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .controls-toggle-bar {
@@ -302,11 +311,16 @@ header {
 
 /* READING CONTAINER */
 main {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;            /* required so a flex child can shrink and scroll */
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 0.5rem 0.6rem 1.5rem;
+  padding: 0.5rem 0.6rem calc(96px + var(--safe-bottom));
 }
 
 .reader-card {

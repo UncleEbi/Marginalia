@@ -1568,7 +1568,16 @@ function highlightActiveSentence() {
     } else {
       target.classList.add('active-sentence');
     }
-    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const scroller = document.querySelector('main');
+    if (scroller) {
+      // scroll only the reading area (scrollIntoView could also shove the pinned header away)
+      const tr = target.getBoundingClientRect();
+      const mr = scroller.getBoundingClientRect();
+      scroller.scrollTo({
+        top: scroller.scrollTop + (tr.top - mr.top) - (mr.height / 2) + (tr.height / 2),
+        behavior: 'smooth'
+      });
+    }
   }
 }
 
