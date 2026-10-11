@@ -723,12 +723,6 @@ async function showShelfModal(mode = "shelf") {
         shelfModal.style.display = 'none';
         renderPage(currentPage);
       });
-
-      document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && isPlaying && activeEngine === 'browser') {
-    syncMediaSessionState(true);
-  }
-});
       
       shelfModalList.appendChild(card);
     });
