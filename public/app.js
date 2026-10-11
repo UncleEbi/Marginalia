@@ -1,3 +1,19 @@
+// --- iPHONE NOTCH / HOME-SCREEN APP ---
+// env(safe-area-inset-*) only reports real values when the viewport opts in with viewport-fit=cover.
+// Make sure it does, so the header can sit below the notch/status bar when installed to the Home Screen.
+(function ensureViewportFitCover() {
+  let meta = document.querySelector('meta[name="viewport"]');
+  if (!meta) {
+    meta = document.createElement('meta');
+    meta.name = 'viewport';
+    meta.content = 'width=device-width, initial-scale=1';
+    document.head.appendChild(meta);
+  }
+  if (!/viewport-fit\s*=\s*cover/i.test(meta.content)) {
+    meta.content = meta.content.replace(/\s*,?\s*$/, '') + ', viewport-fit=cover';
+  }
+})();
+
 // --- SUPABASE CONFIGURATION ---
 const SUPABASE_PROJECT_URL = "https://nnxphilhkhvwnitxvzdi.supabase.co"; 
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ueHBoaWxoa2h2d25pdHh2emRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA5NzQzMDYsImV4cCI6MjEwNjU1MDMwNn0.LQetUHa6Os7UJl2NxvAph58vrvWNWbF_kcL9R2l-o3Y";

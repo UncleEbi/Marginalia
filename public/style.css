@@ -3,6 +3,7 @@
   --font-reader: "Georgia", "Merriweather", "Charter", serif;
   --transition: 0.2s ease;
   --safe-bottom: env(safe-area-inset-bottom, 16px);
+  --safe-top: env(safe-area-inset-top, 0px); /* notch / Dynamic Island / status bar */
   --reader-font-size: 1.15rem;
 }
 
@@ -100,7 +101,7 @@ body {
 
 /* TOP HEADER */
 header {
-  padding: 0.55rem 0.85rem;
+  padding: calc(0.55rem + var(--safe-top)) 0.85rem 0.55rem;
   background: var(--panel-bg);
   border-bottom: 1px solid var(--border);
   position: relative;
@@ -585,7 +586,8 @@ main {
 .side-drawer.open { transform: translateX(310px); }
 
 .drawer-header {
-  height: 155px;
+  height: calc(155px + var(--safe-top));
+  padding-top: var(--safe-top);
   background: linear-gradient(180deg, #182848 0%, #29487d 65%, #3d669e 100%);
   position: relative;
   display: flex;
@@ -692,7 +694,7 @@ main {
   justify-content: center;
   align-items: center;
   z-index: 1000;
-  padding: 1rem;
+  padding: calc(1rem + var(--safe-top)) 1rem calc(1rem + var(--safe-bottom));
 }
 
 .modal-card {
