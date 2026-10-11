@@ -498,15 +498,10 @@ function syncMediaSessionState(playing) {
   if (!('mediaSession' in navigator)) return;
   try {
     navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
-    if (playing && activeEngine === 'browser') {
-      if (!keepAliveAudio) {
-        keepAliveAudio = new Audio(makeSilentWavUrl());
-        keepAliveAudio.loop = true;
-      }
-      keepAliveAudio.play().catch(() => {});
-    } else if (keepAliveAudio) {
-      keepAliveAudio.pause();
-    }
+    // NOTE: no silent "keep-alive" <audio> alongside the system voice. On iPhone, starting an
+    // audio element while speechSynthesis is speaking switches the audio session and cuts the
+    // speech off after the first word. (It couldn't keep speech alive on lock anyway.)
+    if (keepAliveAudio) keepAliveAudio.pause();
   } catch (e) {}
 }
 
