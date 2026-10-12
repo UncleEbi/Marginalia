@@ -604,14 +604,14 @@ main::after {
 
 .scenic-moon {
   position: absolute;
-  top: 26px;
+  top: calc(var(--safe-top) + 16px); /* start below the notch / status bar so the whole moon shows */
   right: 42px;
   width: 58px;
   height: 58px;
   border-radius: 50%;
   box-shadow: -10px 10px 0 2px #dbe7f5;
   transform: rotate(-12deg);
-  opacity: 0.95;
+  opacity: 1;
 }
 
 .star { position: absolute; background: #fff; border-radius: 50%; opacity: 0.6; }
