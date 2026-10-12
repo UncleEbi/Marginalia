@@ -671,6 +671,84 @@ openDrawerBtn.addEventListener('click', openDrawer);
 closeDrawerBtn.addEventListener('click', closeDrawer);
 drawerOverlay.addEventListener('click', closeDrawer);
 
+// --- INSTALL AS APP (drawer item) ---
+let deferredInstallPrompt = null;
+const isStandaloneApp = () =>
+  window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+const isIOSDevice = () =>
+  /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+// Android / desktop Chrome hand us a prompt we can trigger from our own button
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+});
+
+function showInstallHelp(title, steps) {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed; inset:0; z-index:10000; background:rgba(0,0,0,0.6); display:flex; align-items:center; justify-content:center; padding:calc(1rem + var(--safe-top)) 1rem calc(1rem + var(--safe-bottom));';
+  const card = document.createElement('div');
+  card.style.cssText = 'background:var(--panel-bg); color:var(--text-main); border:1px solid var(--border); border-radius:14px; padding:1.1rem 1.2rem; max-width:340px; width:100%; box-shadow:0 10px 30px rgba(0,0,0,0.45);';
+  const h = document.createElement('div');
+  h.textContent = title;
+  h.style.cssText = 'font-weight:700; font-size:1.05rem; margin-bottom:0.7rem;';
+  const ol = document.createElement('ol');
+  ol.style.cssText = 'margin:0 0 1rem 1.2rem; padding:0; font-size:0.92rem; line-height:1.6;';
+  steps.forEach(t => { const li = document.createElement('li'); li.textContent = t; ol.appendChild(li); });
+  const ok = document.createElement('button');
+  ok.textContent = 'Got it';
+  ok.style.cssText = 'width:100%; padding:0.7rem; border:none; border-radius:10px; background:var(--accent, #38bdf8); color:#fff; font-weight:600; font-size:0.95rem; cursor:pointer;';
+  const close = () => overlay.remove();
+  ok.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  card.append(h, ol, ok);
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+}
+
+(function setupInstallDrawerItem() {
+  const body = sideDrawer && sideDrawer.querySelector('.drawer-body');
+  if (!body || isStandaloneApp()) return; // already running as an installed app: nothing to offer
+
+  const item = document.createElement('div');
+  item.className = 'drawer-nav-item';
+  item.id = 'btnDrawerInstall';
+  item.innerHTML = '<span aria-hidden="true">📲</span><span>Install App</span>';
+  body.appendChild(item);
+
+  item.addEventListener('click', async () => {
+    closeDrawer();
+    if (deferredInstallPrompt) {
+      const promptEvent = deferredInstallPrompt;
+      deferredInstallPrompt = null; // a prompt can only be used once
+      try {
+        promptEvent.prompt();
+        await promptEvent.userChoice;
+      } catch (e) {}
+      return;
+    }
+    if (isIOSDevice()) {
+      showInstallHelp('Install Marginalia', [
+        'Tap the Share button (the square with an arrow) in your browser.',
+        'Scroll down and tap "Add to Home Screen".',
+        'Tap "Add". Marginalia will open like a normal app.'
+      ]);
+    } else {
+      showInstallHelp('Install Marginalia', [
+        'Open your browser menu (the ⋮ or ⋯ button).',
+        'Tap "Install app" or "Add to Home screen".',
+        'Confirm. Marginalia will open like a normal app.'
+      ]);
+    }
+  });
+
+  window.addEventListener('appinstalled', () => {
+    deferredInstallPrompt = null;
+    item.remove();
+    showToast('Marginalia installed 🎉');
+  });
+})();
+
 // --- SHELF & RECENT MODALS ---
 async function showShelfModal(mode = "shelf") {
   closeDrawer();

@@ -488,8 +488,7 @@ main::after {
 .mobile-player-bar {
   position: fixed;
   bottom: 0; left: 0; right: 0;
-  background: var(--panel-blur);
-  backdrop-filter: blur(14px);
+  background: var(--panel-bg); /* solid: no see-through blur */
   border-top: 1px solid var(--border);
   padding: 0.55rem 0.85rem calc(0.55rem + var(--safe-bottom));
   z-index: 100;
@@ -567,7 +566,6 @@ main::after {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
   background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(4px);
   z-index: 200;
   opacity: 0;
   pointer-events: none;
@@ -694,7 +692,6 @@ main::after {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
   background: var(--modal-overlay);
-  backdrop-filter: blur(6px);
   display: none;
   justify-content: center;
   align-items: center;
