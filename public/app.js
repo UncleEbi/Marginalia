@@ -1575,25 +1575,30 @@ function highlightActiveSentence() {
   document.querySelectorAll('.reader-diagram').forEach(el => el.classList.remove('active-diagram'));
   document.querySelectorAll('.word').forEach(el => el.classList.remove('active-word'));
 
-  if (highlightMode === 'none') return;
-
   const target = document.getElementById(`sent-${currentSentenceIdx}`);
-  if (target) {
+  if (!target) return;
+
+  if (highlightMode !== 'none') {
     if (target.classList.contains('reader-diagram')) {
       target.classList.add('active-diagram');
     } else {
       target.classList.add('active-sentence');
     }
-    const scroller = document.querySelector('main');
-    if (scroller) {
-      // scroll only the reading area (scrollIntoView could also shove the pinned header away)
-      const tr = target.getBoundingClientRect();
-      const mr = scroller.getBoundingClientRect();
-      scroller.scrollTo({
-        top: scroller.scrollTop + (tr.top - mr.top) - (mr.height / 2) + (tr.height / 2),
-        behavior: 'smooth'
-      });
-    }
+  }
+
+  // Keep the sentence being read in view (even with highlighting off). Scroll only the reading
+  // area, and centre within the part that is actually visible: below the header, above the player bar.
+  const scroller = document.querySelector('main');
+  if (!scroller) return;
+  const tr = target.getBoundingClientRect();
+  const mr = scroller.getBoundingClientRect();
+  const bar = document.querySelector('.mobile-player-bar');
+  const visibleTop = mr.top;
+  const visibleBottom = bar ? Math.min(mr.bottom, bar.getBoundingClientRect().top) : mr.bottom;
+  const visibleCenter = visibleTop + (visibleBottom - visibleTop) / 2;
+  const delta = (tr.top + tr.height / 2) - visibleCenter;
+  if (Math.abs(delta) > 4) {
+    scroller.scrollTo({ top: scroller.scrollTop + delta, behavior: 'smooth' });
   }
 }
 

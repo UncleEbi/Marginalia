@@ -101,13 +101,12 @@ body {
 
 /* TOP HEADER */
 header {
-  padding: calc(0.55rem + var(--safe-top)) 0.85rem 0.55rem;
+  padding: calc(0.9rem + var(--safe-top)) 0.85rem 0.6rem;
   background: var(--panel-bg);
   border-bottom: 1px solid var(--border);
   position: relative;
   flex: 0 0 auto;
   z-index: 50;
-  backdrop-filter: blur(10px);
 }
 
 .header-inner {
@@ -321,7 +320,12 @@ main {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 0.5rem 0.6rem calc(96px + var(--safe-bottom));
+  padding: 0.5rem 0.6rem 0;
+}
+
+main::after {
+  content: '';
+  flex: 0 0 calc(110px + var(--safe-bottom)); /* clears the fixed player bar so the last lines are never hidden */
 }
 
 .reader-card {
@@ -333,6 +337,7 @@ main {
   padding: 1.25rem 1rem;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
   min-height: calc(100dvh - 250px);
+  flex-shrink: 0; /* never squash the card; its text must stay inside so the page can scroll to the end */
   position: relative;
 }
 
