@@ -1759,7 +1759,8 @@ const PRELOAD_AHEAD = 2;
 const AUDIO_CACHE_MAX = 12;
 
 function neuralCacheKey(text) {
-  return `${activeEngine}_${voicePicker.value}_${playbackSpeed}_${text}`;
+  // speed is applied on the phone (playbackRate), so cached audio is reusable at any speed
+  return `${activeEngine}_${voicePicker.value}_${text}`;
 }
 
 function cacheAudio(key, src) {
@@ -1776,7 +1777,9 @@ async function getNeuralAudioSrc(text) {
   if (audioInflight.has(key)) return audioInflight.get(key);
 
   // capture settings now; they can change while we await
-  const engine = activeEngine, voiceId = voicePicker.value, speed = playbackSpeed;
+  // Always ask the server for normal-speed audio: speed is applied on the phone via playbackRate.
+  // (Sending the speed too made OpenAI/Azure/Google voices play at speed x speed.)
+  const engine = activeEngine, voiceId = voicePicker.value, speed = 1;
 
   const job = (async () => {
     const customOpenAi = localStorage.getItem('marginalia_byok_openai') || '';
