@@ -100,6 +100,14 @@ body {
 }
 
 /* TOP HEADER */
+/* No blur, glow or filters anywhere in the header (forced, so no other rule can bring them back) */
+header, header * {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  filter: none !important;
+  text-shadow: none !important;
+}
+
 header {
   padding: calc(0.9rem + var(--safe-top)) 0.85rem 0.6rem;
   background: var(--panel-bg);

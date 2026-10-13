@@ -34,33 +34,23 @@ if (SUPABASE_PROJECT_URL && !SUPABASE_PROJECT_URL.includes("your-project")) {
   }
 }
 
-// --- PWA SERVICE WORKER & INSTALL ---
-let deferredPrompt = null;
-const navInstallPwa = document.getElementById('navInstallPwa');
-
+// --- PWA SERVICE WORKER ---
+// (The Install App drawer item is set up further down, in setupInstallDrawerItem.)
 if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+  const hadController = Boolean(navigator.serviceWorker.controller);
+  let reloadedForUpdate = false;
+
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('sw.js').catch((err) => console.warn('SW registration failed:', err));
+    navigator.serviceWorker.register('sw.js')
+      .then((reg) => { reg.update().catch(() => {}); }) // look for a new version on every launch
+      .catch((err) => console.warn('SW registration failed:', err));
   });
-}
 
-window.addEventListener('beforeinstallprompt', (e) => {
-  e.preventDefault();
-  deferredPrompt = e;
-  if (navInstallPwa) navInstallPwa.style.display = 'flex';
-});
-
-if (navInstallPwa) {
-  navInstallPwa.addEventListener('click', async () => {
-    closeDrawer();
-    if (deferredPrompt) {
-      deferredPrompt.prompt();
-      const { outcome } = await deferredPrompt.userChoice;
-      if (outcome === 'accepted') navInstallPwa.style.display = 'none';
-      deferredPrompt = null;
-    } else {
-      alert("To install Marginalia, tap Share in Safari or the three dots in Chrome, then select 'Add to Home Screen'.");
-    }
+  // When a new version takes over, reload once so the phone stops showing stale files
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloadedForUpdate) return;
+    reloadedForUpdate = true;
+    location.reload();
   });
 }
 
@@ -707,14 +697,21 @@ function showInstallHelp(title, steps) {
 }
 
 (function setupInstallDrawerItem() {
-  const body = sideDrawer && sideDrawer.querySelector('.drawer-body');
-  if (!body || isStandaloneApp()) return; // already running as an installed app: nothing to offer
+  // The page already has an (initially hidden) #navInstallPwa drawer item: use it, don't add a second one
+  const existing = document.getElementById('navInstallPwa');
+  if (isStandaloneApp()) { if (existing) existing.style.display = 'none'; return; } // already installed
 
-  const item = document.createElement('div');
-  item.className = 'drawer-nav-item';
-  item.id = 'btnDrawerInstall';
-  item.innerHTML = '<span aria-hidden="true">📲</span><span>Install App</span>';
-  body.appendChild(item);
+  let item = existing;
+  if (!item) {
+    const body = sideDrawer && sideDrawer.querySelector('.drawer-body');
+    if (!body) return;
+    item = document.createElement('div');
+    item.className = 'drawer-nav-item';
+    item.id = 'navInstallPwa';
+    item.innerHTML = '<span aria-hidden="true">📲</span><span>Install App</span>';
+    body.appendChild(item);
+  }
+  item.style.display = 'flex'; // always visible (iPhone never fires the install event)
 
   item.addEventListener('click', async () => {
     closeDrawer();
