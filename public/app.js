@@ -287,6 +287,18 @@ async function getBookmarksFromDB() {
   });
 }
 
+async function clearBookmarksInDB() {
+  if (!dbInstance) await initIndexedDB();
+  if (!dbInstance) return false;
+  return new Promise((resolve) => {
+    const tx = dbInstance.transaction(["bookmarks"], "readwrite");
+    tx.objectStore("bookmarks").clear();
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+    tx.onabort = () => resolve(false);
+  });
+}
+
 // --- STATE MANAGEMENT ---
 let currentDocName = "Marginalia Quickstart";
 let bookPages = [
@@ -849,6 +861,43 @@ navBookmarks.addEventListener('click', async () => {
   bookmarksModal.style.display = 'flex';
 });
 
+// --- OPTIONS: CLEAR BOOKMARKS ---
+async function refreshClearBookmarksInfo() {
+  const info = document.getElementById('clearBookmarksInfo');
+  const btn = document.getElementById('clearBookmarksBtn');
+  if (!info || !btn) return;
+  const count = (await getBookmarksFromDB()).length;
+  info.textContent = count === 0
+    ? 'You have no saved bookmarks.'
+    : `You have ${count} saved bookmark${count === 1 ? '' : 's'}.`;
+  btn.disabled = count === 0;
+  btn.style.opacity = count === 0 ? '0.45' : '1';
+}
+
+(function setupClearBookmarksSetting() {
+  if (!saveOptionsBtn || document.getElementById('clearBookmarksBtn')) return;
+
+  const section = document.createElement('div');
+  section.style.cssText = 'margin:1rem 0; padding-top:0.9rem; border-top:1px solid var(--border);';
+  section.innerHTML = `
+    <div style="font-weight:600; font-size:0.9rem; margin-bottom:0.25rem;">Bookmarks</div>
+    <div id="clearBookmarksInfo" style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.6rem;"></div>
+    <button id="clearBookmarksBtn" type="button"
+      style="width:100%; padding:0.65rem; border-radius:10px; border:1px solid #ef4444; background:transparent; color:#ef4444; font-weight:600; font-size:0.9rem; cursor:pointer;">
+      🗑 Clear all bookmarks
+    </button>`;
+  saveOptionsBtn.insertAdjacentElement('beforebegin', section);
+
+  document.getElementById('clearBookmarksBtn').addEventListener('click', async () => {
+    const count = (await getBookmarksFromDB()).length;
+    if (count === 0) { showToast('No bookmarks to clear.'); return; }
+    if (!confirm(`Delete all ${count} bookmark${count === 1 ? '' : 's'}? This can't be undone.`)) return;
+    const done = await clearBookmarksInDB();
+    showToast(done ? 'All bookmarks cleared.' : 'Could not clear bookmarks. Please try again.');
+    refreshClearBookmarksInfo();
+  });
+})();
+
 // --- CHAPTER & PAGE JUMP MODAL HANDLERS ---
 function getCurrentChapter() {
   if (!bookChapters || bookChapters.length === 0) return { title: "Chapter 1", pageIndex: 0 };
@@ -936,6 +985,7 @@ function openOptionsModal() {
   karaokeCalibrationSlider.value = userManualCalibration;
   updateSyncCalibrationLabel(userManualCalibration);
   optionsModal.style.display = 'flex';
+  refreshClearBookmarksInfo();
 }
 
 btnDrawerNightToggle.addEventListener('click', () => {
