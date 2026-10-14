@@ -57,6 +57,9 @@ async function synthOpenAI({ text, voiceId, speed, customKey }) {
     throw new HttpError(400, `Text is too long for OpenAI voices (${text.length} characters, limit ${OPENAI_MAX_CHARS}).`);
   }
 
+  // Which OpenAI model to use. Set OPENAI_TTS_MODEL in Vercel to switch without editing code.
+  const model = (process.env.OPENAI_TTS_MODEL || 'tts-1').trim();
+
   // A voice id left over from another engine (e.g. an ElevenLabs id) would make OpenAI reject the call
   const voice = /^[a-z]{3,12}$/.test(voiceId || '') ? voiceId : 'alloy';
 
@@ -67,10 +70,11 @@ async function synthOpenAI({ text, voiceId, speed, customKey }) {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      model: 'tts-1', // fast, low-latency TTS model
+      model,
       input: text,
       voice,
-      speed,
+      // only the tts-1 family takes a speed setting (the app applies speed on the phone anyway)
+      ...(model.startsWith('tts-1') ? { speed } : {}),
       response_format: 'mp3'
     })
   });
