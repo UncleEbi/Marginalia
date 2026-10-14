@@ -38,15 +38,6 @@ function clampSpeed(value) {
   return Math.max(0.25, Math.min(4.0, n));
 }
 
-function escapeXml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
-
 function shorten(str, max = 500) {
   const s = String(str || '');
   return s.length > max ? s.slice(0, max) + '…' : s;
@@ -66,7 +57,7 @@ async function synthOpenAI({ text, voiceId, speed, customKey }) {
     throw new HttpError(400, `Text is too long for OpenAI voices (${text.length} characters, limit ${OPENAI_MAX_CHARS}).`);
   }
 
-  // A voice id left over from another engine (ElevenLabs/Azure ids) would make OpenAI reject the call
+  // A voice id left over from another engine (e.g. an ElevenLabs id) would make OpenAI reject the call
   const voice = /^[a-z]{3,12}$/.test(voiceId || '') ? voiceId : 'alloy';
 
   const response = await fetch('https://api.openai.com/v1/audio/speech', {
@@ -92,8 +83,9 @@ async function synthOpenAI({ text, voiceId, speed, customKey }) {
 }
 
 async function synthElevenLabs({ text, voiceId, customKey }) {
-  const apiKey = customKey || process.env.ELEVENLABS_API_KEY;
-  if (!apiKey) throw new HttpError(500, 'ElevenLabs API key not configured.');
+  // Bring-your-own-key only: hosted ElevenLabs costs several times more than OpenAI per character
+  const apiKey = customKey;
+  if (!apiKey) throw new HttpError(400, 'ElevenLabs voices need your own ElevenLabs API key. Add it in Options.');
 
   const vId = voiceId || '21m00Tcm4TlvDq8ikWAM'; // Rachel default
   const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(vId)}`, {
@@ -136,35 +128,6 @@ async function synthGoogle({ text, voiceId, speed }) {
   }
   const data = await response.json();
   return data.audioContent;
-}
-
-async function synthAzure({ text, voiceId, speed }) {
-  const key = process.env.AZURE_SPEECH_KEY;
-  const region = process.env.AZURE_SPEECH_REGION || 'eastus';
-  if (!key) throw new HttpError(500, 'Azure Speech API key not configured.');
-
-  // Book text often contains & < > which would break the SSML, so it must be escaped
-  const ssml =
-    `<speak version='1.0' xml:lang='en-US'>` +
-    `<voice name='${escapeXml(voiceId || 'en-US-JennyNeural')}'>` +
-    `<prosody rate='${speed}'>${escapeXml(text)}</prosody>` +
-    `</voice></speak>`;
-
-  const response = await fetch(`https://${region}.tts.speech.microsoft.com/cognitiveservices/v1`, {
-    method: 'POST',
-    headers: {
-      'Ocp-Apim-Subscription-Key': key,
-      'Content-Type': 'application/ssml+xml',
-      'X-Microsoft-OutputFormat': 'audio-16khz-128kbitrate-mono-mp3'
-    },
-    body: ssml
-  });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new HttpError(502, `Azure Speech error (${response.status}): ${shorten(err)}`);
-  }
-  return Buffer.from(await response.arrayBuffer()).toString('base64');
 }
 
 // Deducts characters without losing updates. The app now preloads the next sentences, so several
@@ -216,6 +179,11 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'No text provided for narration.' });
   }
 
+  // ElevenLabs is bring-your-own-key only: say so before any sign-in or quota checks
+  if (engine === 'elevenlabs' && !customElevenKey) {
+    return res.status(400).json({ error: 'ElevenLabs voices need your own ElevenLabs API key. Add it in Options.' });
+  }
+
   const charCount = text.length;
   const isByok = Boolean((engine === 'openai' && customOpenAiKey) || (engine === 'elevenlabs' && customElevenKey));
   let user = null;
@@ -258,8 +226,6 @@ export default async function handler(req, res) {
       audioBase64 = await synthElevenLabs({ text, voiceId, customKey: customElevenKey });
     } else if (engine === 'google') {
       audioBase64 = await synthGoogle({ text, voiceId, speed });
-    } else if (engine === 'azure') {
-      audioBase64 = await synthAzure({ text, voiceId, speed });
     } else {
       return res.status(400).json({ error: `Unsupported engine: ${engine}` });
     }

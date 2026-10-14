@@ -287,12 +287,12 @@ async function getBookmarksFromDB() {
   });
 }
 
-async function clearBookmarksInDB() {
+async function deleteBookmarkFromDB(id) {
   if (!dbInstance) await initIndexedDB();
   if (!dbInstance) return false;
   return new Promise((resolve) => {
     const tx = dbInstance.transaction(["bookmarks"], "readwrite");
-    tx.objectStore("bookmarks").clear();
+    tx.objectStore("bookmarks").delete(id);
     tx.oncomplete = () => resolve(true);
     tx.onerror = () => resolve(false);
     tx.onabort = () => resolve(false);
@@ -826,8 +826,7 @@ addBookmarkBtn.addEventListener('click', async () => {
   alert(`Bookmark saved: Page ${currentPage + 1}`);
 });
 
-navBookmarks.addEventListener('click', async () => {
-  closeDrawer();
+async function showBookmarksModal() {
   const marks = await getBookmarksFromDB();
   bookmarksModalList.innerHTML = '';
 
@@ -842,8 +841,22 @@ navBookmarks.addEventListener('click', async () => {
           <span class="shelf-card-title">${escapeHtml(m.bookTitle)} — Page ${m.page + 1}</span>
           <span class="shelf-card-sub" style="font-style:italic;">"${escapeHtml((m.snippet || '').slice(0, 42))}..."</span>
         </div>
-        <span style="font-size:0.8rem; color:var(--accent); font-weight:600;">Jump →</span>
+        <div class="shelf-action-group">
+          <button class="shelf-delete-btn" title="Delete bookmark">🗑️</button>
+          <span style="font-size:0.8rem; color:var(--accent); font-weight:600; padding:0.2rem 0.4rem;">Jump →</span>
+        </div>
       `;
+
+      const delBtn = card.querySelector('.shelf-delete-btn');
+      delBtn.addEventListener('click', async (e) => {
+        e.stopPropagation(); // don't also "jump" to the bookmark
+        if (confirm(`Delete this bookmark?\n${m.bookTitle} — Page ${m.page + 1}`)) {
+          const done = await deleteBookmarkFromDB(m.id);
+          if (!done) showToast('Could not delete the bookmark. Please try again.');
+          showBookmarksModal(); // refresh the list
+        }
+      });
+
       card.addEventListener('click', () => {
         if (currentDocName === m.bookTitle) {
           stopAudio();
@@ -859,44 +872,12 @@ navBookmarks.addEventListener('click', async () => {
     });
   }
   bookmarksModal.style.display = 'flex';
-});
-
-// --- OPTIONS: CLEAR BOOKMARKS ---
-async function refreshClearBookmarksInfo() {
-  const info = document.getElementById('clearBookmarksInfo');
-  const btn = document.getElementById('clearBookmarksBtn');
-  if (!info || !btn) return;
-  const count = (await getBookmarksFromDB()).length;
-  info.textContent = count === 0
-    ? 'You have no saved bookmarks.'
-    : `You have ${count} saved bookmark${count === 1 ? '' : 's'}.`;
-  btn.disabled = count === 0;
-  btn.style.opacity = count === 0 ? '0.45' : '1';
 }
 
-(function setupClearBookmarksSetting() {
-  if (!saveOptionsBtn || document.getElementById('clearBookmarksBtn')) return;
-
-  const section = document.createElement('div');
-  section.style.cssText = 'margin:1rem 0; padding-top:0.9rem; border-top:1px solid var(--border);';
-  section.innerHTML = `
-    <div style="font-weight:600; font-size:0.9rem; margin-bottom:0.25rem;">Bookmarks</div>
-    <div id="clearBookmarksInfo" style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.6rem;"></div>
-    <button id="clearBookmarksBtn" type="button"
-      style="width:100%; padding:0.65rem; border-radius:10px; border:1px solid #ef4444; background:transparent; color:#ef4444; font-weight:600; font-size:0.9rem; cursor:pointer;">
-      🗑 Clear all bookmarks
-    </button>`;
-  saveOptionsBtn.insertAdjacentElement('beforebegin', section);
-
-  document.getElementById('clearBookmarksBtn').addEventListener('click', async () => {
-    const count = (await getBookmarksFromDB()).length;
-    if (count === 0) { showToast('No bookmarks to clear.'); return; }
-    if (!confirm(`Delete all ${count} bookmark${count === 1 ? '' : 's'}? This can't be undone.`)) return;
-    const done = await clearBookmarksInDB();
-    showToast(done ? 'All bookmarks cleared.' : 'Could not clear bookmarks. Please try again.');
-    refreshClearBookmarksInfo();
-  });
-})();
+navBookmarks.addEventListener('click', () => {
+  closeDrawer();
+  showBookmarksModal();
+});
 
 // --- CHAPTER & PAGE JUMP MODAL HANDLERS ---
 function getCurrentChapter() {
@@ -985,7 +966,6 @@ function openOptionsModal() {
   karaokeCalibrationSlider.value = userManualCalibration;
   updateSyncCalibrationLabel(userManualCalibration);
   optionsModal.style.display = 'flex';
-  refreshClearBookmarksInfo();
 }
 
 btnDrawerNightToggle.addEventListener('click', () => {
@@ -1903,7 +1883,7 @@ async function getNeuralAudioSrc(text) {
 
   // capture settings now; they can change while we await
   // Always ask the server for normal-speed audio: speed is applied on the phone via playbackRate.
-  // (Sending the speed too made OpenAI/Azure/Google voices play at speed x speed.)
+  // (Sending the speed too made the server-side voices play at speed x speed.)
   const engine = activeEngine, voiceId = voicePicker.value, speed = 1;
 
   const job = (async () => {
@@ -2136,13 +2116,11 @@ const voicePresets = {
     { id: 'onyx', name: 'Onyx (Deep Authoritative)' },
     { id: 'nova', name: 'Nova (Energetic)' },
     { id: 'shimmer', name: 'Shimmer (Clear)' }
-  ],
-  azure: [
-    { id: 'en-US-JennyNeural', name: 'Jenny (Neural US)' },
-    { id: 'en-US-GuyNeural', name: 'Guy (Neural US)' },
-    { id: 'en-GB-SoniaNeural', name: 'Sonia (Neural UK)' }
   ]
 };
+
+// Azure voices were removed: take its tab out of the page if the HTML still has one
+document.querySelectorAll('.engine-tab[data-engine="azure"]').forEach(t => t.remove());
 
 function populateVoices() {
   const prevChoice = voicePicker.value;
