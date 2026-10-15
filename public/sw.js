@@ -1,8 +1,9 @@
 // Marginalia service worker: offline app shell + cached parser libraries.
-const VERSION = 'marginalia-v1';
+const VERSION = 'marginalia-v2';
 const SHELL = [
   './',
   './index.html',
+  './pdf-extract.js',
   './manifest.webmanifest',
   './icons/apple-touch-icon.png',
   './icons/icon-192.png',

@@ -199,21 +199,22 @@ async function deleteBookFromShelf(bookId) {
 // ==============================
 // PAYSTACK CHECKOUT HELPER
 // ==============================
-async function startPaystackCheckout(userEmail, userId) {
+async function startPaystackCheckout() {
   try {
     const token = await getFreshAuthToken();
+    if (!token) {
+      alert('Please sign in first so your Pro upgrade can be linked to your account.');
+      return;
+    }
+    // No email/amount/plan in the body: the server derives identity from the session token and
+    // owns the price, so the UI can never disagree with what Paystack actually charges.
     const res = await fetch('/api/paystack-init', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        'Authorization': `Bearer ${token}`
       },
-      body: JSON.stringify({
-        email: userEmail,
-        amount: 5000, // 5,000 NGN
-        userId: userId,
-        plan: 'pro_monthly'
-      })
+      body: JSON.stringify({})
     });
 
     const data = await res.json();
@@ -239,15 +240,37 @@ async function initiateProUpgrade() {
       authModal.style.display = 'flex';
       return;
     }
-    await startPaystackCheckout(session.user.email, session.user.id);
+    await startPaystackCheckout();
   } catch (err) {
     console.error('Upgrade initiation error:', err);
     alert('Failed to launch checkout.');
   }
 }
 
+// Pro is active while the account is tier 'pro' AND the expiry is in the future
+// (mirrors isProActive in lib/pro-plan.js so the UI agrees with the server)
+function isProActiveClient(profile) {
+  if (!profile || profile.tier !== 'pro') return false;
+  const exp = profile.pro_expires_at ? Date.parse(profile.pro_expires_at) : NaN;
+  return Number.isFinite(exp) && exp > Date.now();
+}
+
+// Fills the upgrade buttons with the real server-side price so the label can never disagree with
+// what Paystack charges. On failure the generic label stays (checkout still shows the exact price).
+async function refreshProPriceLabels() {
+  try {
+    const res = await fetch('/api/paystack-init');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data || !data.amount_display) return;
+    if (profileUpgradeBtn) profileUpgradeBtn.textContent = `🌟 Upgrade to Pro (${data.amount_display}/mo)`;
+    if (upgradeProBtn) upgradeProBtn.textContent = `Upgrade to Pro (${data.amount_display}/mo)`;
+  } catch (e) { /* offline or non-Vercel host: keep the generic label */ }
+}
+
 // Button listener (profileUpgradeBtn is handled further down: it opens the paywall)
-document.getElementById('upgradeProBtn')?.addEventListener('click', initiateProUpgrade);
+const upgradeProBtn = document.getElementById('upgradeProBtn');
+upgradeProBtn?.addEventListener('click', initiateProUpgrade);
 
 async function updateBookProgressInDB(title, page, sentenceIdx) {
   if (!dbInstance) return;
@@ -796,6 +819,7 @@ async function showShelfModal(mode = "shelf") {
         stopAudio();
         bookPages = b.pages;
         bookChapters = b.chapters || [{ title: "Beginning", pageIndex: 0 }];
+        if (sleepTimerMode === 'chapter') clearSleepTimer(); // saved chapter boundary belongs to the old document
         currentDocName = b.title;
         currentPage = b.currentPage || 0;
         currentSentenceIdx = b.currentSentenceIdx || 0;
@@ -1078,12 +1102,18 @@ async function openProfileModal() {
 
   const { data: profile } = await supabaseClient
     .from('profiles')
-    .select('neural_chars_remaining, summary_credits_remaining, tier')
+    .select('neural_chars_remaining, summary_credits_remaining, tier, pro_expires_at')
     .eq('id', user.id)
     .maybeSingle();
 
   const tier = profile?.tier || 'free';
-  profileModalTier.textContent = tier === 'pro' ? '🌟 Pro Subscriber' : '⚡ Free Trial Account';
+  if (tier === 'pro') {
+    profileModalTier.textContent = isProActiveClient(profile)
+      ? `🌟 Pro · until ${new Date(profile.pro_expires_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`
+      : '⚡ Free Trial Account (Pro expired)';
+  } else {
+    profileModalTier.textContent = '⚡ Free Trial Account';
+  }
 
   const chars = profile?.neural_chars_remaining ?? 5000;
   profileNeuralCount.textContent = `${chars.toLocaleString()} / 5,000 Chars`;
@@ -1135,6 +1165,7 @@ profileOpenOptionsBtn.addEventListener('click', () => {
 });
 
 profileUpgradeBtn.addEventListener('click', () => {
+  refreshProPriceLabels(); // keep the price on the paywall in sync with the server
   closeModalById('profileModal');
   paywallModal.style.display = 'flex';
 });
@@ -1415,7 +1446,7 @@ summarizeBtn.addEventListener('click', async () => {
         if (session) {
           const { data: profile } = await supabaseClient.from('profiles').select('summary_credits_remaining, tier').eq('id', session.user.id).maybeSingle();
           if (profile) {
-            if (profile.tier === 'pro') notice = "Plan: Pro (unlimited AI summaries)";
+            if (isProActiveClient(profile)) notice = "Plan: Pro (unlimited AI summaries)";
             else {
               const trials = profile.summary_credits_remaining ?? 3;
               notice = trials > 0 ? `Free trial: ${trials} AI summaries left` : "AI trial used up: offline summary active";
@@ -1729,6 +1760,14 @@ function highlightActiveWord(wIdx) {
 
 // --- PLAYBACK ENGINE ---
 async function playCurrentSentence() {
+  // Sleep timer: stop exactly at a sentence boundary (stays accurate even when a
+  // background tab throttles the countdown interval)
+  if (sleepTimerMode !== 'off' &&
+      (sleepTimerExpired() || (sleepTimerMode === 'chapter' && currentPage >= sleepTimerChapterEnd))) {
+    fireSleepTimerEnd();
+    return;
+  }
+
   const pageItems = bookPages[currentPage];
   if (!pageItems || pageItems.length === 0) return;
 
@@ -2142,6 +2181,257 @@ speedCycleBtn.addEventListener('click', () => {
   }
 });
 
+// --- SLEEP TIMER ---
+// Stops narration after a set number of minutes or at the end of the current chapter.
+// Minute timers are also checked at every sentence boundary, because background tabs can
+// throttle timers to once a minute and a sleep timer must still fire on time.
+const sleepTimerBtn = document.getElementById('sleepTimerBtn');
+const sleepTimerModal = document.getElementById('sleepTimerModal');
+const sleepTimerStatus = document.getElementById('sleepTimerStatus');
+
+let sleepTimerMode = 'off';            // 'off' | 'minutes' | 'chapter'
+let sleepTimerEndsAt = 0;              // epoch ms when a minute timer expires
+let sleepTimerMinutesActive = null;    // chosen minutes, for the modal's active state
+let sleepTimerChapterEnd = Infinity;   // pageIndex at which a chapter timer stops playback
+let sleepTimerIntervalId = null;
+
+function formatClock(ms) {
+  const totalSec = Math.max(0, Math.ceil(ms / 1000));
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function updateSleepTimerUI() {
+  if (sleepTimerMode === 'minutes') {
+    const left = formatClock(sleepTimerEndsAt - Date.now());
+    sleepTimerBtn.textContent = `🌙 ${left}`;
+    sleepTimerBtn.classList.add('active');
+    sleepTimerStatus.textContent = `Timer running — playback stops in ${left}.`;
+  } else if (sleepTimerMode === 'chapter') {
+    sleepTimerBtn.textContent = '🌙 Ch.';
+    sleepTimerBtn.classList.add('active');
+    sleepTimerStatus.textContent = 'Timer running — playback stops at the end of the current chapter.';
+  } else {
+    sleepTimerBtn.textContent = '🌙';
+    sleepTimerBtn.classList.remove('active');
+    sleepTimerStatus.textContent = 'No sleep timer set.';
+  }
+
+  document.querySelectorAll('.sleep-option').forEach(btn => {
+    const active =
+      (sleepTimerMode === 'minutes' && btn.dataset.minutes && Number(btn.dataset.minutes) === sleepTimerMinutesActive) ||
+      (sleepTimerMode === 'chapter' && btn.dataset.mode === 'chapter') ||
+      (sleepTimerMode === 'off' && btn.dataset.mode === 'off');
+    btn.classList.toggle('active', Boolean(active));
+  });
+}
+
+function clearSleepTimer() {
+  if (sleepTimerIntervalId) { clearInterval(sleepTimerIntervalId); sleepTimerIntervalId = null; }
+  sleepTimerMode = 'off';
+  sleepTimerEndsAt = 0;
+  sleepTimerMinutesActive = null;
+  sleepTimerChapterEnd = Infinity;
+  updateSleepTimerUI();
+}
+
+function sleepTimerExpired() {
+  return sleepTimerMode === 'minutes' && Date.now() >= sleepTimerEndsAt;
+}
+
+function fireSleepTimerEnd() {
+  const wasChapter = sleepTimerMode === 'chapter';
+  clearSleepTimer();
+  stopAudio();
+  showToast(wasChapter
+    ? '🌙 End of chapter reached — playback stopped.'
+    : '🌙 Sleep timer finished — playback stopped.');
+}
+
+function startMinuteSleepTimer(minutes) {
+  clearSleepTimer();
+  sleepTimerMode = 'minutes';
+  sleepTimerMinutesActive = minutes;
+  sleepTimerEndsAt = Date.now() + minutes * 60 * 1000;
+  sleepTimerIntervalId = setInterval(() => {
+    if (sleepTimerExpired()) fireSleepTimerEnd();   // clears its own interval
+    else updateSleepTimerUI();
+  }, 1000);
+  updateSleepTimerUI();
+  showToast(`🌙 Sleep timer set for ${minutes} minutes.`);
+}
+
+function startChapterSleepTimer() {
+  clearSleepTimer();
+  sleepTimerMode = 'chapter';
+  // The chapter ends where the next chapter begins (or at the end of the book)
+  const ch = getCurrentChapter();
+  const idx = bookChapters.indexOf(ch);
+  sleepTimerChapterEnd = (idx >= 0 && idx < bookChapters.length - 1)
+    ? bookChapters[idx + 1].pageIndex
+    : Infinity;
+  updateSleepTimerUI();
+  showToast('🌙 Sleep timer set: playback stops at the end of this chapter.');
+}
+
+sleepTimerBtn.addEventListener('click', () => {
+  updateSleepTimerUI();
+  sleepTimerModal.style.display = 'flex';
+});
+
+document.querySelectorAll('.sleep-option').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (btn.dataset.mode === 'off') {
+      clearSleepTimer();
+      showToast('Sleep timer cancelled.');
+    } else if (btn.dataset.mode === 'chapter') {
+      startChapterSleepTimer();
+    } else {
+      const minutes = Number(btn.dataset.minutes);
+      if (Number.isFinite(minutes) && minutes > 0) startMinuteSleepTimer(minutes);
+    }
+  });
+});
+
+// --- IN-BOOK SEARCH ---
+const searchModal = document.getElementById('searchModal');
+const openSearchBtn = document.getElementById('openSearchBtn');
+const searchInput = document.getElementById('searchInput');
+const searchStatus = document.getElementById('searchStatus');
+const searchResultsList = document.getElementById('searchResultsList');
+
+const SEARCH_MAX_RESULTS = 100;
+let searchDebounceTimer = null;
+let searchFlashTimer = null;
+
+// Pure function (no DOM access) so it can be tested on its own: case-insensitive matches of
+// `query` across the book's pages. One result per sentence; image blocks are searched by caption.
+function findSearchMatches(pages, query, maxResults = SEARCH_MAX_RESULTS) {
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return [];
+  const matches = [];
+  for (let p = 0; p < pages.length && matches.length < maxResults; p++) {
+    const items = pages[p] || [];
+    for (let s = 0; s < items.length && matches.length < maxResults; s++) {
+      const item = items[s];
+      const text = typeof item === 'string' ? item : (item && item.type === 'image' ? item.caption : '');
+      if (!text) continue;
+      const at = text.toLowerCase().indexOf(q);
+      if (at === -1) continue;
+      const start = Math.max(0, at - 32);
+      const end = Math.min(text.length, at + q.length + 48);
+      matches.push({
+        page: p,
+        sentence: s,
+        before: (start > 0 ? '…' : '') + text.slice(start, at),
+        match: text.slice(at, at + q.length),
+        after: text.slice(at + q.length, end) + (end < text.length ? '…' : '')
+      });
+    }
+  }
+  return matches;
+}
+
+function getChapterTitleForPage(pageIdx) {
+  if (!bookChapters || bookChapters.length === 0) return '';
+  let active = bookChapters[0];
+  for (const ch of bookChapters) {
+    if (pageIdx >= ch.pageIndex) active = ch;
+    else break;
+  }
+  return active.title || '';
+}
+
+function flashSearchHit(sentenceIdx) {
+  const el = document.getElementById(`sent-${sentenceIdx}`);
+  if (!el) return;
+  el.classList.add('search-hit');
+  if (searchFlashTimer) clearTimeout(searchFlashTimer);
+  searchFlashTimer = setTimeout(() => el.classList.remove('search-hit'), 2800);
+}
+
+function jumpToSearchMatch(m) {
+  const items = bookPages[m.page];
+  if (!items) return;
+  stopAudio();
+  currentPage = m.page;
+  currentSentenceIdx = Math.min(m.sentence, Math.max(0, items.length - 1));
+  closeModalById('searchModal');
+  renderPage(currentPage);   // re-centres and highlights the matched sentence
+  flashSearchHit(currentSentenceIdx);
+}
+
+function renderSearchResults(query) {
+  const q = String(query || '').trim();
+  searchResultsList.innerHTML = '';
+
+  if (!q) {
+    searchStatus.textContent = `Type to search "${currentDocName}".`;
+    return;
+  }
+
+  const matches = findSearchMatches(bookPages, q);
+  if (matches.length === 0) {
+    searchStatus.textContent = `No matches for "${q}".`;
+    return;
+  }
+
+  searchStatus.textContent = `${matches.length}${matches.length >= SEARCH_MAX_RESULTS ? '+' : ''} match${matches.length === 1 ? '' : 'es'} — tap to jump.`;
+
+  matches.forEach(m => {
+    const card = document.createElement('div');
+    card.className = 'shelf-card';
+    const chapterTitle = getChapterTitleForPage(m.page);
+    card.innerHTML = `
+      <div class="shelf-card-info">
+        <span class="shelf-card-title">Page ${m.page + 1}${chapterTitle ? ` · ${escapeHtml(chapterTitle)}` : ''}</span>
+        <span class="shelf-card-sub search-result-snippet">${escapeHtml(m.before)}<mark>${escapeHtml(m.match)}</mark>${escapeHtml(m.after)}</span>
+      </div>
+      <div class="shelf-action-group">
+        <span style="font-size:0.8rem; color:var(--accent); font-weight:600;">Jump →</span>
+      </div>
+    `;
+    card.addEventListener('click', () => jumpToSearchMatch(m));
+    searchResultsList.appendChild(card);
+  });
+}
+
+function openSearchModal() {
+  searchModal.style.display = 'flex';
+  searchInput.value = '';
+  renderSearchResults('');
+  setTimeout(() => searchInput.focus(), 60);
+}
+
+openSearchBtn.addEventListener('click', openSearchModal);
+
+searchInput.addEventListener('input', () => {
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(() => renderSearchResults(searchInput.value), 180);
+});
+
+searchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    const first = searchResultsList.querySelector('.shelf-card');
+    if (first) first.click();
+  }
+});
+
+// Esc closes the new modals; "/" opens search (like a desktop reader) when not typing
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (searchModal.style.display === 'flex') closeModalById('searchModal');
+    else if (sleepTimerModal.style.display === 'flex') closeModalById('sleepTimerModal');
+    return;
+  }
+  if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey &&
+      !/^(input|textarea|select)$/i.test(e.target?.tagName || '')) {
+    e.preventDefault();
+    openSearchModal();
+  }
+});
+
 // --- VOICES & ENGINES ---
 const voicePresets = {
   browser: [],
@@ -2544,6 +2834,19 @@ async function parseEpubArchive(zip) {
   return { pages: extractedPages, chapters: chaptersList };
 }
 
+// --- PDF ENGINE (ES module, loaded by index.html) ---
+// pdf.js v4+ is distributed as an ES module, so index.html imports it in a module script and
+// exposes it as window.pdfjsLib. Classic scripts run before that deferred module finishes, so wait
+// for it instead of failing on a slow library load.
+async function getPdfJs() {
+  if (window.pdfjsLib) return window.pdfjsLib;
+  if (window.__pdfjsReady) {
+    const lib = await window.__pdfjsReady;
+    if (lib) return lib;
+  }
+  return null;
+}
+
 // --- SECURE MULTI-FORMAT DOCUMENT DISPATCHER ---
 async function processUploadedDocument(file) {
   const buffer = await file.arrayBuffer();
@@ -2577,25 +2880,24 @@ async function processUploadedDocument(file) {
   }
 
   if (isPdf || lowerName.endsWith('.pdf')) {
-    if (typeof pdfjsLib === 'undefined') throw new Error("PDF engine is still loading. Please try again.");
-    const pdf = await pdfjsLib.getDocument({ data: uint8 }).promise;
+    const lib = await getPdfJs();
+    if (!lib || typeof window.extractPdfTexts !== 'function') {
+      throw new Error("The PDF engine could not be loaded. Check your connection and try again.");
+    }
+
+    const pageTexts = await window.extractPdfTexts(lib, uint8);
     const pages = [];
     const chapters = [];
 
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      const pageStr = content.items.map(it => it.str).join(' ');
-      if (pageStr.trim().length > 0) {
-        const sents = splitIntoSentences(pageStr);
-        if (sents.length > 0) {
-          chapters.push({ title: `PDF Page ${i}`, pageIndex: pages.length });
-          for (let s = 0; s < sents.length; s += 5) {
-            pages.push(sents.slice(s, s + 5));
-          }
-        }
+    pageTexts.forEach(({ pageNumber, text }) => {
+      const sents = splitIntoSentences(text);
+      if (sents.length === 0) return;
+      chapters.push({ title: `PDF Page ${pageNumber}`, pageIndex: pages.length });
+      for (let s = 0; s < sents.length; s += 5) {
+        pages.push(sents.slice(s, s + 5));
       }
-    }
+    });
+
     if (pages.length === 0) throw new Error("No readable digital text found. This PDF may be a flat image scan.");
     return { pages, chapters };
   }
@@ -2665,6 +2967,7 @@ fileInput.addEventListener('change', async (event) => {
     const result = await processUploadedDocument(file);
     bookPages = result.pages;
     bookChapters = result.chapters || [{ title: "Beginning", pageIndex: 0 }];
+    if (sleepTimerMode === 'chapter') clearSleepTimer(); // saved chapter boundary belongs to the old document
 
     currentPage = 0;
     currentSentenceIdx = 0;
@@ -2710,3 +3013,5 @@ initIndexedDB();
 populateVoices();
 renderPage(0);
 updateAuthBadge();
+updateSleepTimerUI();
+refreshProPriceLabels();

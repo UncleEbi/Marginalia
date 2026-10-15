@@ -21,16 +21,40 @@
   <!-- Stylesheet -->
   <link rel="stylesheet" href="style.css" />
 
-  <!-- Client-Side Document Parsers -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <!-- Client-Side Document Parsers (mammoth and JSZip still publish classic UMD builds) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <!-- Supabase Client -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
+  <!-- PDF.js v4+ ships ES modules only (the old pdf.min.js UMD build is gone), so it is imported
+       in the module script below and handed to the classic app.js through window.pdfjsLib /
+       window.extractPdfTexts. This promise covers the load-order gap: module scripts are deferred,
+       so app.js starts before the import finishes. -->
   <script>
-    if (typeof pdfjsLib !== 'undefined') {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    window.__pdfjsReady = new Promise((resolve) => { window.__resolvePdfjs = resolve; });
+  </script>
+  <script type="module">
+    // One pinned version for the API, the worker and the standard font data: pdf.js refuses to
+    // start when the API and worker versions differ ("The API version ... does not match the
+    // Worker version ...").
+    const PDFJS_VERSION = '6.4.299';
+    const PDFJS_BASE = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}`;
+    try {
+      const [pdfjsLib, pdfExtract] = await Promise.all([
+        import(`${PDFJS_BASE}/build/pdf.min.mjs`),
+        import('./pdf-extract.js')
+      ]);
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `${PDFJS_BASE}/build/pdf.worker.min.mjs`;
+      window.pdfjsLib = pdfjsLib;
+      // Standard font data lets pdf.js measure PDFs that use the built-in fonts instead of
+      // embedding them; without it their extracted text can be garbled.
+      window.extractPdfTexts = (lib, data) =>
+        pdfExtract.extractPdfTexts(lib, data, { standardFontDataUrl: `${PDFJS_BASE}/standard_fonts/` });
+      window.__resolvePdfjs(pdfjsLib);
+    } catch (err) {
+      console.warn('PDF engine failed to load:', err);
+      window.__resolvePdfjs(null); // let the app report a clear "could not load" error
     }
   </script>
 </head>
@@ -47,6 +71,8 @@
       <div class="header-actions">
         <label class="btn-header btn-open-doc" for="fileInput">📁 Open</label>
         <input type="file" id="fileInput" accept=".epub,.pdf,.docx,.txt,.md,.html,.htm,*/*" style="display:none;" />
+
+        <button id="openSearchBtn" class="btn-header btn-search" title="Search in document (/)">🔍</button>
 
         <button id="summarizeBtn" class="btn-header btn-summarize">✨ Summary</button>
 
@@ -195,7 +221,10 @@
       <span id="chapterIndicatorText" style="font-size:0.72rem; color:var(--accent); max-width:145px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Chapter 1</span>
     </div>
 
-    <button id="speedCycleBtn" class="speed-pill-btn">1.0x</button>
+    <div class="player-right-group">
+      <button id="sleepTimerBtn" class="speed-pill-btn sleep-timer-btn" title="Sleep timer">🌙</button>
+      <button id="speedCycleBtn" class="speed-pill-btn">1.0x</button>
+    </div>
   </div>
 
   <!-- JUMP & CHAPTER SELECTOR MODAL -->
@@ -276,7 +305,7 @@
           </button>
           
           <button id="profileUpgradeBtn" style="width:100%; padding:0.6rem; border-radius:8px; border:none; background:linear-gradient(135deg, rgba(56,189,248,0.2), rgba(168,85,247,0.2)); color:var(--accent); font-size:0.85rem; font-weight:600; cursor:pointer; text-align:center;">
-            🌟 Upgrade to Pro ($9/mo)
+            🌟 Upgrade to Pro
           </button>
         </div>
       </div>
@@ -309,6 +338,56 @@
       <div id="bookmarksModalList" class="modal-scrollable-list"></div>
       <div style="display:flex; justify-content:flex-end;">
         <button id="closeBookmarksBtn" data-close="bookmarksModal" style="padding:0.4rem 0.8rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border);">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLEEP TIMER MODAL -->
+  <div id="sleepTimerModal" class="modal-overlay">
+    <div class="modal-card">
+      <div class="modal-header-bar">
+        <div class="modal-title">🌙 Sleep Timer</div>
+        <button class="bookmark-ribbon-btn" data-close="sleepTimerModal" style="font-size:1.1rem;">✕</button>
+      </div>
+
+      <p style="font-size:0.82rem; color:var(--text-muted); line-height:1.45;">
+        Playback stops automatically when the timer ends. Timed stops happen at the end of the sentence being read.
+      </p>
+
+      <div id="sleepTimerStatus" style="font-size:0.8rem; font-weight:600; color:var(--accent); padding:0.45rem 0 0.6rem;">No sleep timer set.</div>
+
+      <div class="sleep-timer-options">
+        <button class="sleep-option" data-minutes="5">5 minutes</button>
+        <button class="sleep-option" data-minutes="15">15 minutes</button>
+        <button class="sleep-option" data-minutes="30">30 minutes</button>
+        <button class="sleep-option" data-minutes="45">45 minutes</button>
+        <button class="sleep-option sleep-option-wide" data-minutes="60">1 hour</button>
+        <button class="sleep-option sleep-option-wide" data-mode="chapter">End of current chapter</button>
+        <button class="sleep-option sleep-option-wide" data-mode="off">Off (cancel timer)</button>
+      </div>
+
+      <div style="display:flex; justify-content:flex-end;">
+        <button data-close="sleepTimerModal" style="padding:0.4rem 0.85rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border);">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- IN-BOOK SEARCH MODAL -->
+  <div id="searchModal" class="modal-overlay">
+    <div class="modal-card">
+      <div class="modal-header-bar">
+        <div class="modal-title">🔍 Search in Document</div>
+        <button class="bookmark-ribbon-btn" data-close="searchModal" style="font-size:1.1rem;">✕</button>
+      </div>
+
+      <input type="search" id="searchInput" class="auth-input-field" placeholder="Search this document..." autocomplete="off" autocapitalize="off" spellcheck="false" style="margin-bottom:0.6rem;" />
+
+      <div id="searchStatus" class="search-status">Type to search.</div>
+
+      <div id="searchResultsList" class="modal-scrollable-list"></div>
+
+      <div style="display:flex; justify-content:flex-end;">
+        <button data-close="searchModal" style="padding:0.4rem 0.85rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border);">Close</button>
       </div>
     </div>
   </div>
@@ -403,7 +482,7 @@
         Marginalia is an adaptive read-along reader with client-side document processing, native and neural TTS, and AI summaries.
       </p>
       <div style="font-size:0.8rem; background:var(--bg-main); padding:0.75rem; border-radius:8px; border:1px solid var(--border);">
-        <div style="margin-bottom:0.3rem;"><strong>Version:</strong> 3.2.0 (Modular Edition)</div>
+        <div style="margin-bottom:0.3rem;"><strong>Version:</strong> 3.5.0 (Modular Edition)</div>
         <div><strong>Storage:</strong> IndexedDB Offline Bookshelf</div>
       </div>
       <div style="display:flex; justify-content:flex-end;">
@@ -448,7 +527,7 @@
       </p>
       <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
         <button id="closePaywallBtn" data-close="paywallModal" style="padding:0.4rem 0.8rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border);">Close</button>
-        <button id="upgradeProBtn" style="background:var(--accent); color:#fff; border:none; font-weight:600; padding:0.4rem 0.8rem; border-radius:6px;">Upgrade to Pro ($9/mo)</button>
+        <button id="upgradeProBtn" style="background:var(--accent); color:#fff; border:none; font-weight:600; padding:0.4rem 0.8rem; border-radius:6px;">Upgrade to Pro</button>
       </div>
     </div>
   </div>

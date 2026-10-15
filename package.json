@@ -3,7 +3,13 @@
   "version": "1.0.0",
   "type": "module",
   "private": true,
+  "scripts": {
+    "test": "node --test"
+  },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4"
+  },
+  "devDependencies": {
+    "pdfjs-dist": "6.4.299"
   }
 }

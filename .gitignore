@@ -1,0 +1,7 @@
+# Local installs (package.json is the source of truth; no lockfile is committed)
+node_modules/
+
+# Local dev-server artifacts
+http-server.log
+http-server.pid
+*.log
