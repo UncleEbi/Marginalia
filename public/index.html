@@ -69,12 +69,12 @@
       </div>
 
       <div class="header-actions">
-        <label class="btn-header btn-open-doc" for="fileInput">📁 Open</label>
+        <label class="btn-header btn-open-doc" for="fileInput" title="Open a document" aria-label="Open a document">📁<span class="btn-label"> Open</span></label>
         <input type="file" id="fileInput" accept=".epub,.pdf,.docx,.txt,.md,.html,.htm,*/*" style="display:none;" />
 
         <button id="openSearchBtn" class="btn-header btn-search" title="Search in document (/)">🔍</button>
 
-        <button id="summarizeBtn" class="btn-header btn-summarize">✨ Summary</button>
+        <button id="summarizeBtn" class="btn-header btn-summarize" title="AI summary" aria-label="AI summary">✨<span class="btn-label"> Summary</span></button>
 
         <div id="creditBadge" class="credit-badge" title="Account & Quota Status">
           <span id="creditDisplay">Sign In</span>
@@ -482,7 +482,7 @@
         Marginalia is an adaptive read-along reader with client-side document processing, native and neural TTS, and AI summaries.
       </p>
       <div style="font-size:0.8rem; background:var(--bg-main); padding:0.75rem; border-radius:8px; border:1px solid var(--border);">
-        <div style="margin-bottom:0.3rem;"><strong>Version:</strong> 3.5.0 (Modular Edition)</div>
+        <div style="margin-bottom:0.3rem;"><strong>Version:</strong> 3.6.0 (Modular Edition)</div>
         <div><strong>Storage:</strong> IndexedDB Offline Bookshelf</div>
       </div>
       <div style="display:flex; justify-content:flex-end;">
@@ -522,12 +522,14 @@
   <div id="paywallModal" class="modal-overlay">
     <div class="modal-card">
       <div class="modal-title">🌟 Upgrade to Pro</div>
-      <p style="font-size:0.85rem; color:var(--text-muted);">
-        Your free trial credits have ended. Add your personal key in Options to use cloud features for free, or upgrade to Pro.
+      <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:0.6rem;">
+        Your free trial credits have ended. Add your personal key in Options to use cloud features for free, or pick a plan below.
       </p>
-      <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
+
+      <div id="proPlanList" class="pro-plan-list"></div>
+
+      <div style="display:flex; justify-content:flex-end; margin-top:0.6rem;">
         <button id="closePaywallBtn" data-close="paywallModal" style="padding:0.4rem 0.8rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border);">Close</button>
-        <button id="upgradeProBtn" style="background:var(--accent); color:#fff; border:none; font-weight:600; padding:0.4rem 0.8rem; border-radius:6px;">Upgrade to Pro</button>
       </div>
     </div>
   </div>

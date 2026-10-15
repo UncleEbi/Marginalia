@@ -199,22 +199,22 @@ async function deleteBookFromShelf(bookId) {
 // ==============================
 // PAYSTACK CHECKOUT HELPER
 // ==============================
-async function startPaystackCheckout() {
+async function startPaystackCheckout(planId = null) {
   try {
     const token = await getFreshAuthToken();
     if (!token) {
       alert('Please sign in first so your Pro upgrade can be linked to your account.');
       return;
     }
-    // No email/amount/plan in the body: the server derives identity from the session token and
-    // owns the price, so the UI can never disagree with what Paystack actually charges.
+    // Only a plan id is sent: the server owns every price, so the UI can never disagree with
+    // what Paystack actually charges.
     const res = await fetch('/api/paystack-init', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
       },
-      body: JSON.stringify({})
+      body: JSON.stringify(planId ? { plan: planId } : {})
     });
 
     const data = await res.json();
@@ -230,7 +230,7 @@ async function startPaystackCheckout() {
 }
 
 // Handler triggered by the upgrade buttons (requires a signed-in account so the payment can be linked)
-async function initiateProUpgrade() {
+async function initiateProUpgrade(planId = null) {
   try {
     if (!supabaseClient) { authModal.style.display = 'flex'; return; }
     const { data: { session } } = await supabaseClient.auth.getSession();
@@ -240,7 +240,7 @@ async function initiateProUpgrade() {
       authModal.style.display = 'flex';
       return;
     }
-    await startPaystackCheckout();
+    await startPaystackCheckout(planId);
   } catch (err) {
     console.error('Upgrade initiation error:', err);
     alert('Failed to launch checkout.');
@@ -255,22 +255,70 @@ function isProActiveClient(profile) {
   return Number.isFinite(exp) && exp > Date.now();
 }
 
-// Fills the upgrade buttons with the real server-side price so the label can never disagree with
-// what Paystack charges. On failure the generic label stays (checkout still shows the exact price).
-async function refreshProPriceLabels() {
+// --- PRO PLANS (every price comes from the server; the UI never invents one) ---
+let proPlansCache = null;
+
+async function fetchProPlans() {
+  if (proPlansCache) return proPlansCache;
   try {
     const res = await fetch('/api/paystack-init');
-    if (!res.ok) return;
+    if (!res.ok) return null;
     const data = await res.json();
-    if (!data || !data.amount_display) return;
-    if (profileUpgradeBtn) profileUpgradeBtn.textContent = `🌟 Upgrade to Pro (${data.amount_display}/mo)`;
-    if (upgradeProBtn) upgradeProBtn.textContent = `Upgrade to Pro (${data.amount_display}/mo)`;
-  } catch (e) { /* offline or non-Vercel host: keep the generic label */ }
+    if (!data || !Array.isArray(data.plans) || data.plans.length === 0) return null;
+    proPlansCache = data;
+    return data;
+  } catch (e) {
+    return null; // offline or non-Vercel host: callers fall back to a generic label
+  }
 }
 
-// Button listener (profileUpgradeBtn is handled further down: it opens the paywall)
-const upgradeProBtn = document.getElementById('upgradeProBtn');
-upgradeProBtn?.addEventListener('click', initiateProUpgrade);
+function planById(data, planId) {
+  if (!data || !data.plans) return null;
+  return data.plans.find((p) => p.id === planId)
+    || data.plans.find((p) => p.id === data.default_plan)
+    || data.plans[0];
+}
+
+// Shows the monthly price on the profile button; the paywall lists every plan.
+async function refreshProPriceLabels() {
+  const data = await fetchProPlans();
+  const monthly = planById(data, data && data.default_plan);
+  if (monthly && profileUpgradeBtn) {
+    profileUpgradeBtn.textContent = `🌟 Upgrade to Pro (${monthly.amount_display}/mo)`;
+  }
+}
+
+// Renders the plan choices. Each option starts a checkout for that exact plan id.
+async function openPaywall() {
+  paywallModal.style.display = 'flex';
+  const list = document.getElementById('proPlanList');
+  if (!list) return;
+  const data = await fetchProPlans();
+
+  list.innerHTML = '';
+  if (!data) {
+    // Price list unavailable: keep one plain option so checkout still works
+    const btn = document.createElement('button');
+    btn.className = 'pro-plan-option';
+    btn.innerHTML = '<span class="pro-plan-label">Upgrade to Pro</span><span class="pro-plan-price">Continue →</span>';
+    btn.addEventListener('click', () => initiateProUpgrade(null));
+    list.appendChild(btn);
+    return;
+  }
+
+  data.plans.forEach((plan) => {
+    const btn = document.createElement('button');
+    btn.className = 'pro-plan-option' + (plan.id === data.default_plan ? ' featured' : '');
+    btn.innerHTML = `
+      <span class="pro-plan-label">
+        ${escapeHtml(plan.label)}${plan.note ? ` <em>· ${escapeHtml(plan.note)}</em>` : ''}
+      </span>
+      <span class="pro-plan-price">${escapeHtml(plan.amount_display)}</span>
+    `;
+    btn.addEventListener('click', () => initiateProUpgrade(plan.id));
+    list.appendChild(btn);
+  });
+}
 
 async function updateBookProgressInDB(title, page, sentenceIdx) {
   if (!dbInstance) return;
@@ -1165,9 +1213,8 @@ profileOpenOptionsBtn.addEventListener('click', () => {
 });
 
 profileUpgradeBtn.addEventListener('click', () => {
-  refreshProPriceLabels(); // keep the price on the paywall in sync with the server
   closeModalById('profileModal');
-  paywallModal.style.display = 'flex';
+  openPaywall(); // lists every plan with the server's prices
 });
 
 profileSignOutBtn.addEventListener('click', async () => {
@@ -1215,14 +1262,20 @@ async function getFreshAuthToken() {
   return cachedToken || null;
 }
 
+// The badge is an icon plus a label. Narrow phones hide the label in CSS and keep the icon, so the
+// account control still fits in the header next to Open / Search / Summary.
+function setCreditBadge(icon, label) {
+  creditDisplay.innerHTML =
+    `<span class="user-avatar-mini">${escapeHtml(icon)}</span>` +
+    `<span class="credit-label">${escapeHtml(label)}</span>`;
+}
+
 async function updateAuthBadge(explicitRemaining = null) {
   const hasByok = Boolean(localStorage.getItem('marginalia_byok_openai') || localStorage.getItem('marginalia_byok_eleven'));
-  if (hasByok) {
-    creditDisplay.innerHTML = `<span class="user-avatar-mini">🔑</span> BYOK Active`;
-  }
 
   if (!supabaseClient) {
-    if (!hasByok) creditDisplay.textContent = "⚡ Free Tier";
+    if (hasByok) setCreditBadge('🔑', 'BYOK Active');
+    else setCreditBadge('⚡', 'Free Tier');
     drawerUserTitle.textContent = "Marginalia Library";
     drawerUserSubtitle.textContent = "Tap to sign in";
     return;
@@ -1237,12 +1290,12 @@ async function updateAuthBadge(explicitRemaining = null) {
     drawerUserSubtitle.textContent = "Signed In • Tap for Profile";
 
     if (hasByok) {
-      creditDisplay.innerHTML = `<span class="user-avatar-mini">${initial}</span> BYOK Active`;
+      setCreditBadge(initial, 'BYOK Active');
       return;
     }
 
     if (explicitRemaining !== null) {
-      creditDisplay.innerHTML = `<span class="user-avatar-mini">${initial}</span>${explicitRemaining.toLocaleString()}`;
+      setCreditBadge(initial, String(explicitRemaining.toLocaleString()));
       return;
     }
 
@@ -1253,9 +1306,10 @@ async function updateAuthBadge(explicitRemaining = null) {
       .maybeSingle();
 
     const remaining = profile ? profile.neural_chars_remaining : 5000;
-    creditDisplay.innerHTML = `<span class="user-avatar-mini">${initial}</span>${remaining.toLocaleString()}`;
+    setCreditBadge(initial, String(remaining.toLocaleString()));
   } else {
-    if (!hasByok) creditDisplay.textContent = "Sign In";
+    if (hasByok) setCreditBadge('🔑', 'BYOK Active');
+    else setCreditBadge('👤', 'Sign In');
     drawerUserTitle.textContent = "Marginalia Library";
     drawerUserSubtitle.textContent = "Tap to sign in";
   }

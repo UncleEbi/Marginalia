@@ -1,16 +1,26 @@
 // api/paystack-init.js
 //
-// Pro checkout. The SERVER owns the price and plan: the request body can never choose an amount.
-// (The old version ignored the client's amount anyway — which is how the app ended up charging
-// ₦10,000 while the UI advertised other prices.)
+// Pro checkout. The SERVER owns every price: the request may only name a plan, never an amount.
 //
-//   GET  -> 200 { currency, amount_kobo, amount_display, interval, plan }   no auth, for price labels
-//   POST -> 200 { authorization_url }   headers: Authorization (Supabase session, required)
-//            email and user_id are taken from the verified session token, never from the body.
+//   GET  -> 200 { currency, default_plan, plans: [{ id, label, note, days, amount_kobo, amount_display }] }
+//           No auth: the paywall uses it to show prices.
+//   POST -> 200 { authorization_url, plan, amount_kobo, currency, days }
+//           headers: Authorization (Supabase session, required)
+//           body:    { plan?: string } — an unknown plan name is rejected; omitted uses the default
+//           email and user_id come from the verified session token, never from the body.
 import { createClient } from '@supabase/supabase-js';
-import {
-  PRO_PLAN, PRO_CURRENCY, PRO_AMOUNT_KOBO, PRO_INTERVAL, proPriceDisplay
-} from '../lib/pro-plan.js';
+import { PRO_CURRENCY, PRO_PLANS, DEFAULT_PLAN_ID, getPlan, proPriceDisplay } from '../lib/pro-plan.js';
+
+function planList() {
+  return PRO_PLANS.map((p) => ({
+    id: p.id,
+    label: p.label,
+    note: p.note,
+    days: p.days,
+    amount_kobo: p.amountKobo,
+    amount_display: proPriceDisplay(p.amountKobo)
+  }));
+}
 
 function supabaseConfig() {
   const rawUrl = process.env.SUPABASE_URL || process.env.SUPABASE_PROJECT_URL || '';
@@ -27,14 +37,11 @@ function supabaseConfig() {
 
 export default async function handler(req, res) {
   if (req.method === 'GET') {
-    // Price display for the UI. Works without Paystack configured so the buttons can show a
-    // price even when checkout itself is misconfigured.
+    // Price display for the UI. Works without Paystack configured so the paywall can still be read.
     return res.status(200).json({
       currency: PRO_CURRENCY,
-      amount_kobo: PRO_AMOUNT_KOBO,
-      amount_display: proPriceDisplay(),
-      interval: PRO_INTERVAL,
-      plan: PRO_PLAN
+      default_plan: DEFAULT_PLAN_ID,
+      plans: planList()
     });
   }
 
@@ -47,6 +54,12 @@ export default async function handler(req, res) {
   if (!secretKey) {
     return res.status(500).json({ error: 'PAYSTACK_SECRET_KEY is not configured in Vercel.' });
   }
+
+  const requestedPlan = req.body?.plan;
+  if (requestedPlan != null && !getPlan(requestedPlan)) {
+    return res.status(400).json({ error: `Unknown plan: ${String(requestedPlan).slice(0, 40)}` });
+  }
+  const plan = getPlan(requestedPlan) || getPlan(DEFAULT_PLAN_ID);
 
   const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
   if (!token) {
@@ -75,12 +88,12 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         email: user.email,
-        amount: PRO_AMOUNT_KOBO, // server-owned; from lib/pro-plan.js (env-overridable)
+        amount: plan.amountKobo, // server-owned; from lib/pro-plan.js (env-overridable)
         currency: PRO_CURRENCY,
         ...(req.headers.origin ? { callback_url: `${req.headers.origin}/` } : {}),
         metadata: {
           user_id: user.id,
-          plan: PRO_PLAN
+          plan: plan.id
         }
       })
     });
@@ -92,7 +105,9 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       authorization_url: data.data.authorization_url,
-      amount_kobo: PRO_AMOUNT_KOBO,
+      plan: plan.id,
+      days: plan.days,
+      amount_kobo: plan.amountKobo,
       currency: PRO_CURRENCY
     });
   } catch (err) {

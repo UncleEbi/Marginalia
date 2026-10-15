@@ -13,7 +13,6 @@
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import {
-  PRO_PLAN, PRO_CURRENCY, PRO_AMOUNT_KOBO, PRO_DURATION_DAYS,
   PRO_SUMMARY_CREDITS, PRO_NEURAL_CHARS,
   evaluateChargeEvent, nextProExpiry
 } from '../lib/pro-plan.js';
@@ -37,9 +36,10 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
-// Applies a verified charge: extends Pro (first purchase, renewal, or an identical retry),
-// records the reference so the same payment is never applied twice.
-async function applyProUpgrade(db, { userId, reference, paidAt }) {
+// Applies a verified charge: extends Pro by the purchased plan's duration (first purchase,
+// renewal, or an identical retry), and records the reference so the same payment is never
+// applied twice.
+async function applyProUpgrade(db, { userId, reference, paidAt, durationDays }) {
   for (let attempt = 0; attempt < 5; attempt++) {
     const { data: row, error: readErr } = await db
       .from('profiles')
@@ -59,7 +59,7 @@ async function applyProUpgrade(db, { userId, reference, paidAt }) {
       return { applied: true, alreadyProcessed: true, expiresAt: row.pro_expires_at };
     }
 
-    const newExpiry = nextProExpiry(row.pro_expires_at, paidAt, PRO_DURATION_DAYS);
+    const newExpiry = nextProExpiry(row.pro_expires_at, paidAt, durationDays);
 
     // Compare-and-swap on the fields we read: if another delivery changed them first, retry.
     let q = db
@@ -136,7 +136,7 @@ export default async function handler(req, res) {
     const result = await applyProUpgrade(db, decision);
 
     if (result.applied && !result.alreadyProcessed) {
-      console.log(`Paystack: Pro granted to ${decision.userId} until ${result.expiresAt} (ref ${decision.reference}).`);
+      console.log(`Paystack: ${decision.planId} (${decision.durationDays}d) granted to ${decision.userId} until ${result.expiresAt} (ref ${decision.reference}).`);
     }
     return res.status(200).send(result.alreadyProcessed ? 'Already processed' : 'Webhook processed');
   } catch (err) {
