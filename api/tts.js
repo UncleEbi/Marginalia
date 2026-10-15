@@ -10,6 +10,7 @@
 //   - `voice` as an alias of `voiceId`
 //   - `Accept: audio/mpeg` returns the raw mp3 bytes instead of JSON
 import { createClient } from '@supabase/supabase-js';
+import { isProActive, downgradeExpiredPro, FREE_NEURAL_CHARS } from '../lib/pro-plan.js';
 
 const OPENAI_MAX_CHARS = 4096; // hard limit of the OpenAI speech endpoint
 
@@ -264,11 +265,16 @@ export default async function handler(req, res) {
 
       const { data: profile } = await supabase
         .from('profiles')
-        .select('neural_chars_remaining')
+        .select('neural_chars_remaining, tier, pro_expires_at')
         .eq('id', user.id)
         .single();
 
-      remainingChars = profile?.neural_chars_remaining ?? 5000;
+      remainingChars = profile?.neural_chars_remaining ?? FREE_NEURAL_CHARS;
+      if (profile?.tier === 'pro' && !isProActive(profile)) {
+        // Expired Pro: restore free quotas so a stale top-up cannot outlive the subscription
+        await downgradeExpiredPro(supabase, user.id);
+        remainingChars = FREE_NEURAL_CHARS;
+      }
       if (remainingChars < charCount) {
         return res.status(402).json({
           error: `Insufficient neural character quota (${remainingChars.toLocaleString()} left). Add your API key in Options or upgrade.`,

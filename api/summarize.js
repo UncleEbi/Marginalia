@@ -6,6 +6,7 @@
 //   200 -> { summary, summaries_remaining, unlimited, byok }
 //   401 sign-in needed | 402 free trial used up ({ trialExhausted: true }) | 500/502 server or provider problem
 import { createClient } from '@supabase/supabase-js';
+import { isProActive, downgradeExpiredPro } from '../lib/pro-plan.js';
 
 const FREE_TRIAL_SUMMARIES = 3;
 
@@ -115,11 +116,16 @@ export default async function handler(req, res) {
 
       const { data: profile, error: profileErr } = await db
         .from('profiles')
-        .select('tier')
+        .select('tier, pro_expires_at')
         .eq('id', userId)
         .maybeSingle();
       // A failed read must never be treated as "no profile": writing a fresh row could reset a Pro user to free
-      if (profileErr) throw new HttpError(500, 'Could not read your account. Please try again.');
+      if (profileErr) {
+        const missingColumn = /pro_expires_at/i.test(profileErr.message || '');
+        throw new HttpError(500, 'Could not read your account. Please try again.' + (missingColumn
+          ? ' (profiles is missing pro_expires_at — run the SQL migration in supabase/migrations/ first.)'
+          : ''));
+      }
 
       if (!profile) {
         // First visit: create the row. ignoreDuplicates means an existing row is never overwritten.
@@ -133,7 +139,11 @@ export default async function handler(req, res) {
         if (insertErr) throw new HttpError(500, 'Could not set up your account. Please try again.');
       }
 
-      isPro = profile?.tier === 'pro';
+      isPro = isProActive(profile);
+      if (profile?.tier === 'pro' && !isPro) {
+        // Pro has expired: flip the row back to free and restore the free quotas (best effort)
+        await downgradeExpiredPro(db, userId);
+      }
 
       // 2. Use up one free summary BEFORE generating it (given back below if generation fails)
       if (!isPro) {

@@ -1,25 +1,13 @@
 import { createClient } from '@supabase/supabase-js';
+import { isProActive, downgradeExpiredPro, FREE_SUMMARY_CREDITS } from '../lib/pro-plan.js';
 
+// Supabase settings come from the server's environment ONLY. (This file used to also read them
+// from request headers at module scope — with `req` out of scope — which could never work.)
 const supabase = createClient(
   process.env.SUPABASE_URL || '',
   process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 );
 
-const rawUrl = process.env.SUPABASE_URL || 
-                 process.env.SUPABASE_PROJECT_URL || 
-                 process.env.NEXT_PUBLIC_SUPABASE_URL ||
-                 req.headers['x-supabase-url'] || '';
-
-  // Sanitize to the root origin only
-  let supabaseUrl = '';
-  try {
-    if (rawUrl) {
-      const parsed = new URL(rawUrl.trim());
-      supabaseUrl = parsed.origin; // strips trailing slashes, /auth/v1, /rest/v1, etc.
-    }
-  } catch (e) {
-    supabaseUrl = rawUrl.replace(/\/+$/, '');
-  }
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
@@ -48,12 +36,18 @@ export default async function handler(req, res) {
 
     const { data: profile } = await supabase
       .from('profiles')
-      .select('summary_credits_remaining, tier')
+      .select('summary_credits_remaining, tier, pro_expires_at')
       .eq('id', user.id)
       .single();
 
-    isPro = profile?.tier === 'pro';
-    trialsLeft = profile?.summary_credits_remaining ?? 0;
+    isPro = isProActive(profile);
+    if (profile?.tier === 'pro' && !isPro) {
+      // Expired Pro: back to the free defaults so the old top-up cannot outlive the subscription
+      await downgradeExpiredPro(supabase, user.id);
+      trialsLeft = FREE_SUMMARY_CREDITS;
+    } else {
+      trialsLeft = profile?.summary_credits_remaining ?? 0;
+    }
 
     if (!isPro && trialsLeft <= 0) {
       return res.status(402).json({
