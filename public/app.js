@@ -509,6 +509,222 @@ function updateMediaMetadata() {
         { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' }
       ]
     });
+  } catch (e) { console.warn('Mediaresolve(true);
+    tx.onerror = () => resolve(false);
+    tx.onabort = () => resolve(false);
+  });
+}
+
+// --- STATE MANAGEMENT ---
+let currentDocName = "Marginalia Quickstart";
+let bookPages = [
+  [
+    "Welcome to Marginalia Mobile Reader.",
+    "Tap the Open button above to import any EPUB, PDF, Word, or text file.",
+    "Select any phrase in the book to immediately define, speak, or copy it.",
+    "Lock your phone screen while reading and enjoy uninterrupted background voice narration."
+  ]
+];
+let bookChapters = [
+  { title: "Introduction", pageIndex: 0 }
+];
+
+let originalBookPages = null;
+let originalDocName = null;
+let originalPage = 0;
+
+let currentPage = 0;
+let currentSentenceIdx = 0;
+let isPlaying = false;
+let activeEngine = 'browser';
+let playbackSpeed = 1.0;
+const speedSteps = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0];
+
+let highlightMode = localStorage.getItem('marginalia_highlight_mode') || 'word';
+let learnedCadenceMultiplier = 1.0;
+let userManualCalibration = 1.0;
+let sentenceSpeechStartTime = 0;
+let estimatedSentenceDurationMs = 0;
+let wordAnimFrameId = null;
+
+const browserSpeech = window.speechSynthesis;
+let currentUtterance = null;
+const audioElement = document.getElementById('neuralAudio');
+const audioPreloadCache = new Map();
+
+// Selection elements
+const selectionPopover = document.getElementById('selectionPopover');
+const btnSelectionSpeak = document.getElementById('btnSelectionSpeak');
+const btnSelectionDefine = document.getElementById('btnSelectionDefine');
+const btnSelectionCopy = document.getElementById('btnSelectionCopy');
+let currentSelectedText = "";
+
+// DOM Elements
+const contentPane = document.getElementById('contentPane');
+const mainPlayToggle = document.getElementById('mainPlayToggle');
+const prevPageBtn = document.getElementById('prevPageBtn');
+const nextPageBtn = document.getElementById('nextPageBtn');
+const pageIndicatorText = document.getElementById('pageIndicatorText');
+const chapterIndicatorText = document.getElementById('chapterIndicatorText');
+const openJumpModalBtn = document.getElementById('openJumpModalBtn');
+const speedCycleBtn = document.getElementById('speedCycleBtn');
+const autoFlipCheck = document.getElementById('autoFlipCheck');
+const voicePicker = document.getElementById('voicePicker');
+const fileInput = document.getElementById('fileInput');
+const docTitle = document.getElementById('docTitle');
+const preloadStatus = document.getElementById('preloadStatus');
+const creditBadge = document.getElementById('creditBadge');
+const creditDisplay = document.getElementById('creditDisplay');
+const summarizeBtn = document.getElementById('summarizeBtn');
+const summaryReturnSpan = document.getElementById('summaryReturnSpan');
+const exitSummaryBtn = document.getElementById('exitSummaryBtn');
+const addBookmarkBtn = document.getElementById('addBookmarkBtn');
+
+// Drawer Elements
+const openDrawerBtn = document.getElementById('openDrawerBtn');
+const closeDrawerBtn = document.getElementById('btnDrawerClose');
+const sideDrawer = document.getElementById('sideDrawer');
+const drawerOverlay = document.getElementById('drawerOverlay');
+const navRecentList = document.getElementById('navRecentList');
+const navMyShelf = document.getElementById('navMyShelf');
+const navBookmarks = document.getElementById('navBookmarks');
+const navUploadFile = document.getElementById('navUploadFile');
+const navProfileItem = document.getElementById('navProfileItem');
+const drawerHeaderProfileClick = document.getElementById('drawerHeaderProfileClick');
+const drawerUserTitle = document.getElementById('drawerUserTitle');
+const drawerUserSubtitle = document.getElementById('drawerUserSubtitle');
+const btnDrawerNightToggle = document.getElementById('btnDrawerNightToggle');
+const btnDrawerOptions = document.getElementById('btnDrawerOptions');
+const btnDrawerAbout = document.getElementById('btnDrawerAbout');
+
+// Modals
+const jumpModal = document.getElementById('jumpModal');
+const tabChaptersBtn = document.getElementById('tabChaptersBtn');
+const tabPagesBtn = document.getElementById('tabPagesBtn');
+const chapterListView = document.getElementById('chapterListView');
+const pageJumpView = document.getElementById('pageJumpView');
+const pageJumpSlider = document.getElementById('pageJumpSlider');
+const sliderValueDisplay = document.getElementById('sliderValueDisplay');
+const pageDirectInput = document.getElementById('pageDirectInput');
+const btnExecuteDirectJump = document.getElementById('btnExecuteDirectJump');
+
+const shelfModal = document.getElementById('shelfModal');
+const shelfModalTitle = document.getElementById('shelfModalTitle');
+const shelfModalList = document.getElementById('shelfModalList');
+const bookmarksModal = document.getElementById('bookmarksModal');
+const bookmarksModalList = document.getElementById('bookmarksModalList');
+const optionsModal = document.getElementById('optionsModal');
+const aboutModal = document.getElementById('aboutModal');
+const summaryModal = document.getElementById('summaryModal');
+const paywallModal = document.getElementById('paywallModal');
+const summaryTrialNotice = document.getElementById('summaryTrialNotice');
+const sumChapterBtn = document.getElementById('sumChapterBtn');
+const sumKeyTakeawaysBtn = document.getElementById('sumKeyTakeawaysBtn');
+
+// Profile Elements
+const profileModal = document.getElementById('profileModal');
+const profileModalAvatar = document.getElementById('profileModalAvatar');
+const profileModalEmail = document.getElementById('profileModalEmail');
+const profileModalTier = document.getElementById('profileModalTier');
+const profileNeuralCount = document.getElementById('profileNeuralCount');
+const profileNeuralProgress = document.getElementById('profileNeuralProgress');
+const profileSummaryCount = document.getElementById('profileSummaryCount');
+const profileByokStatus = document.getElementById('profileByokStatus');
+const profileOpenOptionsBtn = document.getElementById('profileOpenOptionsBtn');
+const profileUpgradeBtn = document.getElementById('profileUpgradeBtn');
+const profileSignOutBtn = document.getElementById('profileSignOutBtn');
+
+// Auth Elements
+const authModal = document.getElementById('authModal');
+const authEmail = document.getElementById('authEmail');
+const authPass = document.getElementById('authPass');
+const authSignInBtn = document.getElementById('authSignInBtn');
+const authSignUpBtn = document.getElementById('authSignUpBtn');
+const authStatusAlert = document.getElementById('authStatusAlert');
+
+const fontSelect = document.getElementById('fontSelect');
+const fontSizeSelect = document.getElementById('fontSizeSelect');
+const optionThemeSelect = document.getElementById('optionThemeSelect');
+const highlightModeSelect = document.getElementById('highlightModeSelect');
+const customOpenAiKeyInput = document.getElementById('customOpenAiKeyInput');
+const customElevenKeyInput = document.getElementById('customElevenKeyInput');
+const karaokeCalibrationSlider = document.getElementById('karaokeCalibrationSlider');
+const syncCalibrationDisplay = document.getElementById('syncCalibrationDisplay');
+const karaokeCalibrationContainer = document.getElementById('karaokeCalibrationContainer');
+const saveOptionsBtn = document.getElementById('saveOptionsBtn');
+
+// --- iOS AUDIO UNLOCK ---
+// iOS only allows <audio>.play() from inside a tap. The neural engines fetch audio over the
+// network first, so by the time play() runs the tap has expired. Fix: during the tap, play a
+// silent clip on the SAME element; once unlocked, later play() calls on it are allowed.
+let audioUnlocked = false;
+let silentUnlockUrl = null;
+
+function unlockAudioForIOS() {
+  if (audioUnlocked) return;
+  try {
+    if (!silentUnlockUrl) silentUnlockUrl = makeSilentWavUrl();
+    audioElement.src = silentUnlockUrl;
+    const p = audioElement.play();
+    if (p && typeof p.then === 'function') {
+      p.then(() => {
+        audioUnlocked = true;
+        if (audioElement.src === silentUnlockUrl) audioElement.pause();
+      }).catch(() => {});
+    }
+  } catch (e) {}
+}
+
+// Bumped on every stop/skip so late network responses and stale speech callbacks are ignored
+let speakToken = 0;
+
+function cancelAllSpeech() {
+  speakToken++;
+  currentUtterance = null;
+  audioElement.onended = null;
+  audioElement.ontimeupdate = null;
+  browserSpeech.cancel();
+  try { audioElement.pause(); } catch (e) {}
+  cancelWordAnimation();
+}
+
+function applyChosenVoice(utter) {
+  const voices = browserSpeech.getVoices();
+  if (voices.length > 0 && voicePicker.value && voicePicker.value !== "default") {
+    const v = voices.find(vx => (vx.voiceURI === voicePicker.value) || (`${vx.name}:::${vx.lang}` === voicePicker.value));
+    if (v) { utter.voice = v; utter.lang = v.lang; }
+  }
+}
+
+// --- MEDIA SESSION CONTROLLER (Lock Screen Audio) ---
+var keepAliveAudio = null;
+
+function makeSilentWavUrl() {
+  const sampleRate = 8000, n = sampleRate;
+  const buf = new ArrayBuffer(44 + n);
+  const v = new DataView(buf);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + n, true); w(8, 'WAVE'); w(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate, true);
+  v.setUint16(32, 1, true); v.setUint16(34, 8, true); w(36, 'data'); v.setUint32(40, n, true);
+  new Uint8Array(buf, 44).fill(128);
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+
+function updateMediaMetadata() {
+  if (!('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
+  try {
+    const ch = getCurrentChapter();
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: (ch && ch.title) || currentDocName,
+      artist: currentDocName,
+      album: 'Marginalia',
+      artwork: [
+        { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
+        { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' }
+      ]
+    });
   } catch (e) { console.warn('Media metadata failed:', e); }
 }
 
