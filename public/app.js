@@ -1457,10 +1457,6 @@ async function triggerSummarize(mode) {
       if (token) {
         try {
           const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
-          if (SUPABASE_PROJECT_URL && !SUPABASE_PROJECT_URL.includes("your-project")) {
-            headers['x-supabase-url'] = SUPABASE_PROJECT_URL;
-            headers['x-supabase-key'] = SUPABASE_ANON_KEY;
-          }
           const res = await fetch('/api/summarize', { method: 'POST', headers, body: JSON.stringify({ text, mode }) });
           const data = await res.json().catch(() => null);
           if (data && res.status === 401) {
@@ -1471,10 +1467,23 @@ async function triggerSummarize(mode) {
             return;
           }
           if (data && (res.status === 402 || data.trialExhausted)) {
-            showToast("AI trial balance exhausted. Using offline summary.");
+            profileSummaryCount.textContent = '0 Remaining';
+            showToast("Free AI summaries used up. Using offline summary.");
           } else if (res.ok && data && data.summary) {
             summary = data.summary;
             label = 'AI Summary';
+            // the server tells us exactly how many are left after this one
+            if (data.unlimited) {
+              profileSummaryCount.textContent = 'Unlimited';
+            } else if (typeof data.summaries_remaining === 'number') {
+              profileSummaryCount.textContent = `${data.summaries_remaining} Remaining`;
+              showToast(data.summaries_remaining === 0
+                ? "That was your last free AI summary."
+                : `Free AI summaries left: ${data.summaries_remaining}`);
+            }
+          } else {
+            const why = (data && data.error) ? data.error : `server error ${res.status}`;
+            showToast(`AI summary unavailable (${String(why).slice(0, 80)}). Using offline summary.`);
           }
         } catch (e) {
           console.warn('Backend summary network fallback:', e);
