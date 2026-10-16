@@ -1289,8 +1289,12 @@ fontSelect.addEventListener('change', (e) => {
 });
 
 fontSizeSelect.addEventListener('change', (e) => {
-  document.documentElement.style.setProperty('--reader-font-size', e.target.value);
-  localStorage.setItem('marginalia_font_size', e.target.value);
+  const size = e.target.value;
+  document.documentElement.style.setProperty('--reader-font-size', size);
+  localStorage.setItem('marginalia_font_size', size);
+  document.querySelectorAll('.book-content, .text-content').forEach((el) => {
+    el.style.lineHeight = '1.75';
+  });
 });
 
 optionThemeSelect.addEventListener('change', (e) => {
@@ -3271,6 +3275,9 @@ applyFontFace(savedFont);
 const savedFontSize = localStorage.getItem('marginalia_font_size') || '1.15rem';
 fontSizeSelect.value = savedFontSize;
 document.documentElement.style.setProperty('--reader-font-size', savedFontSize);
+document.querySelectorAll('.book-content, .text-content').forEach((el) => {
+  el.style.lineHeight = '1.75';
+});
 
 const savedHighlight = localStorage.getItem('marginalia_highlight_mode') || 'word';
 highlightMode = savedHighlight;
