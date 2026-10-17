@@ -1,8 +1,6 @@
 :root {
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-reader: "Georgia", "Merriweather", "Charter", serif;
-  --font-book: "Palatino Linotype", "Book Antiqua", Palatino, "Charter", Georgia, serif;
-  --font-readable: Verdana, Geneva, Tahoma, sans-serif;
   --transition: 0.2s ease;
   --safe-bottom: env(safe-area-inset-bottom, 16px);
   --safe-top: env(safe-area-inset-top, 0px); /* notch / Dynamic Island / status bar */
@@ -133,7 +131,6 @@ header {
   align-items: center;
   gap: 0.5rem;
   user-select: none;
-  min-width: 0; /* the brand shrinks first, so the action buttons are never pushed off-screen */
 }
 
 .menu-toggle-btn {
@@ -152,42 +149,12 @@ header {
   font-size: 1.12rem;
   font-weight: 700;
   letter-spacing: -0.3px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .header-actions {
   display: flex;
   align-items: center;
   gap: 0.35rem;
-  flex: 0 0 auto; /* never shrink: the Open / Search / Summary / account controls always stay visible */
-}
-
-/* Narrow phones: tighten the header, shrink the account badge to its icon, and drop button labels
-   (the emoji icon stays, with a title/aria-label), so the app name and every control stay visible
-   instead of a control being pushed off the edge. */
-@media (max-width: 480px) {
-  header { padding-left: 0.6rem; padding-right: 0.6rem; }
-  .brand-title { font-size: 0.95rem; }
-  .header-actions { gap: 0.25rem; }
-  .btn-header { padding: 0.3rem 0.45rem; font-size: 0.72rem; }
-  .credit-badge { font-size: 0.72rem; padding: 0.28rem 0.4rem; gap: 0.25rem; }
-  .credit-badge .credit-label { display: none; }
-  .user-avatar-mini { width: 18px; height: 18px; font-size: 0.62rem; }
-}
-
-/* Open collapses to its folder icon first — the clearest of the icons, and the label that buys the
-   most room (a folder for "open a file" needs no words). */
-@media (max-width: 400px) {
-  .btn-open-doc .btn-label { display: none; }
-}
-
-/* Very narrow phones: Summary collapses to its sparkle too */
-@media (max-width: 340px) {
-  .btn-summarize .btn-label { display: none; }
-  .brand-title { font-size: 0.9rem; }
-  .btn-search { padding: 0.3rem 0.4rem; }
 }
 
 .btn-header {
@@ -402,7 +369,7 @@ main::after {
 .book-content {
   font-family: var(--font-reader);
   font-size: var(--reader-font-size);
-  line-height: 1.75;
+  line-height: 1.9;
   letter-spacing: 0.01rem;
   user-select: text;
 }
@@ -602,144 +569,6 @@ main::after {
   cursor: pointer;
 }
 
-/* PRO PLAN CHOICES (paywall) */
-.pro-plan-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.pro-plan-option {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.6rem;
-  width: 100%;
-  padding: 0.7rem 0.85rem;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--bg-main);
-  color: var(--text-main);
-  font-size: 0.88rem;
-  font-weight: 600;
-  cursor: pointer;
-  text-align: left;
-  transition: border-color var(--transition), background var(--transition);
-}
-
-.pro-plan-option:hover,
-.pro-plan-option:active {
-  border-color: var(--accent);
-  background: rgba(56, 189, 248, 0.08);
-}
-
-.pro-plan-option.featured {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
-}
-
-.pro-plan-label em {
-  font-style: normal;
-  font-weight: 500;
-  font-size: 0.76rem;
-  color: var(--accent);
-}
-
-.pro-plan-price {
-  color: var(--accent);
-  white-space: nowrap;
-}
-
-/* SLEEP TIMER */
-.player-right-group {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-}
-
-.sleep-timer-btn { min-width: 42px; }
-
-.sleep-timer-btn.active {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: rgba(56, 189, 248, 0.12);
-}
-
-.sleep-timer-options {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.5rem;
-  margin: 0.25rem 0 0.5rem;
-}
-
-.sleep-option {
-  padding: 0.7rem 0.85rem;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg-main);
-  color: var(--text-main);
-  font-size: 0.86rem;
-  font-weight: 500;
-  text-align: left;
-  cursor: pointer;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  transition: border-color var(--transition);
-}
-
-.sleep-option-wide { grid-column: 1 / -1; }
-
-.sleep-option:hover, .sleep-option.active {
-  border-color: var(--accent);
-  background: rgba(56, 189, 248, 0.08);
-}
-
-.sleep-option.active::after {
-  content: '✓';
-  color: var(--accent);
-  font-weight: 700;
-}
-
-/* IN-BOOK SEARCH */
-.btn-search {
-  font-size: 0.95rem;
-  padding: 0.35rem 0.5rem;
-}
-
-.search-status {
-  font-size: 0.78rem;
-  color: var(--text-muted);
-  padding-bottom: 0.55rem;
-  flex-shrink: 0;
-}
-
-.search-result-snippet {
-  line-height: 1.5;
-  white-space: normal;
-}
-
-.search-result-snippet mark {
-  background: var(--highlight);
-  color: var(--text-main);
-  border-radius: 3px;
-  padding: 0 2px;
-  font-weight: 700;
-}
-
-.sentence.search-hit, .reader-diagram.search-hit {
-  animation: searchHitPulse 2.8s ease-out;
-}
-
-@keyframes searchHitPulse {
-  0% { box-shadow: 0 0 0 3px var(--accent); }
-  100% { box-shadow: 0 0 0 0 transparent; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .sentence.search-hit, .reader-diagram.search-hit { animation: none; }
-}
-
 /* DRAWER */
 .drawer-overlay {
   position: fixed;
@@ -751,6 +580,11 @@ main::after {
   transition: opacity var(--transition);
 }
 .drawer-overlay.active { opacity: 1; pointer-events: auto; }
+.drawer-overlay {
+  touch-action: none;                    /* dragging on the dim area must not scroll the reader behind it */
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
 
 .side-drawer {
   position: fixed;
@@ -766,6 +600,11 @@ main::after {
   transition: transform var(--transition);
 }
 .side-drawer.open { transform: translateX(310px); }
+.side-drawer {
+  will-change: transform;                /* smoother slide on phones */
+  overscroll-behavior: contain;
+}
+.drawer-body { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 
 .drawer-header {
   height: calc(155px + var(--safe-top));
