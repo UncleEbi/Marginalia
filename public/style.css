@@ -561,12 +561,33 @@ main::after {
 .speed-pill-btn {
   font-size: 0.75rem;
   font-weight: 600;
-  padding: 0.3rem 0.5rem;
+  padding: 0.3rem 0.55rem;
   border-radius: 12px;
   border: 1px solid var(--border);
   background: var(--bg-main);
   color: var(--text-main);
   cursor: pointer;
+}
+
+.player-right-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+
+.sleep-timer-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+#pageIndicatorText {
+  white-space: nowrap;
+}
+
+#chapterIndicatorText {
+  max-width: 130px;
 }
 
 /* DRAWER */
