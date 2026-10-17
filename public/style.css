@@ -763,6 +763,38 @@ main::after {
 
 .modal-title { font-size: 1.15rem; font-weight: 700; }
 
+/* SLEEP TIMER OPTIONS */
+.sleep-timer-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-content: flex-start;
+  padding: 0.25rem 0 0.75rem;
+  flex-shrink: 0;
+}
+
+.sleep-option {
+  background: var(--bg-main);
+  color: var(--text-main);
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.85rem;
+  border-radius: 8px;
+  font-family: var(--font-ui);
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color var(--transition), background-color var(--transition), color var(--transition);
+}
+
+.sleep-option:hover { border-color: var(--accent); }
+
+.sleep-option.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
 .modal-scrollable-list {
   flex: 1;
   overflow-y: auto;
