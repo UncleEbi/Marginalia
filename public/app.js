@@ -731,18 +731,62 @@ btnSelectionCopy.addEventListener('click', (e) => {
 });
 
 // --- DRAWER CONTROLLER ---
-function openDrawer() {
-  sideDrawer.classList.add('open');
-  drawerOverlay.classList.add('active');
+function isDrawerOpen() {
+  return sideDrawer.classList.contains('open');
 }
-function closeDrawer() {
-  sideDrawer.classList.remove('open');
-  drawerOverlay.classList.remove('active');
+
+function setDrawerOpen(open) {
+  if (open) {
+    if ('inert' in sideDrawer) sideDrawer.inert = false;
+    sideDrawer.setAttribute('aria-hidden', 'false');
+    sideDrawer.classList.add('open');
+    drawerOverlay.classList.add('active');
+  } else {
+    sideDrawer.classList.remove('open');
+    drawerOverlay.classList.remove('active');
+    sideDrawer.setAttribute('aria-hidden', 'true');
+    // a closed drawer can't be tapped or focused, even while it slides away
+    if ('inert' in sideDrawer) sideDrawer.inert = true;
+  }
 }
+function openDrawer() { setDrawerOpen(true); }
+function closeDrawer() { setDrawerOpen(false); }
+setDrawerOpen(false); // start closed
 
 openDrawerBtn.addEventListener('click', openDrawer);
 closeDrawerBtn.addEventListener('click', closeDrawer);
-drawerOverlay.addEventListener('click', closeDrawer);
+drawerOverlay.addEventListener('click', closeDrawer); // tap outside the drawer
+
+// Safety net: choosing ANY item in the drawer closes it, so a menu entry can never leave the user behind an
+// open drawer (even one added later or whose own handler fails). Only the theme toggle stays open on purpose.
+sideDrawer.addEventListener('click', (e) => {
+  const item = e.target.closest('.drawer-nav-item, .drawer-quick-btn, .drawer-header');
+  if (!item || item.id === 'btnDrawerNightToggle') return;
+  closeDrawer();
+});
+
+// Swipe left on the drawer or on the dimmed area to close it
+(function setupDrawerSwipe() {
+  let start = null;
+  const begin = (e) => { const t = e.touches[0]; start = { x: t.clientX, y: t.clientY }; };
+  const end = (e) => {
+    if (!start) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - start.x, dy = t.clientY - start.y;
+    start = null;
+    if (dx < -60 && Math.abs(dx) > Math.abs(dy) * 1.5) closeDrawer();
+  };
+  [sideDrawer, drawerOverlay].forEach((el) => {
+    el.addEventListener('touchstart', begin, { passive: true });
+    el.addEventListener('touchend', end, { passive: true });
+    el.addEventListener('touchcancel', () => { start = null; }, { passive: true });
+  });
+})();
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && isDrawerOpen()) closeDrawer();
+});
+window.addEventListener('orientationchange', () => { if (isDrawerOpen()) closeDrawer(); });
 
 // --- INSTALL AS APP (drawer item) ---
 let deferredInstallPrompt = null;
@@ -1139,30 +1183,69 @@ saveOptionsBtn.addEventListener('click', () => {
 });
 
 // --- PROFILE & AUTHENTICATION CONTROLLER ---
-async function openProfileModal() {
-  if (!supabaseClient) {
-    authModal.style.display = 'flex';
-    return;
+
+// The Account window's HTML ships with demo values (U / user@example.com / Free Tier / 5,000 / 5,000).
+// Wipe them so nobody ever sees a pretend account: on page load, on sign-out, and whenever nobody is signed in.
+function resetProfileModalPlaceholders() {
+  profileModalAvatar.textContent = '';
+  profileModalEmail.textContent = '';
+  profileModalTier.textContent = '';
+  profileNeuralCount.textContent = '—';
+  profileNeuralProgress.style.width = '0%';
+  profileSummaryCount.textContent = '—';
+  profileByokStatus.textContent = '—';
+  profileByokStatus.style.color = 'var(--text-muted)';
+}
+resetProfileModalPlaceholders();
+
+// Single place that decides "is someone really signed in?", used by the header button and the Account window
+async function getSignedInUser() {
+  if (!supabaseClient) return null;
+  try {
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    return session && session.user ? session.user : null;
+  } catch (e) {
+    return null;
   }
-  const { data: { session } } = await supabaseClient.auth.getSession();
-  if (!session || !session.user) {
-    authStatusAlert.style.display = 'none';
-    authModal.style.display = 'flex';
+}
+
+function openSignInDialog() {
+  resetProfileModalPlaceholders();
+  closeModalById('profileModal');
+  authStatusAlert.style.display = 'none';
+  authModal.style.display = 'flex';
+}
+
+async function openProfileModal() {
+  const user = await getSignedInUser();
+  if (!user) {
+    openSignInDialog(); // not signed in: show the sign-in dialog, never the Account window
     return;
   }
 
-  const user = session.user;
   const email = user.email || 'Reader';
   const initial = email.charAt(0).toUpperCase();
 
   profileModalAvatar.textContent = initial;
   profileModalEmail.textContent = email;
 
-  const { data: profile } = await supabaseClient
+  const { data: profile, error: profileError } = await supabaseClient
     .from('profiles')
     .select('neural_chars_remaining, summary_credits_remaining, tier, pro_expires_at')
     .eq('id', user.id)
     .maybeSingle();
+
+  // A failed lookup must not be shown as real numbers (it used to fall back to a full 5,000 / 3)
+  if (profileError) {
+    profileModalTier.textContent = "Couldn't load your account details";
+    profileNeuralCount.textContent = '—';
+    profileNeuralProgress.style.width = '0%';
+    profileSummaryCount.textContent = '—';
+    const keys = Boolean(localStorage.getItem('marginalia_byok_openai') || localStorage.getItem('marginalia_byok_eleven'));
+    profileByokStatus.textContent = keys ? 'Active (Keys Configured)' : 'None Added';
+    profileModal.style.display = 'flex';
+    return;
+  }
 
   const tier = profile?.tier || 'free';
   if (tier === 'pro') {
@@ -1194,17 +1277,9 @@ async function openProfileModal() {
 }
 
 creditBadge.addEventListener('click', async () => {
-  if (!supabaseClient) {
-    authModal.style.display = 'flex';
-    return;
-  }
-  const { data: { session } } = await supabaseClient.auth.getSession();
-  if (session && session.user) {
-    openProfileModal();
-  } else {
-    authStatusAlert.style.display = 'none';
-    authModal.style.display = 'flex';
-  }
+  const user = await getSignedInUser();
+  if (user) openProfileModal();
+  else openSignInDialog(); // the header says "Sign In", so it opens the sign-in dialog
 });
 
 navProfileItem.addEventListener('click', () => {
@@ -1234,6 +1309,7 @@ profileSignOutBtn.addEventListener('click', async () => {
     }
     localStorage.removeItem('marginalia_auth_token');
     localStorage.removeItem('marginalia_auth_user');
+    resetProfileModalPlaceholders();
     closeModalById('profileModal');
     updateAuthBadge();
     alert("Signed out successfully.");
@@ -1322,6 +1398,7 @@ async function updateAuthBadge(explicitRemaining = null) {
     else setCreditBadge('👤', 'Sign In');
     drawerUserTitle.textContent = "Marginalia Library";
     drawerUserSubtitle.textContent = "Tap to sign in";
+    resetProfileModalPlaceholders();
   }
 }
 

@@ -269,10 +269,10 @@
       </div>
 
       <div class="profile-hero">
-        <div class="profile-avatar-circle" id="profileModalAvatar">U</div>
+        <div class="profile-avatar-circle" id="profileModalAvatar"></div>
         <div class="profile-hero-text">
-          <span class="profile-email-title" id="profileModalEmail">user@example.com</span>
-          <span class="profile-tier-pill" id="profileModalTier">Free Tier</span>
+          <span class="profile-email-title" id="profileModalEmail"></span>
+          <span class="profile-tier-pill" id="profileModalTier"></span>
         </div>
       </div>
 
@@ -281,21 +281,21 @@
           <div class="quota-meter-group">
             <div class="quota-meter-label-row">
               <span style="color:var(--text-muted); font-size:0.8rem;">⚡ Neural TTS Voice Quota</span>
-              <strong style="color:var(--text-main); font-size:0.8rem;" id="profileNeuralCount">5,000 / 5,000 Chars</strong>
+              <strong style="color:var(--text-main); font-size:0.8rem;" id="profileNeuralCount">—</strong>
             </div>
             <div class="quota-progress-track">
-              <div class="quota-progress-fill" id="profileNeuralProgress" style="width: 100%;"></div>
+              <div class="quota-progress-fill" id="profileNeuralProgress" style="width: 0%;"></div>
             </div>
           </div>
 
           <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px dashed var(--border); padding-top:0.6rem; font-size:0.82rem;">
             <span style="color:var(--text-muted);">✨ Summary & Vision Balance:</span>
-            <strong style="color:var(--accent);" id="profileSummaryCount">3 Credits</strong>
+            <strong style="color:var(--accent);" id="profileSummaryCount">—</strong>
           </div>
 
           <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px dashed var(--border); padding-top:0.6rem; font-size:0.82rem;">
             <span style="color:var(--text-muted);">🔑 Custom API Key (BYOK):</span>
-            <strong id="profileByokStatus" style="color:var(--text-muted);">Disabled</strong>
+            <strong id="profileByokStatus" style="color:var(--text-muted);">—</strong>
           </div>
         </div>
 
@@ -570,7 +570,6 @@
 
   <!-- BACKGROUND AUDIO KEEP-ALIVE ANCHORS -->
   <audio id="neuralAudio" playsinline style="display:none;"></audio>
-  <audio id="silentAudioLoop" loop playsinline style="display:none;" src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA="></audio>
 
   <!-- APPLICATION LOGIC -->
   <script src="app.js"></script>
