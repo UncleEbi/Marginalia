@@ -1058,9 +1058,16 @@ btnDrawerAbout.addEventListener('click', () => {
   aboutModal.style.display = 'flex';
 });
 
+const FONT_FACES = {
+  serif: 'var(--font-reader)',
+  book: 'var(--font-book)',
+  readable: 'var(--font-readable)',
+  monospace: 'monospace',
+  'sans-serif': 'var(--font-ui)'
+};
+
 function applyFontFace(val) {
-  contentPane.style.fontFamily = val === 'serif' ? 'var(--font-reader)' :
-    val === 'monospace' ? 'monospace' : 'var(--font-ui)';
+  contentPane.style.fontFamily = FONT_FACES[val] || FONT_FACES.serif;
 }
 
 fontSelect.addEventListener('change', (e) => {
@@ -2960,7 +2967,7 @@ async function processUploadedDocument(file) {
   }
 
   if (lowerName.endsWith('.html') || lowerName.endsWith('.htm')) {
-    const raw = new TextDecoder('utf-8').decode(uint8);
+    const raw = decodeTextRobustly(uint8);
     const blocks = parseHtmlToBlocks(raw);
     const pages = [];
     for (let i = 0; i < blocks.length; i += 5) pages.push(blocks.slice(i, i + 5));
@@ -2978,7 +2985,7 @@ async function processUploadedDocument(file) {
     throw new Error("Unable to read file: The file contains binary or DRM-protected data. Please ensure it is an unlocked EPUB, PDF, Word, or TXT file.");
   }
 
-  const raw = new TextDecoder('utf-8').decode(uint8);
+  const raw = decodeTextRobustly(uint8);
   const sents = splitIntoSentences(raw);
   if (sents.length === 0) throw new Error("Document is empty.");
   const pages = [];
@@ -3007,6 +3014,20 @@ function splitIntoSentences(text) {
   }
   const matches = text.match(/[^.!?]+[.!?]+["')\]]*\s*|[^.!?]+$/g) || [text];
   return matches.map(s => s.replace(/\s+/g, ' ').trim()).filter(s => s.length > 0);
+}
+
+function decodeTextRobustly(uint8) {
+  let raw = new TextDecoder('utf-8').decode(uint8);
+  if (raw.includes('�') || /[ÂÃ -¿]{2,}/.test(raw)) {
+    try {
+      const asLatin1 = new TextDecoder('latin1').decode(uint8);
+      const asUtf8 = new TextDecoder('utf-8').decode(new TextEncoder().encode(asLatin1));
+      if (!asUtf8.includes('�')) {
+        raw = asUtf8;
+      }
+    } catch (e) {}
+  }
+  return raw;
 }
 
 // PRIMARY FILE IMPORT LISTENER
