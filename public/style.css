@@ -816,6 +816,53 @@ main::after {
   font-weight: 600;
 }
 
+/* PRO PLAN OPTIONS (PAYWALL) */
+.pro-plan-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.pro-plan-option {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-main);
+  color: var(--text-main);
+  font-family: var(--font-ui);
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--transition), background-color var(--transition);
+}
+
+.pro-plan-option:hover { border-color: var(--accent); }
+
+.pro-plan-option.featured {
+  border-color: var(--accent);
+}
+
+.pro-plan-label {
+  min-width: 0;
+}
+
+.pro-plan-label em {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.pro-plan-price {
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .modal-scrollable-list {
   flex: 1;
   overflow-y: auto;
