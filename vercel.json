@@ -1,4 +1,18 @@
 {
+  "functions": {
+    "api/*.js": {
+      "maxDuration": 60
+    }
+  }
+}
+
+{
+  "rewrites": [
+    {
+      "source": "/.well-known/apple-developer-merchantid-domain-association",
+      "destination": "/api/apple-pay-verification"
+    }
+  ],
   "headers": [
     {
       "source": "/.well-known/apple-developer-merchantid-domain-association",
@@ -10,11 +24,4 @@
       ]
     }
   ]
-}
-{
-  "functions": {
-    "api/*.js": {
-      "maxDuration": 60
-    }
-  }
 }
