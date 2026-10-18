@@ -1,6 +1,17 @@
 <!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
+  <!-- Restore the last-used theme before the stylesheet paints, so the app opens in the theme
+       the reader left it in instead of flashing the hardcoded dark default. Keep this early and
+       standalone: it must run even if the CDN libraries or app.js fail to load. -->
+  <script>
+    try {
+      var __savedTheme = localStorage.getItem('marginalia_theme');
+      if (['light', 'sepia', 'dark', 'oled'].indexOf(__savedTheme) !== -1) {
+        document.documentElement.setAttribute('data-theme', __savedTheme);
+      }
+    } catch (e) { /* storage unavailable (private mode): keep the default */ }
+  </script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Marginalia — Read-Along Reader</title>
