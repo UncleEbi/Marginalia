@@ -1,7 +1,7 @@
 {
-  "name": "Marginalia — Read-Along Reader",
+  "name": "Marginalia — Reading Made Easy",
   "short_name": "Marginalia",
-  "description": "Read-along reader for EPUB, PDF, DOCX and more, with synced narration and summaries.",
+  "description": "Reading made easy with synchronized audio and smart reading tools.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

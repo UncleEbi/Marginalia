@@ -292,10 +292,12 @@ async function refreshProPriceLabels() {
 async function openPaywall() {
   paywallModal.style.display = 'flex';
   const list = document.getElementById('proPlanList');
+  const headline = document.getElementById('proPriceHeadline');
   if (!list) return;
   const data = await fetchProPlans();
 
   list.innerHTML = '';
+  if (headline) headline.style.display = 'none';
   if (!data) {
     // Price list unavailable: keep one plain option so checkout still works
     const btn = document.createElement('button');
@@ -306,6 +308,18 @@ async function openPaywall() {
     return;
   }
 
+  // "Marginalia Pro — ₦12,000 / month (Approx. ~$9.00 USD · Billed in NGN)" so global visitors
+  // aren't confused by the naira numbers. Every figure still comes from the server.
+  const monthly = planById(data, data.default_plan);
+  if (headline && monthly) {
+    const usd = monthly.amount_usd_display;
+    headline.innerHTML = `
+      <span class="pro-price-main">Marginalia Pro — ${escapeHtml(monthly.amount_display)} / month</span>
+      <span class="pro-price-detail">${usd ? `Approx. ~${escapeHtml(usd)} USD · ` : ''}Billed in ${escapeHtml(String(data.currency || 'NGN'))}</span>
+    `;
+    headline.style.display = '';
+  }
+
   data.plans.forEach((plan) => {
     const btn = document.createElement('button');
     btn.className = 'pro-plan-option' + (plan.id === data.default_plan ? ' featured' : '');
@@ -313,7 +327,10 @@ async function openPaywall() {
       <span class="pro-plan-label">
         ${escapeHtml(plan.label)}${plan.note ? ` <em>· ${escapeHtml(plan.note)}</em>` : ''}
       </span>
-      <span class="pro-plan-price">${escapeHtml(plan.amount_display)}</span>
+      <span class="pro-plan-price-col">
+        <span class="pro-plan-price">${escapeHtml(plan.amount_display)}</span>
+        ${plan.amount_usd_display ? `<span class="pro-plan-price-usd">~${escapeHtml(plan.amount_usd_display)} USD</span>` : ''}
+      </span>
     `;
     btn.addEventListener('click', () => initiateProUpgrade(plan.id));
     list.appendChild(btn);
@@ -2596,6 +2613,14 @@ const voicePresets = {
 // Azure voices were removed: take its tab out of the page if the HTML still has one
 document.querySelectorAll('.engine-tab[data-engine="azure"]').forEach(t => t.remove());
 
+// Restore the engine tab from last visit (each engine remembers its own saved neural voice,
+// so returning to the tab also returns to the reader's chosen voice)
+const savedEngine = localStorage.getItem('marginalia_active_engine') || '';
+if (savedEngine && voicePresets[savedEngine] && savedEngine !== activeEngine) {
+  activeEngine = savedEngine;
+  document.querySelectorAll('.engine-tab').forEach(t => t.classList.toggle('active', t.dataset.engine === savedEngine));
+}
+
 function populateVoices() {
   const prevChoice = voicePicker.value;
   voicePicker.innerHTML = '';
@@ -2663,11 +2688,15 @@ function populateVoices() {
     activeVoiceBadge.textContent = `🎙️ ${selectedOption ? selectedOption.text.split('(')[0].trim() : 'Native Voice'}`;
   } else {
     const list = voicePresets[activeEngine] || [];
+    // Restore this reader's saved neural voice for the engine; falls back to the in-session
+    // choice, then the first preset, so the list is never empty.
+    const savedChoice = localStorage.getItem(`marginalia_neural_voice_${activeEngine}`) || '';
+    const wanted = [prevChoice, savedChoice].find(k => k && list.some(item => item.id === k));
     list.forEach(item => {
       const opt = document.createElement('option');
       opt.value = item.id;
       opt.textContent = item.name;
-      if (item.id === prevChoice) opt.selected = true;
+      if (item.id === wanted) opt.selected = true;
       voicePicker.appendChild(opt);
     });
     const selectedOption = voicePicker.options[voicePicker.selectedIndex];
@@ -2685,7 +2714,12 @@ if (typeof speechSynthesis !== 'undefined') {
 });
 
 voicePicker.addEventListener('change', () => {
-  if (activeEngine === 'browser') localStorage.setItem('marginalia_browser_voice', voicePicker.value);
+  if (activeEngine === 'browser') {
+    localStorage.setItem('marginalia_browser_voice', voicePicker.value);
+  } else {
+    // Neural voices are fixed presets, so the chosen one can be remembered exactly (per engine)
+    localStorage.setItem(`marginalia_neural_voice_${activeEngine}`, voicePicker.value);
+  }
   clearAudioCache();
   learnedCadenceMultiplier = 1.0;
   const selectedOption = voicePicker.options[voicePicker.selectedIndex];
@@ -2704,6 +2738,7 @@ document.querySelectorAll('.engine-tab').forEach(tab => {
     document.querySelectorAll('.engine-tab').forEach(t => t.classList.remove('active'));
     tab.classList.add('active');
     activeEngine = tab.dataset.engine;
+    localStorage.setItem('marginalia_active_engine', activeEngine); // return to this engine next visit
     clearAudioCache();
     learnedCadenceMultiplier = 1.0;
     populateVoices();

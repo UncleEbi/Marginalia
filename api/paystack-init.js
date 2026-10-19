@@ -2,14 +2,15 @@
 //
 // Pro checkout. The SERVER owns every price: the request may only name a plan, never an amount.
 //
-//   GET  -> 200 { currency, default_plan, plans: [{ id, label, note, days, amount_kobo, amount_display }] }
+//   GET  -> 200 { currency, default_plan, usd_rate, plans: [{ id, label, note, days, amount_kobo,
+//                                                    amount_display, amount_usd_display }] }
 //           No auth: the paywall uses it to show prices.
 //   POST -> 200 { authorization_url, plan, amount_kobo, currency, days }
 //           headers: Authorization (Supabase session, required)
 //           body:    { plan?: string } — an unknown plan name is rejected; omitted uses the default
 //           email and user_id come from the verified session token, never from the body.
 import { createClient } from '@supabase/supabase-js';
-import { PRO_CURRENCY, PRO_PLANS, DEFAULT_PLAN_ID, getPlan, proPriceDisplay } from '../lib/pro-plan.js';
+import { PRO_CURRENCY, PRO_PLANS, DEFAULT_PLAN_ID, getPlan, proPriceDisplay, proUsdEquivalentDisplay, NGN_PER_USD } from '../lib/pro-plan.js';
 
 function planList() {
   return PRO_PLANS.map((p) => ({
@@ -18,7 +19,10 @@ function planList() {
     note: p.note,
     days: p.days,
     amount_kobo: p.amountKobo,
-    amount_display: proPriceDisplay(p.amountKobo)
+    amount_display: proPriceDisplay(p.amountKobo),
+    // Display-only estimate for global visitors; null when it cannot be computed, so the UI
+    // hides the line rather than showing a made-up number.
+    amount_usd_display: proUsdEquivalentDisplay(p.amountKobo) || null
   }));
 }
 
@@ -41,6 +45,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       currency: PRO_CURRENCY,
       default_plan: DEFAULT_PLAN_ID,
+      usd_rate: NGN_PER_USD, // the rate the amount_usd_display estimates use
       plans: planList()
     });
   }

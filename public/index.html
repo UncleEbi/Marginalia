@@ -14,7 +14,24 @@
   </script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <!-- Browser Tab Title -->
   <title>Marginalia — Reading Made Easy</title>
+
+  <!-- Standard Meta Description -->
+  <meta name="description" content="Marginalia: Reading made easy with synchronized word tracking, background lock-screen audio, and AI summaries." />
+
+  <!-- Open Graph / WhatsApp / Facebook / LinkedIn -->
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://marginalia-rme.vercel.app/" />
+  <meta property="og:title" content="Marginalia — Reading Made Easy" />
+  <meta property="og:description" content="Reading made easy with synchronized word-by-word tracking, native & neural audio, and offline document reading." />
+  <meta property="og:image" content="https://marginalia-rme.vercel.app/icons/og-preview.png" />
+
+  <!-- Twitter / X Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Marginalia — Reading Made Easy" />
+  <meta name="twitter:description" content="Reading made easy with synchronized word-by-word tracking, native & neural audio, and offline document reading." />
+  <meta name="twitter:image" content="https://marginalia-rme.vercel.app/icons/og-preview.png" />
 
   <!-- PWA Manifest & App Config -->
   <link rel="manifest" href="manifest.webmanifest" />
@@ -538,6 +555,9 @@
       <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:0.6rem;">
         Your free trial credits have ended. Add your personal key in Options to use cloud features for free, or pick a plan below.
       </p>
+
+      <!-- Price headline: filled from the server's plan list (Marginalia Pro — ₦12,000 / month · Approx. ~$9.00 USD) -->
+      <div id="proPriceHeadline" class="pro-price-headline" style="display:none;"></div>
 
       <div id="proPlanList" class="pro-plan-list"></div>
 

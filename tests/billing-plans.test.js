@@ -11,8 +11,8 @@ import crypto from 'node:crypto';
 import initHandler from '../api/paystack-init.js';
 import webhookHandler from '../api/paystack-webhook.js';
 import {
-  PRO_PLANS, DEFAULT_PLAN_ID, PRO_CURRENCY, MAX_PRO_STACK_DAYS,
-  getPlan, isProActive, nextProExpiry, proPriceDisplay, evaluateChargeEvent
+  PRO_PLANS, DEFAULT_PLAN_ID, PRO_CURRENCY, MAX_PRO_STACK_DAYS, NGN_PER_USD,
+  getPlan, isProActive, nextProExpiry, proPriceDisplay, proUsdEquivalentDisplay, evaluateChargeEvent
 } from '../lib/pro-plan.js';
 
 const DAY = 86400000;
@@ -54,6 +54,20 @@ test('prices display in the charged currency', () => {
   assert.equal(proPriceDisplay(monthly.amountKobo), '₦12,000');
   assert.equal(proPriceDisplay(quarterly.amountKobo), '₦36,000');
   assert.equal(proPriceDisplay(yearly.amountKobo), '₦120,000');
+});
+
+test('each plan shows the documented USD estimate at the anchored rate', () => {
+  assert.equal(NGN_PER_USD, 1332, 'the estimate uses the rate the prices were derived from');
+  assert.equal(proUsdEquivalentDisplay(monthly.amountKobo), '$9.00');
+  assert.equal(proUsdEquivalentDisplay(quarterly.amountKobo), '$27.00');
+  assert.equal(proUsdEquivalentDisplay(yearly.amountKobo), '$90.00');
+});
+
+test('the USD estimate is hidden, not invented, when it cannot be computed', () => {
+  assert.equal(proUsdEquivalentDisplay(0), '');
+  assert.equal(proUsdEquivalentDisplay('abc'), '');
+  assert.equal(proUsdEquivalentDisplay(monthly.amountKobo, 0), '', 'no rate → no estimate');
+  assert.equal(proUsdEquivalentDisplay(monthly.amountKobo, -5), '', 'negative rate → no estimate');
 });
 
 // ------------------------------------------------------- expiry per plan
@@ -155,6 +169,8 @@ test('GET /api/paystack-init lists every plan with its display price', async () 
   assert.equal(r.body.default_plan, 'pro_monthly');
   assert.deepEqual(r.body.plans.map((p) => p.id), ['pro_monthly', 'pro_quarterly', 'pro_yearly']);
   assert.deepEqual(r.body.plans.map((p) => p.amount_display), ['₦12,000', '₦36,000', '₦120,000']);
+  assert.equal(r.body.usd_rate, NGN_PER_USD);
+  assert.deepEqual(r.body.plans.map((p) => p.amount_usd_display), ['$9.00', '$27.00', '$90.00']);
   assert.deepEqual(r.body.plans.map((p) => p.days), [30, 90, 365]);
 });
 

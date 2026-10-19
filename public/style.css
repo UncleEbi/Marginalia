@@ -863,6 +863,43 @@ main::after {
   flex-shrink: 0;
 }
 
+/* USD ESTIMATES (PAYWALL) */
+.pro-price-headline {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-bottom: 0.7rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 8px;
+  background: var(--bg-main);
+  border: 1px solid var(--border);
+}
+
+.pro-price-main {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.pro-price-detail {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.pro-plan-price-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex-shrink: 0;
+}
+
+.pro-plan-price-usd {
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 .modal-scrollable-list {
   flex: 1;
   overflow-y: auto;
