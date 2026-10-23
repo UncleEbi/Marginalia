@@ -1,4 +1,9 @@
 {
+  "functions": {
+    "api/ocr.js": {
+      "maxDuration": 60
+    }
+  },
   "rewrites": [
     {
       "source": "/.well-known/apple-developer-merchantid-domain-association",
