@@ -2901,113 +2901,171 @@ function parseHtmlToBlocks(htmlString) {
 }
 
 // --- EPUB EXTRACTOR WITH TABLE OF CONTENTS ---
+// Real-world EPUBs bend the packaging rules in ways that silently empty the reading order:
+// hrefs that climb out of the OPF folder (../Text/...), namespace-prefixed manifest tags
+// (<opf:item>), percent-encoded entry names, backslash-separated zip paths, and documents
+// that are not UTF-8. So every path is resolved through a normalized index of the archive,
+// every package document is tried before falling back to a filename scan, and each file is
+// decoded with the charset it declares.
+
+const EPUB_CONTENT_EXT = /\.(xhtml|html|htm|xht|xml|zhtml)$/i;
+
+function safeDecodeURIComponent(value) {
+  try { return decodeURIComponent(value); } catch (e) { return value; }
+}
+
+// Lower-cased, slash-normalized view of the archive so lookups survive case differences,
+// backslash zip paths, and leading "./" segments.
+function buildZipKeyIndex(allKeys) {
+  const index = new Map();
+  for (const key of allKeys) {
+    const normalized = normalizeZipPath('', key.replace(/\\/g, '/')).toLowerCase();
+    if (normalized && !index.has(normalized)) index.set(normalized, key);
+  }
+  return index;
+}
+
+function findZipKey(keyIndex, relativePath) {
+  if (!relativePath) return null;
+  return keyIndex.get(normalizeZipPath('', relativePath.replace(/\\/g, '/')).toLowerCase()) || null;
+}
+
+// Decodes a document using its UTF-16 BOM or declared charset, falling back to the
+// UTF-8/latin1 heuristic used for plain text files.
+function decodeEpubText(bytes) {
+  if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE) return new TextDecoder('utf-16le').decode(bytes);
+  if (bytes.length >= 2 && bytes[0] === 0xFE && bytes[1] === 0xFF) return new TextDecoder('utf-16be').decode(bytes);
+
+  const head = new TextDecoder('latin1').decode(bytes.subarray(0, 400));
+  const declared = head.match(/encoding=["']([\w-]+)["']/i) || head.match(/charset=["']?([\w-]+)/i);
+  if (declared && !/^utf-?8$/i.test(declared[1])) {
+    try {
+      const replacementCount = (s) => (s.match(/\uFFFD/g) || []).length;
+      const asDeclared = new TextDecoder(declared[1]).decode(bytes);
+      if (replacementCount(asDeclared) < replacementCount(new TextDecoder('utf-8').decode(bytes))) return asDeclared;
+    } catch (e) { /* unknown label — keep the UTF-8 reading */ }
+  }
+  return decodeTextRobustly(bytes);
+}
+
 async function parseEpubArchive(zip) {
   const allKeys = Object.keys(zip.files);
-  const containerKey = allKeys.find(k => k.toLowerCase().endsWith('container.xml'));
-  let opfKey = null;
+  const keyIndex = buildZipKeyIndex(allKeys);
 
+  // 1. Find the package document(s): container.xml first, then anything ending in .opf
+  const opfCandidates = [];
+  const containerKey = allKeys.find(k => /(^|\/)container\.xml$/i.test(k.replace(/\\/g, '/')));
   if (containerKey) {
-    const containerXml = await zip.files[containerKey].async("text");
+    const containerXml = decodeEpubText(await zip.files[containerKey].async('uint8array'));
     const m = containerXml.match(/full-path=["']([^"']+)["']/i);
     if (m) {
-      const target = m[1].trim();
-      opfKey = allKeys.find(k => k.toLowerCase() === target.toLowerCase()) || target;
+      const key = findZipKey(keyIndex, m[1].trim());
+      if (key) opfCandidates.push(key);
     }
   }
-  if (!opfKey) opfKey = allKeys.find(k => k.toLowerCase().endsWith('.opf'));
+  allKeys.forEach(k => { if (/\.opf$/i.test(k) && !opfCandidates.includes(k)) opfCandidates.push(k); });
 
-  let orderedFiles = [];
-  let manifest = {};
+  // 2. Reading order from the spine of the first package document that has a usable one
+  const spineFiles = [];
+  for (const opfKey of opfCandidates) {
+    const opfXml = decodeEpubText(await zip.files[opfKey].async('uint8array'));
+    const opfDir = opfKey.includes('/') ? opfKey.substring(0, opfKey.lastIndexOf('/')) : '';
+    const manifest = {};
 
-  if (opfKey && zip.files[opfKey]) {
-    const opfXml = await zip.files[opfKey].async("text");
-    const opfDir = opfKey.includes('/') ? opfKey.substring(0, opfKey.lastIndexOf('/') + 1) : '';
-
-    const itemRegex = /<item\b[^>]*>/gi;
+    const itemRegex = /<(?:[\w-]+:)?item\b[^>]*>/gi;
     let match;
     while ((match = itemRegex.exec(opfXml)) !== null) {
       const tag = match[0];
       const idMatch = tag.match(/\bid=["']([^"']+)["']/i);
       const hrefMatch = tag.match(/\bhref=["']([^"']+)["']/i);
-      if (idMatch && hrefMatch) {
-        const rawHref = decodeURIComponent(hrefMatch[1].split('#')[0]);
-        const fullPath = (opfDir + rawHref).replace(/\/+/g, '/');
-        const exact = allKeys.find(k => k.toLowerCase() === fullPath.toLowerCase()) || fullPath;
-        manifest[idMatch[1]] = exact;
-      }
+      if (!idMatch || !hrefMatch) continue;
+      // Resolves ../ climbs, ./ prefixes, and percent-encoding against the archive index
+      const href = safeDecodeURIComponent(hrefMatch[1].split('#')[0]);
+      manifest[idMatch[1]] = findZipKey(keyIndex, normalizeZipPath(opfDir, href));
     }
 
-    const spineRegex = /<itemref\b[^>]*\bidref=["']([^"']+)["']/gi;
+    const spineRegex = /<(?:[\w-]+:)?itemref\b[^>]*\bidref=["']([^"']+)["']/gi;
     while ((match = spineRegex.exec(opfXml)) !== null) {
-      const idref = match[1];
-      if (manifest[idref] && zip.files[manifest[idref]]) {
-        orderedFiles.push(manifest[idref]);
-      }
+      const key = manifest[match[1]];
+      if (key && zip.files[key] && !zip.files[key].dir) spineFiles.push(key);
     }
+    if (spineFiles.length > 0) break;
   }
 
-  if (orderedFiles.length === 0) {
-    orderedFiles = allKeys.filter(k => {
-      const lower = k.toLowerCase();
-      return (lower.endsWith('.xhtml') || lower.endsWith('.html') || lower.endsWith('.htm')) &&
-             !lower.includes('toc') && !lower.includes('nav') && !lower.endsWith('.ncx');
-    }).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
-  }
+  // 3. Candidate passes, in order: the spine, a filename scan that skips navigation pages,
+  //    then a scan that keeps them. A pass only matters if it yields readable pages.
+  const isNavigationDoc = (key) => {
+    const base = key.replace(/\\/g, '/').split('/').pop();
+    return /(^|[\/.\-_])(toc|nav|navdoc|navigation|contents)([\/.\-_]|$)/i.test(base);
+  };
+  const filenameScan = (includeNavigation) => allKeys
+    .filter(key => EPUB_CONTENT_EXT.test(key) && (includeNavigation || !isNavigationDoc(key)))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 
-  const chaptersList = [];
-  const extractedPages = [];
-  const perPage = 5;
+  const passes = [spineFiles, filenameScan(false), filenameScan(true)];
 
-  for (let fIdx = 0; fIdx < orderedFiles.length; fIdx++) {
-    const chapterKey = orderedFiles[fIdx];
-    if (!zip.files[chapterKey] || zip.files[chapterKey].dir) continue;
+  // 4. Turn a candidate list into pages, inlining each chapter's images as data URIs
+  const buildPages = async (fileKeys) => {
+    const chaptersList = [];
+    const extractedPages = [];
+    const perPage = 5;
+    let sawImages = false;
 
-    const rawHtml = await zip.files[chapterKey].async("text");
-    const chapterDir = chapterKey.includes('/') ? chapterKey.substring(0, chapterKey.lastIndexOf('/') + 1) : '';
+    for (let fIdx = 0; fIdx < fileKeys.length; fIdx++) {
+      const chapterKey = fileKeys[fIdx];
+      if (!zip.files[chapterKey] || zip.files[chapterKey].dir) continue;
 
-    let chapTitle = "";
-    const titleMatch = rawHtml.match(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/i) || rawHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-    if (titleMatch) {
-      chapTitle = titleMatch[1].replace(/<[^>]+>/g, '').trim();
-    }
-    if (!chapTitle || chapTitle.length < 2) {
-      chapTitle = `Section ${fIdx + 1}`;
-    }
+      const rawHtml = decodeEpubText(await zip.files[chapterKey].async('uint8array'));
+      // Skip package bookkeeping (OPF/NCX/container) that the scan may have picked up
+      if (/<(package|container|ncx)\b[^>]*(version=|unique-identifier|urn:oasis)/i.test(rawHtml.slice(0, 1500))) continue;
 
-    const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
-    const images = Array.from(doc.querySelectorAll('img, image'));
+      const chapterDir = chapterKey.includes('/') ? chapterKey.substring(0, chapterKey.lastIndexOf('/') + 1) : '';
 
-    for (const img of images) {
-      const srcAttr = img.getAttribute('src') || img.getAttribute('xlink:href');
-      if (!srcAttr || srcAttr.startsWith('data:') || srcAttr.startsWith('http')) continue;
-
-      const resolved = normalizeZipPath(chapterDir, decodeURIComponent(srcAttr.split('#')[0]));
-      const matchedImgKey = allKeys.find(k => k.toLowerCase() === resolved.toLowerCase()) || resolved;
-
-      if (zip.files[matchedImgKey] && !zip.files[matchedImgKey].dir) {
-        const ext = matchedImgKey.split('.').pop().toLowerCase();
-        const mime = ext === 'png' ? 'image/png' : ext === 'svg' ? 'image/svg+xml' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
-        const base64Data = await zip.files[matchedImgKey].async('base64');
-        img.setAttribute('src', `data:${mime};base64,${base64Data}`);
+      let chapTitle = "";
+      const titleMatch = rawHtml.match(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/i) || rawHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+      if (titleMatch) {
+        chapTitle = titleMatch[1].replace(/<[^>]+>/g, '').trim();
       }
-    }
+      if (!chapTitle || chapTitle.length < 2) {
+        chapTitle = `Section ${fIdx + 1}`;
+      }
 
-    const chapterBlocks = parseHtmlToBlocks(doc.body ? doc.body.innerHTML : rawHtml);
-    if (chapterBlocks.length > 0) {
-      const startPageIndex = extractedPages.length;
-      chaptersList.push({ title: chapTitle, pageIndex: startPageIndex });
+      const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
+      const images = Array.from(doc.querySelectorAll('img, image'));
 
+      for (const img of images) {
+        const srcAttr = img.getAttribute('src') || img.getAttribute('xlink:href');
+        if (!srcAttr || srcAttr.startsWith('data:') || srcAttr.startsWith('http')) continue;
+
+        const resolved = findZipKey(keyIndex, normalizeZipPath(chapterDir, safeDecodeURIComponent(srcAttr.split('#')[0])));
+        if (resolved && zip.files[resolved] && !zip.files[resolved].dir) {
+          const ext = resolved.split('.').pop().toLowerCase();
+          const mime = ext === 'png' ? 'image/png' : ext === 'svg' ? 'image/svg+xml' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+          const base64Data = await zip.files[resolved].async('base64');
+          img.setAttribute('src', `data:${mime};base64,${base64Data}`);
+        }
+      }
+      if (images.length > 0) sawImages = true;
+
+      const chapterBlocks = parseHtmlToBlocks(doc.body ? doc.body.innerHTML : rawHtml);
+      if (chapterBlocks.length === 0) continue;
+
+      chaptersList.push({ title: chapTitle, pageIndex: extractedPages.length });
       for (let i = 0; i < chapterBlocks.length; i += perPage) {
         extractedPages.push(chapterBlocks.slice(i, i + perPage));
       }
     }
+
+    return { pages: extractedPages, chapters: chaptersList, sawImages };
+  };
+
+  for (const candidates of passes) {
+    if (!candidates || candidates.length === 0) continue;
+    const built = await buildPages(candidates);
+    if (built.pages.length > 0) return { pages: built.pages, chapters: built.chapters };
   }
 
-  if (extractedPages.length === 0) {
-    throw new Error("No readable text found in EPUB.");
-  }
-
-  return { pages: extractedPages, chapters: chaptersList };
+  throw new Error("No readable text found in EPUB. The book may be a scanned image-only file, DRM-protected, or missing its content files.");
 }
 
 // --- PDF ENGINE (ES module, loaded by index.html) ---
