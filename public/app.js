@@ -3104,6 +3104,62 @@ async function getPdfJs() {
   return null;
 }
 
+// --- OCR FALLBACK FOR FLAT IMAGE SCANS ---
+// A scanned PDF has no text layer, so extractPdfTexts comes back empty. Instead of refusing the
+// file, render each page to an image and transcribe it with /api/ocr. Returns the same
+// [{ pageNumber, text }] shape the normal branch builds its chapters from.
+async function ocrScannedPdf(lib, uint8) {
+  if (typeof window.renderPdfPages !== 'function') {
+    throw new Error("This PDF has no digital text (it looks like a flat image scan) and the page renderer did not load. Check your connection and try again.");
+  }
+
+  const customOpenAi = localStorage.getItem('marginalia_byok_openai') || '';
+  const token = await getFreshAuthToken();
+  if (!token && !customOpenAi) {
+    throw new Error("This PDF is a flat image scan, so AI is needed to read it. Sign in, or add your OpenAI key in Options, then try again.");
+  }
+
+  const images = await window.renderPdfPages(lib, uint8, (done, total) => {
+    preloadStatus.textContent = `Preparing scan ${done}/${total}...`;
+  });
+
+  const pages = [];
+  for (let i = 0; i < images.length; i++) {
+    preloadStatus.textContent = `Reading scan ${i + 1}/${images.length}...`;
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (customOpenAi) headers['x-custom-openai-key'] = customOpenAi;
+
+    const res = await fetch('/api/ocr', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ imageBase64: images[i].dataUrl })
+    });
+    const data = await res.json().catch(() => ({}));
+
+    if (res.status === 402) {
+      // Out of free credits: keep the pages already read and say where it stopped.
+      const reason = data.error || 'AI credits ran out.';
+      if (pages.length === 0) throw new Error(reason);
+      pages.push({
+        pageNumber: images.length + 1,
+        text: `Reading stopped at page ${i + 1} of ${images.length}: ${reason}`
+      });
+      break;
+    }
+    if (!res.ok) throw new Error(data.error || `Could not read this scan (error ${res.status}).`);
+
+    const text = (data.text || '').trim();
+    if (text) pages.push({ pageNumber: images[i].pageNumber, text });
+  }
+
+  if (pages.length === 0) {
+    throw new Error("No readable text was found on this scan. The pages may be blank, too blurry, or too faint to read.");
+  }
+  return pages;
+}
+
 // --- SECURE MULTI-FORMAT DOCUMENT DISPATCHER ---
 async function processUploadedDocument(file) {
   const buffer = await file.arrayBuffer();
@@ -3142,7 +3198,11 @@ async function processUploadedDocument(file) {
       throw new Error("The PDF engine could not be loaded. Check your connection and try again.");
     }
 
-    const pageTexts = await window.extractPdfTexts(lib, uint8);
+    let pageTexts = await window.extractPdfTexts(lib, uint8);
+    if (pageTexts.length === 0) {
+      // Flat image scan: no text layer at all, so read the pages as images instead.
+      pageTexts = await ocrScannedPdf(lib, uint8);
+    }
     const pages = [];
     const chapters = [];
 

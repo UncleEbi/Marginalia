@@ -40,3 +40,60 @@ export async function extractPdfTexts(pdfjsLib, data, options = {}) {
 
   return pages;
 }
+
+// Renders every page to a JPEG data URL so a flat image scan (no text layer) can be transcribed by
+// vision OCR instead of being rejected as unreadable.
+//
+// `createCanvas` and `onPage` are injectable: Node tests pass a fake canvas (there is no DOM there)
+// and the reader passes a progress callback. Everything else is passed through to getDocument().
+export async function renderPdfPagesToImages(pdfjsLib, data, options = {}) {
+  if (!pdfjsLib || typeof pdfjsLib.getDocument !== 'function') {
+    throw new Error('A PDF.js library instance is required to render PDF pages.');
+  }
+
+  const {
+    createCanvas,
+    onPage,
+    maxWidth = 1600,
+    quality = 0.78,
+    ...getDocumentOptions
+  } = options;
+
+  const makeCanvas = createCanvas || ((width, height) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    return canvas;
+  });
+
+  const doc = await pdfjsLib.getDocument({ data, ...getDocumentOptions }).promise;
+
+  try {
+    const images = [];
+    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
+      const page = await doc.getPage(pageNumber);
+      const natural = page.getViewport({ scale: 1 });
+      // Render at roughly `maxWidth` CSS pixels: wide enough for vision OCR to read small print,
+      // small enough that the JPEG stays well under Vercel's request-body limit.
+      const scale = Math.max(0.4, Math.min(2.5, maxWidth / natural.width));
+      const viewport = page.getViewport({ scale });
+      const canvas = makeCanvas(Math.floor(viewport.width), Math.floor(viewport.height));
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('This browser could not create a canvas to render the PDF page.');
+
+      // Scans often sit on a transparent page box; paint it white so the JPEG never has black text
+      // on a black/transparent background.
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      await page.render({ canvas, canvasContext: ctx, viewport, background: '#ffffff' }).promise;
+      images.push({ pageNumber, dataUrl: canvas.toDataURL('image/jpeg', quality) });
+      if (onPage) await onPage(pageNumber, doc.numPages);
+    }
+    return images;
+  } finally {
+    if (typeof doc.destroy === 'function') {
+      try { await doc.destroy(); } catch (e) { /* nothing useful to do if teardown fails */ }
+    }
+  }
+}

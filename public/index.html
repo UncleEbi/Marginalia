@@ -79,6 +79,13 @@
       // embedding them; without it their extracted text can be garbled.
       window.extractPdfTexts = (lib, data) =>
         pdfExtract.extractPdfTexts(lib, data, { standardFontDataUrl: `${PDFJS_BASE}/standard_fonts/` });
+      // Flat image scans have no text layer, so app.js falls back to rendering each page as an
+      // image for the OCR endpoint. Same pinned font data as extraction.
+      window.renderPdfPages = (lib, data, onPage) =>
+        pdfExtract.renderPdfPagesToImages(lib, data, {
+          standardFontDataUrl: `${PDFJS_BASE}/standard_fonts/`,
+          onPage
+        });
       window.__resolvePdfjs(pdfjsLib);
     } catch (err) {
       console.warn('PDF engine failed to load:', err);
