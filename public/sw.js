@@ -1,5 +1,8 @@
 // Marginalia service worker: offline app shell + cached parser libraries.
-const VERSION = 'marginalia-v3';
+// The app shell is served network-first with the cache only as an offline fallback. It used to be
+// cache-first, which froze installed phones on whatever app.js they first downloaded: EPUB parser
+// fixes never reached them until the cache version changed, and even then only after a reload.
+const VERSION = 'marginalia-v4';
 const SHELL = [
   './',
   './index.html',
@@ -12,6 +15,8 @@ const SHELL = [
   './icons/icon-512.png',
   './icons/icon-maskable-512.png'
 ];
+// Same-origin files that must revalidate on every load (navigation requests match by mode).
+const NETWORK_FIRST_PATHS = new Set(['/', '/index.html', '/style.css', '/app.js', '/pdf-extract.js']);
 const CDN_HOSTS = ['cdnjs.cloudflare.com', 'cdn.jsdelivr.net'];
 
 self.addEventListener('install', (e) => {
@@ -37,18 +42,21 @@ self.addEventListener('fetch', (e) => {
   if (url.pathname.startsWith('/api/')) return; // Never cache dynamic backend summaries or TTS calls
 
   if (url.origin === self.location.origin) {
-    if (req.mode === 'navigate') {
+    const isNavigation = req.mode === 'navigate';
+    if (isNavigation || NETWORK_FIRST_PATHS.has(url.pathname)) {
+      const cacheKey = isNavigation ? './index.html' : req;
       e.respondWith(
         fetch(req)
-          .then((r) => { 
-            const copy = r.clone(); 
-            caches.open(VERSION).then((c) => c.put('./index.html', copy)); 
-            return r; 
+          .then((r) => {
+            const copy = r.clone();
+            caches.open(VERSION).then((c) => c.put(cacheKey, copy));
+            return r;
           })
-          .catch(() => caches.match('./index.html'))
+          .catch(() => caches.match(cacheKey))
       );
       return;
     }
+    // Icons and anything else same-origin are immutable enough to stay cache-first.
     e.respondWith(caches.match(req).then((hit) => hit || fetch(req)));
     return;
   }

@@ -2948,9 +2948,21 @@ function decodeEpubText(bytes) {
   return decodeTextRobustly(bytes);
 }
 
+// DRM-scraped chapters decode to binary noise: C0 control characters and replacement marks that
+// never appear in real XHTML (CJK text included). A chapter whose decoded text is mostly this is
+// encrypted, not empty - counting it as unreadable keeps DRM files from rendering walls of mojibake.
+function garbageTextRatio(text) {
+  if (!text) return 1;
+  const bad = text.match(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFD]/g) || [];
+  return bad.length / text.length;
+}
+
 async function parseEpubArchive(zip) {
   const allKeys = Object.keys(zip.files);
   const keyIndex = buildZipKeyIndex(allKeys);
+
+  // Readium LCP files keep the container readable but AES-encrypt every chapter
+  const hasLcpLicense = allKeys.some(k => /(^|\/)license\.lcpl$/i.test(k.replace(/\\/g, '/')));
 
   // 1. Find the package document(s): container.xml first, then anything ending in .opf
   const opfCandidates = [];
@@ -3005,11 +3017,13 @@ async function parseEpubArchive(zip) {
   const passes = [spineFiles, filenameScan(false), filenameScan(true)];
 
   // 4. Turn a candidate list into pages, inlining each chapter's images as data URIs
+  let sawImages = false;
+  let sawEncryptedChapter = false;
+
   const buildPages = async (fileKeys) => {
     const chaptersList = [];
     const extractedPages = [];
     const perPage = 5;
-    let sawImages = false;
 
     for (let fIdx = 0; fIdx < fileKeys.length; fIdx++) {
       const chapterKey = fileKeys[fIdx];
@@ -3018,6 +3032,8 @@ async function parseEpubArchive(zip) {
       const rawHtml = decodeEpubText(await zip.files[chapterKey].async('uint8array'));
       // Skip package bookkeeping (OPF/NCX/container) that the scan may have picked up
       if (/<(package|container|ncx)\b[^>]*(version=|unique-identifier|urn:oasis)/i.test(rawHtml.slice(0, 1500))) continue;
+      // DRM-encrypted content decodes to noise; record it and move on
+      if (garbageTextRatio(rawHtml) > 0.05) { sawEncryptedChapter = true; continue; }
 
       const chapterDir = chapterKey.includes('/') ? chapterKey.substring(0, chapterKey.lastIndexOf('/') + 1) : '';
 
@@ -3063,6 +3079,13 @@ async function parseEpubArchive(zip) {
     if (!candidates || candidates.length === 0) continue;
     const built = await buildPages(candidates);
     if (built.pages.length > 0) return { pages: built.pages, chapters: built.chapters };
+  }
+
+  if (hasLcpLicense || sawEncryptedChapter) {
+    throw new Error("This EPUB is DRM-protected, so its chapters can't be read here. Use an unlocked copy - for example, a file that is not an LCP or Adobe DRM download.");
+  }
+  if (sawImages) {
+    throw new Error("This EPUB contains only images (likely a scanned book) with no readable text.");
   }
 
   throw new Error("No readable text found in EPUB. The book may be a scanned image-only file, DRM-protected, or missing its content files.");

@@ -15,7 +15,9 @@ export function appSource() {
 
 export function extractFunction(name) {
   const src = appSource();
-  const start = src.indexOf(`function ${name}(`);
+  // Prefer the async declaration so `await` inside the body stays legal
+  let start = src.indexOf(`async function ${name}(`);
+  if (start === -1) start = src.indexOf(`function ${name}(`);
   if (start === -1) throw new Error(`function ${name} not found in public/app.js`);
 
   let depth = 0;
