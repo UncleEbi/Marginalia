@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="parchment">
 <head>
   <!-- Restore the last-used theme before the stylesheet paints, so the app opens in the theme
        the reader left it in instead of flashing the hardcoded dark default. Keep this early and
@@ -7,7 +7,7 @@
   <script>
     try {
       var __savedTheme = localStorage.getItem('marginalia_theme');
-      if (['light', 'sepia', 'dark', 'oled'].indexOf(__savedTheme) !== -1) {
+      if (['parchment', 'light', 'sepia', 'dark', 'oled'].indexOf(__savedTheme) !== -1) {
         document.documentElement.setAttribute('data-theme', __savedTheme);
       }
     } catch (e) { /* storage unavailable (private mode): keep the default */ }
@@ -35,7 +35,7 @@
 
   <!-- PWA Manifest & App Config -->
   <link rel="manifest" href="manifest.webmanifest" />
-  <meta name="theme-color" content="#0b1120" />
+  <meta name="theme-color" content="#f7f3eb" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -190,32 +190,12 @@
   </aside>
 
   <main>
-    <div class="controls-panel">
-      <div class="controls-toggle-bar" id="controlsToggleBar">
-        <span id="activeVoiceBadge" style="font-weight:600; color:var(--accent);">🎙️ Native Voice</span>
-        <span id="toggleCaret" style="font-size:0.75rem;">Settings ▾</span>
-      </div>
-
-      <div class="controls-collapsible collapsed" id="controlsBody">
-        <div class="engine-tabs-group">
-          <button class="engine-tab active" data-engine="browser">Browser Native</button>
-          <button class="engine-tab" data-engine="elevenlabs">ElevenLabs</button>
-          <button class="engine-tab" data-engine="openai">OpenAI Audio</button>
-        </div>
-
-        <div class="settings-sub-bar">
-          <div class="setting-group">
-            <span>Voice:</span>
-            <select id="voicePicker"></select>
-          </div>
-
-          <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.8rem; cursor:pointer; color:var(--text-muted); white-space:nowrap;">
-            <input type="checkbox" id="autoFlipCheck" checked style="accent-color: var(--accent);" />
-            <span>Auto-page</span>
-          </label>
-        </div>
-      </div>
-    </div>
+    <!-- Floating voice pill: tapping it opens the Settings modal, where the voice engine,
+         voice picker and auto-page options now live (no more drawer pushing the text down). -->
+    <button class="voice-float-pill" id="controlsToggleBar" type="button" title="Voice & playback settings">
+      <span id="activeVoiceBadge">🎙️ Native Voice</span>
+      <span aria-hidden="true">⚙️</span>
+    </button>
 
     <div class="reader-card">
       <div class="doc-meta">
@@ -241,24 +221,34 @@
     </div>
   </main>
 
-  <!-- STICKY BOTTOM PLAYER -->
+  <!-- STICKY BOTTOM PLAYER: floating audio dock -->
   <div class="mobile-player-bar">
-    <div class="player-nav-group">
-      <button id="prevPageBtn" class="player-btn-nav" title="Previous Page">←</button>
+    <!-- Row 1: elapsed (tap to jump) — scrubber — total — speed -->
+    <div class="dock-top-row">
+      <button id="openJumpModalBtn" class="dock-time" title="Tap to jump to chapter or page">0:00</button>
+      <input type="range" id="progressScrubber" class="dock-scrubber" min="0" max="1000" value="0" step="1" aria-label="Playback position" />
+      <span id="totalTimeText" class="dock-time">0:00</span>
+      <button id="speedCycleBtn" class="speed-pill-btn">1.0x</button>
+    </div>
+
+    <!-- Row 2: volume — back 15s — play/pause — forward 15s — sleep timer -->
+    <div class="dock-bottom-row">
+      <button id="volumeToggleBtn" class="dock-tool-btn" title="Volume">🔊</button>
+      <button id="skipBackBtn" class="dock-tool-btn dock-skip-btn" title="Skip back 15 seconds">-15s</button>
       <button id="mainPlayToggle" class="player-btn-main">▶</button>
+      <button id="skipFwdBtn" class="dock-tool-btn dock-skip-btn" title="Skip forward 15 seconds">+15s</button>
+      <button id="sleepTimerBtn" class="speed-pill-btn sleep-timer-btn" title="Sleep timer">🌙</button>
+    </div>
+
+    <!-- Kept for Media Session handlers and existing page-turn wiring; the dock's
+         scrubber and jump modal replace the visible prev/next page controls. -->
+    <div class="visually-hidden" aria-hidden="true">
+      <button id="prevPageBtn" class="player-btn-nav" title="Previous Page">←</button>
       <button id="nextPageBtn" class="player-btn-nav" title="Next Page">→</button>
     </div>
 
-    <div class="player-status-group" id="openJumpModalBtn" title="Tap to jump to chapter or page">
-      <span id="pageIndicatorText" style="font-weight:600; font-size:0.85rem; color:var(--text-main); display:flex; align-items:center; gap:0.2rem; white-space:nowrap;">
-        Page 1 of 1 <span style="font-size:0.68rem; opacity:0.7;">▾</span>
-      </span>
-      <span id="chapterIndicatorText" style="font-size:0.72rem; color:var(--accent); max-width:130px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Chapter 1</span>
-    </div>
-
-    <div class="player-right-group">
-      <button id="sleepTimerBtn" class="speed-pill-btn sleep-timer-btn" title="Sleep timer">🌙</button>
-      <button id="speedCycleBtn" class="speed-pill-btn">1.0x</button>
+    <div class="dock-volume-pop" id="volumePop">
+      <input type="range" id="volumeSlider" min="0" max="100" value="100" aria-label="Volume" />
     </div>
   </div>
 
@@ -266,6 +256,12 @@
   <div id="jumpModal" class="modal-overlay">
     <div class="modal-card">
       <div class="modal-title">📖 Jump to Section</div>
+
+      <div class="jump-current-pos">
+        <span id="pageIndicatorText" style="font-weight:600; font-size:0.85rem; color:var(--text-main); white-space:nowrap;">Page 1 of 1</span>
+        <span style="color:var(--text-muted);">·</span>
+        <span id="chapterIndicatorText" style="font-size:0.78rem; color:var(--accent); max-width:180px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Chapter 1</span>
+      </div>
       
       <div class="nav-tab-group">
         <button id="tabChaptersBtn" class="nav-tab-btn active">📑 Chapters</button>
@@ -436,6 +432,28 @@
       </div>
 
       <div class="modal-scrollable-body" id="optionsModalBody">
+        <!-- VOICE & ENGINE (moved here from the old top configuration drawer) -->
+        <div class="voice-engine-block">
+          <label style="font-size:0.85rem; color:var(--text-muted);">Voice Engine</label>
+          <div class="engine-tabs-group">
+            <button class="engine-tab active" data-engine="browser">Browser Native</button>
+            <button class="engine-tab" data-engine="elevenlabs">ElevenLabs</button>
+            <button class="engine-tab" data-engine="openai">OpenAI Audio</button>
+          </div>
+
+          <div class="settings-sub-bar">
+            <div class="setting-group">
+              <span>Voice:</span>
+              <select id="voicePicker"></select>
+            </div>
+
+            <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.8rem; cursor:pointer; color:var(--text-muted); white-space:nowrap;">
+              <input type="checkbox" id="autoFlipCheck" checked style="accent-color: var(--accent);" />
+              <span>Auto-page</span>
+            </label>
+          </div>
+        </div>
+
         <div>
           <label style="font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:0.35rem;">Font Face</label>
           <select id="fontSelect" style="width:100%; padding:0.45rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:16px;">
@@ -460,6 +478,7 @@
         <div>
           <label style="font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:0.35rem;">Theme Palette</label>
           <select id="optionThemeSelect" style="width:100%; padding:0.45rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:16px;">
+            <option value="parchment">Warm Parchment (Default)</option>
             <option value="light">Clean Light</option>
             <option value="sepia">Sepia Paper</option>
             <option value="dark">Nord Dark</option>

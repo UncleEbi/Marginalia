@@ -79,16 +79,13 @@ document.querySelectorAll('.modal-overlay').forEach(modal => {
   });
 });
 
-// --- COLLAPSIBLE VOICE BAR ---
+// --- VOICE PILL (opens Settings) ---
 const controlsToggleBar = document.getElementById('controlsToggleBar');
-const controlsBody = document.getElementById('controlsBody');
-const toggleCaret = document.getElementById('toggleCaret');
 const activeVoiceBadge = document.getElementById('activeVoiceBadge');
 
-controlsToggleBar.addEventListener('click', () => {
-  const isCollapsed = controlsBody.classList.toggle('collapsed');
-  toggleCaret.textContent = isCollapsed ? 'Settings ▾' : 'Hide ▴';
-});
+// The old top configuration drawer is gone: the pill is a compact indicator whose tap
+// opens the Settings modal, where the engine tabs, voice picker and auto-page now live.
+controlsToggleBar.addEventListener('click', () => openOptionsModal());
 
 // --- INDEXEDDB STORAGE ---
 const DB_NAME = "MarginaliaBookDB";
@@ -514,6 +511,12 @@ let currentUtterance = null;
 const audioElement = document.getElementById('neuralAudio');
 const audioPreloadCache = new Map();
 
+// Bottom-dock volume (0..1): applies to both the browser voice and the neural <audio>
+let playbackVolume = (() => {
+  const v = parseFloat(localStorage.getItem('marginalia_volume'));
+  return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 1;
+})();
+
 // Selection elements
 const selectionPopover = document.getElementById('selectionPopover');
 const btnSelectionSpeak = document.getElementById('btnSelectionSpeak');
@@ -802,6 +805,7 @@ btnSelectionSpeak.addEventListener('click', (e) => {
   if (activeEngine === 'browser') {
     const utter = new SpeechSynthesisUtterance(currentSelectedText);
     utter.rate = playbackSpeed;
+    utter.volume = playbackVolume;
     applyChosenVoice(utter);
     // iOS drops a speak() issued right after cancel(); give it a beat
     if (wasBusy) setTimeout(() => browserSpeech.speak(utter), 80);
@@ -1193,7 +1197,11 @@ function openOptionsModal() {
 
 btnDrawerNightToggle.addEventListener('click', () => {
   const current = document.documentElement.getAttribute('data-theme');
-  const nextTheme = current === 'dark' ? 'oled' : (current === 'oled' ? 'sepia' : (current === 'sepia' ? 'light' : 'dark'));
+  const nextTheme = current === 'dark' ? 'oled'
+    : current === 'oled' ? 'sepia'
+    : current === 'sepia' ? 'light'
+    : current === 'light' ? 'parchment'
+    : 'dark';
   document.documentElement.setAttribute('data-theme', nextTheme);
   localStorage.setItem('marginalia_theme', nextTheme);
   optionThemeSelect.value = nextTheme;
@@ -1963,7 +1971,7 @@ function renderPage(idx) {
     }
   });
 
-  pageIndicatorText.innerHTML = `Page ${idx + 1} of ${bookPages.length} <span style="font-size:0.68rem; opacity:0.7;">▾</span>`;
+  pageIndicatorText.textContent = `Page ${idx + 1} of ${bookPages.length}`;
   const currentCh = getCurrentChapter();
   chapterIndicatorText.textContent = currentCh.title;
 
@@ -1972,6 +1980,7 @@ function renderPage(idx) {
   highlightActiveSentence();
   updateBookProgressInDB(currentDocName, currentPage, currentSentenceIdx);
   updateMediaMetadata();
+  updateDockProgress();
 }
 
 function highlightActiveSentence() {
@@ -2075,6 +2084,7 @@ function speakBrowser(text) {
   const utter = new SpeechSynthesisUtterance(text);
   currentUtterance = utter;
   utter.rate = playbackSpeed;
+  utter.volume = playbackVolume;
   applyChosenVoice(utter);
 
   const wordsArr = text.trim().split(/\s+/).filter(w => w.length > 0);
@@ -2369,6 +2379,7 @@ async function speakServerless(text, opts = {}) {
     audioElement.preload = 'auto';
     audioElement.src = audioSrc;
     audioElement.playbackRate = playbackSpeed;
+    audioElement.volume = playbackVolume;
     await audioElement.play();
 
     if (!standalone) preloadUpcoming(myToken);
@@ -2438,7 +2449,212 @@ speedCycleBtn.addEventListener('click', () => {
       audioElement.playbackRate = playbackSpeed;
     }
   }
+  updateDockProgress(); // total & elapsed are expressed at the current speed
 });
+
+// --- FLOATING DOCK: TIME, SCRUBBER, SKIP & VOLUME ---
+// Marginalia narrates chunked text pages rather than a single audio file, so the dock
+// derives its clock from the document itself: ~400 ms per spoken word at 1.0x
+// (≈150 words/min, adjusted by the chosen playback speed).
+const MS_PER_WORD = 400;
+const progressScrubber = document.getElementById('progressScrubber');
+const volumeToggleBtn = document.getElementById('volumeToggleBtn');
+const volumePop = document.getElementById('volumePop');
+const volumeSlider = document.getElementById('volumeSlider');
+const skipBackBtn = document.getElementById('skipBackBtn');
+const skipFwdBtn = document.getElementById('skipFwdBtn');
+
+let isScrubbing = false;
+let docWordStats = null; // { pages, totalWords, wordsBeforePage[] } — recomputed when bookPages changes
+
+function countWordsInItem(item) {
+  if (!item) return 0;
+  if (typeof item === 'string') {
+    const t = item.trim();
+    return t ? t.split(/\s+/).length : 0;
+  }
+  if (item.type === 'image' && item.caption) {
+    const c = item.caption.trim();
+    return c ? c.split(/\s+/).length : 0;
+  }
+  return 0;
+}
+
+function getDocWordStats() {
+  if (docWordStats && docWordStats.pages === bookPages) return docWordStats;
+  const wordsBeforePage = [];
+  let totalWords = 0;
+  (bookPages || []).forEach((items, pageIdx) => {
+    wordsBeforePage[pageIdx] = totalWords;
+    (items || []).forEach((item) => { totalWords += countWordsInItem(item); });
+  });
+  docWordStats = { pages: bookPages, wordsBeforePage, totalWords };
+  return docWordStats;
+}
+
+// Words spoken before the given sentence on the given page.
+function wordsAtPosition(page, sIdx) {
+  const items = (bookPages && bookPages[page]) || [];
+  let words = getDocWordStats().wordsBeforePage[page] || 0;
+  for (let i = 0; i < sIdx && i < items.length; i++) words += countWordsInItem(items[i]);
+  return words;
+}
+
+function formatDockTime(ms) {
+  const total = Math.max(0, Math.round(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h > 0
+    ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    : `${m}:${s < 10 ? '0' : ''}${s}`;
+}
+
+function getDocElapsedMs() {
+  let ms = wordsAtPosition(currentPage, currentSentenceIdx) * MS_PER_WORD / playbackSpeed;
+  // While a sentence is being read, interpolate its progress for a smooth clock.
+  if (isPlaying && sentenceSpeechStartTime && estimatedSentenceDurationMs > 0) {
+    const frac = Math.min(1, (performance.now() - sentenceSpeechStartTime) / estimatedSentenceDurationMs);
+    const currentWords = countWordsInItem((bookPages[currentPage] || [])[currentSentenceIdx]);
+    ms += frac * currentWords * MS_PER_WORD / playbackSpeed;
+  }
+  return ms;
+}
+
+function getDocTotalMs() {
+  return getDocWordStats().totalWords * MS_PER_WORD / playbackSpeed;
+}
+
+// Refreshes the dock: elapsed (left, tappable to jump), total (right) and the scrubber.
+// Looks elements up at call time so renderPage can safely call this at any point.
+function updateDockProgress() {
+  const elapsedEl = document.getElementById('openJumpModalBtn'); // the dock's elapsed-time button
+  const totalEl = document.getElementById('totalTimeText');
+  const scrubber = document.getElementById('progressScrubber');
+  const total = getDocTotalMs();
+  const elapsed = getDocElapsedMs();
+  if (elapsedEl) elapsedEl.textContent = formatDockTime(elapsed);
+  if (totalEl) totalEl.textContent = formatDockTime(total);
+  if (scrubber && !isScrubbing) {
+    scrubber.value = total > 0 ? Math.round(Math.min(1, elapsed / total) * 1000) : 0;
+  }
+}
+
+// Jump narration to a fraction of the document (used by the scrubber).
+function seekToFraction(frac) {
+  if (!bookPages || bookPages.length === 0) return;
+  const clamped = Math.min(1, Math.max(0, frac));
+  const targetWords = clamped * getDocWordStats().totalWords;
+  const before = getDocWordStats().wordsBeforePage;
+
+  let page = 0;
+  while (page < bookPages.length - 1 && before[page + 1] != null && before[page + 1] <= targetWords) page++;
+
+  const items = bookPages[page] || [];
+  let acc = before[page] || 0;
+  let sIdx = 0;
+  while (sIdx < items.length) {
+    const w = countWordsInItem(items[sIdx]);
+    if (acc + w > targetWords) break;
+    acc += w;
+    sIdx++;
+  }
+  if (sIdx >= items.length) sIdx = Math.max(0, items.length - 1);
+
+  const wasPlaying = isPlaying;
+  stopAudio();
+  currentPage = page;
+  currentSentenceIdx = sIdx;
+  renderPage(currentPage);
+  if (wasPlaying) { isPlaying = true; playCurrentSentence(); }
+}
+
+// Skip ±N seconds of narration at the current speed (≈N seconds of speech).
+function skipBySeconds(seconds) {
+  if (!bookPages || bookPages.length === 0) return;
+  let wordsToMove = Math.abs(seconds) * 1000 * playbackSpeed / MS_PER_WORD;
+  let page = currentPage;
+  let sIdx = currentSentenceIdx;
+  let guard = 0;
+
+  if (seconds > 0) {
+    while (wordsToMove > 0 && guard++ < 100000) {
+      const items = bookPages[page] || [];
+      if (sIdx < items.length) {
+        wordsToMove -= countWordsInItem(items[sIdx]);
+        sIdx++;
+        if (wordsToMove <= 0) {
+          if (sIdx >= items.length) {
+            if (page < bookPages.length - 1) { page++; sIdx = 0; }
+            else sIdx = Math.max(0, items.length - 1);
+          }
+          break;
+        }
+      } else if (page < bookPages.length - 1) {
+        page++;
+        sIdx = 0;
+      } else {
+        break;
+      }
+    }
+  } else {
+    while (wordsToMove > 0 && guard++ < 100000 && (page > 0 || sIdx > 0)) {
+      if (sIdx > 0) {
+        sIdx--;
+      } else {
+        page--;
+        sIdx = Math.max(0, (bookPages[page] || []).length - 1);
+      }
+      wordsToMove -= countWordsInItem((bookPages[page] || [])[sIdx]);
+    }
+  }
+
+  // Never land past the last sentence of the page (forward skips can run off the
+  // end of the document while words remain to be consumed).
+  const pageItems = bookPages[page] || [];
+  if (sIdx >= pageItems.length) sIdx = Math.max(0, pageItems.length - 1);
+
+  const wasPlaying = isPlaying;
+  stopAudio();
+  currentPage = page;
+  currentSentenceIdx = sIdx;
+  renderPage(currentPage);
+  if (wasPlaying) { isPlaying = true; playCurrentSentence(); }
+}
+
+// Scrubber: preview the time while dragging, seek on release.
+progressScrubber.addEventListener('input', () => {
+  isScrubbing = true;
+  const frac = Number(progressScrubber.value) / 1000;
+  const elapsedEl = document.getElementById('openJumpModalBtn');
+  if (elapsedEl) elapsedEl.textContent = formatDockTime(frac * getDocTotalMs());
+});
+
+progressScrubber.addEventListener('change', () => {
+  const frac = Number(progressScrubber.value) / 1000;
+  isScrubbing = false;
+  seekToFraction(frac);
+});
+
+skipBackBtn.addEventListener('click', () => skipBySeconds(-15));
+skipFwdBtn.addEventListener('click', () => skipBySeconds(15));
+
+// Volume popup above the dock.
+volumeToggleBtn.addEventListener('click', () => {
+  volumePop.style.display = volumePop.style.display === 'block' ? 'none' : 'block';
+});
+
+volumeSlider.addEventListener('input', () => {
+  playbackVolume = Math.min(1, Math.max(0, Number(volumeSlider.value) / 100));
+  localStorage.setItem('marginalia_volume', String(playbackVolume));
+  audioElement.volume = playbackVolume;
+  volumeToggleBtn.textContent = playbackVolume === 0 ? '🔇' : '🔊';
+});
+
+// The clock advances during playback; background tabs throttle timers, so 1s is plenty.
+setInterval(() => {
+  if (isPlaying && !isScrubbing) updateDockProgress();
+}, 1000);
 
 // --- SLEEP TIMER ---
 // Stops narration after a set number of minutes or at the end of the current chapter.
@@ -3418,10 +3634,12 @@ fileInput.addEventListener('change', async (event) => {
 
   try {
     // Freemium teaser: extract only page 1 for unauthenticated users
-    const isUserSignedIn = await isUserSignedIn();
+    // (signedIn, not isUserSignedIn: a local const with the same name as the
+    //  function would shadow it and hit the temporal dead zone in this block)
+    const signedIn = await isUserSignedIn();
     let result;
     
-    if (isUserSignedIn) {
+    if (signedIn) {
       // Authenticated: full document access
       result = await processUploadedDocument(file);
     } else {
@@ -3439,7 +3657,7 @@ fileInput.addEventListener('change', async (event) => {
     preloadStatus.textContent = "Ready";
     renderPage(0);
 
-    if (isUserSignedIn) {
+    if (signedIn) {
       saveBookToShelf(currentDocName, bookPages, bookChapters);
       // Show full access - all chapters available
       showFullAccessNotice();
@@ -3459,7 +3677,7 @@ fileInput.addEventListener('change', async (event) => {
 });
 
 // STARTUP PREFERENCES RESTORATION
-const savedTheme = localStorage.getItem('marginalia_theme') || 'dark';
+const savedTheme = localStorage.getItem('marginalia_theme') || 'parchment';
 document.documentElement.setAttribute('data-theme', savedTheme);
 optionThemeSelect.value = savedTheme;
 
@@ -3484,6 +3702,11 @@ if (savedCalibration) {
   karaokeCalibrationSlider.value = userManualCalibration;
   updateSyncCalibrationLabel(userManualCalibration);
 }
+
+// Bottom dock: restore the saved volume and prime the time display.
+volumeSlider.value = String(Math.round(playbackVolume * 100));
+volumeToggleBtn.textContent = playbackVolume === 0 ? '🔇' : '🔊';
+audioElement.volume = playbackVolume;
 
 initIndexedDB();
 populateVoices();

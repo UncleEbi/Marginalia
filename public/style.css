@@ -7,6 +7,24 @@
   --reader-font-size: 1.15rem;
 }
 
+[data-theme="parchment"] {
+  --bg-main: #f7f3eb;
+  --panel-bg: #fdfaf4;
+  --panel-blur: rgba(253, 250, 244, 0.94);
+  --text-main: #2d2a26;
+  --text-muted: #7a7266;
+  --border: #e4ddcf;
+  --accent: #b45309;
+  --accent-active: #92400e;
+  --highlight: rgba(245, 197, 66, 0.35);
+  --word-active: rgba(245, 197, 66, 0.35);
+  --word-text: inherit;
+  --tab-active-bg: #efe7d6;
+  --drawer-bg: #efe8d8;
+  --drawer-item-hover: #e6ddc9;
+  --modal-overlay: rgba(45, 42, 38, 0.45);
+}
+
 [data-theme="light"] {
   --bg-main: #f8fafc;
   --panel-bg: #ffffff;
@@ -17,8 +35,8 @@
   --accent: #2563eb;
   --accent-active: #1d4ed8;
   --highlight: rgba(254, 215, 10, 0.42);
-  --word-active: #0284c7;
-  --word-text: #ffffff;
+  --word-active: rgba(245, 197, 66, 0.35);
+  --word-text: inherit;
   --tab-active-bg: #f1f5f9;
   --drawer-bg: #e2ecf5;
   --drawer-item-hover: #d2e3f3;
@@ -35,8 +53,8 @@
   --accent: #b45309;
   --accent-active: #92400e;
   --highlight: rgba(217, 119, 6, 0.3);
-  --word-active: #78350f;
-  --word-text: #ffffff;
+  --word-active: rgba(245, 197, 66, 0.35);
+  --word-text: inherit;
   --tab-active-bg: #dfceb0;
   --drawer-bg: #dfd4bc;
   --drawer-item-hover: #d2c5a9;
@@ -52,9 +70,9 @@
   --border: #23314e;
   --accent: #38bdf8;
   --accent-active: #0284c7;
-  --highlight: rgba(56, 189, 248, 0.25);
-  --word-active: #38bdf8;
-  --word-text: #0b1120;
+  --highlight: rgba(245, 197, 66, 0.25);
+  --word-active: rgba(245, 197, 66, 0.35);
+  --word-text: inherit;
   --tab-active-bg: #1e293b;
   --drawer-bg: #111a2d;
   --drawer-item-hover: #1b2844;
@@ -70,9 +88,9 @@
   --border: #262626;
   --accent: #10b981;
   --accent-active: #059669;
-  --highlight: rgba(16, 185, 129, 0.28);
-  --word-active: #10b981;
-  --word-text: #000000;
+  --highlight: rgba(245, 197, 66, 0.22);
+  --word-active: rgba(245, 197, 66, 0.35);
+  --word-text: inherit;
   --tab-active-bg: #222222;
   --drawer-bg: #080808;
   --drawer-item-hover: #181818;
@@ -221,39 +239,37 @@ header {
 }
 
 /* CONTROLS PANEL */
-.controls-panel {
-  max-width: 860px;
-  width: calc(100% - 1.2rem);
+/* Floating voice pill: the only trace of voice config in the main view.
+   Tapping it opens the Settings modal, where engine, voice and auto-page live. */
+.voice-float-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
   margin: 0.5rem auto 0;
-  padding: 0.65rem 0.85rem;
+  padding: 0.35rem 0.85rem;
   background: var(--panel-bg);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-  flex: 0 0 auto;
-  max-height: 40dvh;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-}
-
-.controls-toggle-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  cursor: pointer;
-  user-select: none;
-  font-size: 0.8rem;
+  border-radius: 999px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
   color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  cursor: pointer;
+  flex: 0 0 auto;
+  transition: border-color var(--transition), color var(--transition);
 }
+.voice-float-pill:hover { border-color: var(--accent); }
+.voice-float-pill span { white-space: nowrap; }
+#activeVoiceBadge { font-weight: 600; color: var(--accent); }
 
-.controls-collapsible {
+/* Voice-engine section at the top of the Settings modal */
+.voice-engine-block {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
+  padding-bottom: 0.9rem;
+  border-bottom: 1px dashed var(--border);
 }
-.controls-collapsible.collapsed { display: none; }
 
 .engine-tabs-group {
   display: flex;
@@ -333,24 +349,24 @@ main {
 
 main::after {
   content: '';
-  flex: 0 0 calc(110px + var(--safe-bottom)); /* clears the fixed player bar so the last lines are never hidden */
+  flex: 0 0 calc(120px + var(--safe-bottom)); /* clears the floating dock so the last lines are never hidden */
 }
 
+/* Open canvas: the text breathes across the viewport — clean margins, no card box.
+   MOBILE-FIRST: 650px column with compact 18px side padding; the desktop media
+   query below widens the measure and adds roomier padding on big screens. */
 .reader-card {
-  max-width: 860px;
+  max-width: 650px;
   width: 100%;
-  background: var(--panel-bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 1.25rem 1rem;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+  margin: 0 auto;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 20px 18px;
+  box-shadow: none;
   min-height: calc(100dvh - 250px);
   flex-shrink: 0; /* never squash the card; its text must stay inside so the page can scroll to the end */
   position: relative;
-}
-
-@media (min-width: 641px) {
-  .reader-card { padding: 2.5rem 2.2rem; }
 }
 
 .doc-meta {
@@ -395,11 +411,14 @@ main::after {
   transition: background-color 0.08s ease, color 0.08s ease;
 }
 
+/* Karaoke highlight: warm amber "marker ink" with soft rounded corners,
+   like a highlighter stroke on paper rather than a selected-text box.
+   No font-weight/padding change: those cause layout jitter mid-sentence. */
 .word.active-word {
   background-color: var(--word-active) !important;
   color: var(--word-text) !important;
-  font-weight: 600;
-  border-radius: 3px;
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px var(--word-active); /* soft ink spread beyond the glyphs, no layout shift */
 }
 
 /* INLINE DIAGRAM CARDS */
@@ -493,17 +512,125 @@ main::after {
 }
 
 /* BOTTOM PLAYER */
+/* ============================================================
+   BOTTOM PLAYER — SHARED BASE (mobile-first): the floating audio
+   card from the editorial spec. The desktop media query below
+   docks this same markup into a full-width bottom bar.
+   ============================================================ */
 .mobile-player-bar {
   position: fixed;
-  bottom: 0; left: 0; right: 0;
-  background: var(--panel-bg); /* solid: no see-through blur */
-  border-top: 1px solid var(--border);
-  padding: 0.55rem 0.85rem calc(0.55rem + var(--safe-bottom));
+  bottom: calc(8px + var(--safe-bottom));
+  left: 8px;
+  right: 8px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  padding: 0.6rem 0.85rem;
   z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+/* Dock row 1: elapsed — scrubber — total — speed */
+.dock-top-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.dock-time {
+  font-size: 0.7rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  min-width: 2.7em;
+  font-family: var(--font-ui);
+}
+
+button.dock-time {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+button.dock-time:hover { color: var(--accent); }
+
+.dock-scrubber {
+  flex: 1;
+  min-width: 60px;
+  height: 22px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Dock row 2: volume — back 15s — play/pause — forward 15s — sleep timer */
+.dock-bottom-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.5rem;
+  gap: 0.4rem;
+}
+
+.dock-tool-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--bg-main);
+  border: 1px solid var(--border);
+  color: var(--text-main);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color var(--transition), background-color var(--transition);
+}
+.dock-tool-btn:hover { border-color: var(--accent); }
+
+.dock-volume-pop {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0.6rem;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.55rem 0.7rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  display: none;
+  width: 150px;
+}
+.dock-volume-pop input { width: 100%; accent-color: var(--accent); }
+
+/* Larger circular transport button (spec: the play/pause is the dock's anchor) */
+.dock-bottom-row .player-btn-main {
+  width: 52px;
+  height: 52px;
+  font-size: 1.25rem;
+}
+
+/* Current page · chapter line inside the jump modal */
+.jump-current-pos {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.15rem 0 0.7rem;
+}
+
+/* Hidden-but-present nav buttons (kept for Media Session / existing wiring) */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .player-nav-group {
@@ -575,6 +702,41 @@ main::after {
   align-items: flex-end;
   gap: 0.3rem;
   flex-shrink: 0;
+}
+
+/* ============================================================
+   DESKTOP-ONLY STYLING (min-width: 769px): spacious, stable layout
+   ============================================================ */
+@media (min-width: 769px) {
+  /* Reading column: a comfortable editorial measure on wide monitors —
+     lines never stretch across 1,920px (reading fatigue). */
+  .reader-card {
+    max-width: 720px;
+    padding: 40px 24px;
+  }
+
+  /* Audio controls: sleek full-width bar docked at the bottom (Spotify-web
+     style) instead of the mobile floating thumb card. Same markup, one row. */
+  .mobile-player-bar {
+    bottom: 0;
+    left: 0;
+    right: 0;
+    border: none;
+    border-top: 1px solid var(--border);
+    border-radius: 0;
+    box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.07);
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 1.25rem;
+    padding: 12px 32px calc(12px + var(--safe-bottom));
+  }
+
+  .dock-top-row { flex: 0 1 560px; }
+  .dock-bottom-row { flex: 0 0 auto; gap: 0.6rem; }
+
+  /* The docked bar is shorter than the floating card; keep clearance honest. */
+  main::after { flex: 0 0 calc(96px + var(--safe-bottom)); }
 }
 
 .sleep-timer-btn.active {
