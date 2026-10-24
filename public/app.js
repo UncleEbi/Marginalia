@@ -145,6 +145,96 @@ async function saveBookToShelf(title, pages, chapters = []) {
   }
 }
 
+// Freemium teaser: save only page 1 data
+function saveBookToShelfFreemium(title, pages, chapters = []) {
+  if (!indexedDB) return;
+  const db = indexedDB.open('marginalia-db', 1);
+  db.onupgradeneeded = (e) => {
+    const db = e.target.result;
+    if (!db.objectStoreNames.contains('books')) {
+      db.createObjectStore('books', { keyPath: 'id' });
+    }
+  };
+  db.onsuccess = (e) => {
+    const db = e.target.result;
+    const tx = db.transaction('books', 'readwrite');
+    const store = tx.objectStore('books');
+    // For freemium, only store page 1 data, chapters limited to first chapter only
+    const firstChapter = chapters.length > 0 ? chapters[0] : { title: 'Page 1', pageIndex: 0 };
+    const book = { id: title + Date.now(), title, pages: [pages[0] || {}], chapters: [firstChapter], freemium: true, created: Date.now() };
+    store.put(book);
+    tx.complete;
+  };
+}
+
+// Show teaser access notice (for unauthenticated users)
+function showTeaserAccessNotice() {
+  const notice = document.createElement('div');
+  notice.style.cssText = `
+    position: fixed;
+    top: 2rem;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    padding: 1rem 1.5rem;
+    border-radius: var(--border-radius);
+    z-index: 1000;
+    max-width: 90%;
+    font-size: 0.95rem;
+    color: var(--text-primary);
+    text-align: center;
+    box-shadow: var(--shadow-sm);
+    animation: slideIn 0.3s ease-out;
+  `;
+  notice.innerHTML = `
+    <div style="display: flex; align-items: center; justify-content: center;">
+      <span style="margin-right: 0.5rem;">📖</span>
+      <span>You're reading page 1 for free! Sign in to unlock chapters 2+</span>
+    </div>
+    <button id="signinBtn" style="margin-left: 1rem; padding: 0.5rem 1rem; background: var(--primary); color: white; border: none; border-radius: var(--border-radius); font-size: 0.85rem; cursor: pointer;">Sign in</button>
+  `;
+  notice.querySelector('#signinBtn').addEventListener('click', () => {
+    closeModalById('signin-modal');
+    openSignInDialog();
+  });
+  document.body.appendChild(notice);
+  
+  // Auto-remove after 5 seconds
+  setTimeout(() => { notice.remove(); }, 5000);
+}
+
+// Show full access notice (for authenticated users)
+function showFullAccessNotice() {
+  const notice = document.createElement('div');
+  notice.style.cssText = `
+    position: fixed;
+    top: 2rem;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--success-bg);
+    border: 1px solid var(--success);
+    padding: 1rem 1.5rem;
+    border-radius: var(--border-radius);
+    z-index: 1000;
+    max-width: 90%;
+    font-size: 0.95rem;
+    color: var(--success-fg);
+    text-align: center;
+    box-shadow: var(--shadow-sm);
+    animation: slideIn 0.3s ease-out;
+  `;
+  notice.innerHTML = `
+    <div style="display: flex; align-items: center; justify-content: center;">
+      <span style="margin-right: 0.5rem;">✅</span>
+      <span>Full document access - all chapters available</span>
+    </div>
+  `;
+  document.body.appendChild(notice);
+  
+  setTimeout(() => { notice.remove(); }, 3000);
+}
+
 // Sync progress to cloud when logged in, fallback to local storage
 async function syncProgressToCloud(title, page, sentenceIdx) {
   // Always update local IndexedDB first
@@ -1223,6 +1313,17 @@ async function getSignedInUser() {
     return session && session.user ? session.user : null;
   } catch (e) {
     return null;
+  }
+}
+
+// Check if user is signed in (freemium teaser pattern)
+async function isUserSignedIn() {
+  if (!supabaseClient) return false;
+  try {
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    return session && session.user ? true : false;
+  } catch (e) {
+    return false;
   }
 }
 
@@ -3219,6 +3320,27 @@ async function processUploadedDocument(file) {
     return { pages, chapters };
   }
 
+  // NEW: freemium teaser - only extract page 1 for unauthenticated users
+  if (lowerName.endsWith('.pdf') || (uint8.length > 4 && uint8[0] === 0x25 && uint8[1] === 0x50 && uint8[2] === 0x44 && uint8[3] === 0x46)) {
+    // Extract all page texts, then only keep page 1 for freemium teaser
+    const pageTexts = await window.extractPdfTexts(lib, uint8);
+    const pages = [];
+    const chapters = [];
+
+    if (pageTexts.length > 0) {
+      const { pageNumber, text } = pageTexts[0];  // Only page 1
+      const sents = splitIntoSentences(text);
+      if (sents.length > 0) {
+        chapters.push({ title: `PDF Page ${pageNumber}`, pageIndex: 0 });
+        for (let s = 0; s < sents.length; s += 5) {
+          pages.push(sents.slice(s, s + 5));
+        }
+      }
+    }
+
+    return { pages, chapters };
+  }
+
   if (lowerName.endsWith('.html') || lowerName.endsWith('.htm')) {
     const raw = decodeTextRobustly(uint8);
     const blocks = parseHtmlToBlocks(raw);
@@ -3283,7 +3405,7 @@ function decodeTextRobustly(uint8) {
   return raw;
 }
 
-// PRIMARY FILE IMPORT LISTENER
+// PRIMARY FILE IMPORT LISTENER (freemium teaser pattern)
 fileInput.addEventListener('change', async (event) => {
   const file = event.target.files && event.target.files[0];
   if (!file) return;
@@ -3295,7 +3417,18 @@ fileInput.addEventListener('change', async (event) => {
   contentPane.innerHTML = `<div style="text-align:center; padding:3rem; color:var(--text-muted); font-style:italic;">Processing "${escapeHtml(file.name)}"...</div>`;
 
   try {
-    const result = await processUploadedDocument(file);
+    // Freemium teaser: extract only page 1 for unauthenticated users
+    const isUserSignedIn = await isUserSignedIn();
+    let result;
+    
+    if (isUserSignedIn) {
+      // Authenticated: full document access
+      result = await processUploadedDocument(file);
+    } else {
+      // Unauthenticated: freemium teaser - only page 1
+      result = await processUploadedDocumentFreemium(file);
+    }
+    
     bookPages = result.pages;
     bookChapters = result.chapters || [{ title: "Beginning", pageIndex: 0 }];
     if (sleepTimerMode === 'chapter') clearSleepTimer(); // saved chapter boundary belongs to the old document
@@ -3305,7 +3438,16 @@ fileInput.addEventListener('change', async (event) => {
     learnedCadenceMultiplier = 1.0;
     preloadStatus.textContent = "Ready";
     renderPage(0);
-    saveBookToShelf(currentDocName, bookPages, bookChapters);
+
+    if (isUserSignedIn) {
+      saveBookToShelf(currentDocName, bookPages, bookChapters);
+      // Show full access - all chapters available
+      showFullAccessNotice();
+    } else {
+      // Freemium: save only page 1, show sign-in prompt for more
+      saveBookToShelfFreemium(currentDocName, bookPages, bookChapters);
+      showTeaserAccessNotice();
+    }
 
   } catch (err) {
     preloadStatus.textContent = "Error";
