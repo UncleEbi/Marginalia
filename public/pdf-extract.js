@@ -1,199 +1,135 @@
+// public/pdf-extract.js  Self-contained: imports pdf.js directly, never depends on app.js passing window.pdfjsLib
+import * as pdfjsDist from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs';
+
+// Configure the worker immediately
+if (!pdfjsDist.GlobalWorkerOptions.workerSrc) {
+  pdfjsDist.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs';
+}
+
 /**
- * Safely loads and processes a document, handling both standard text 
- * and flat image scans without detaching the source buffer.
+ * Safely creates an independent copy of an ArrayBuffer or TypedArray
+ * so PDF.js workers cannot detach or zero out the caller's memory.
  */
-async function processDocument(fileOrBlob) {
-  // 1. Read file as ArrayBuffer once
-  const rawBuffer = await fileOrBlob.arrayBuffer();
+function clonePdfData(data) {
+  if (data instanceof ArrayBuffer) {
+    return data.slice(0);
+  }
+  if (ArrayBuffer.isView(data)) {
+    return new Uint8Array(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
+  }
+  return data;
+}
 
-  // 2. Clone the buffer using .slice(0)
-  // PDF.js worker will consume and detach "pdfBufferCopy",
-  // leaving "rawBuffer" completely intact.
-  const pdfBufferCopy = new ArrayBuffer(rawBuffer.byteLength); new Uint8Array(pdfBufferCopy).set(new Uint8Array(rawBuffer));
+/**
+ * Helper to get an active pdfjsLib instance whether passed as an argument or from the direct import.
+ */
+function resolveLib(passedLib) {
+  if (passedLib && typeof passedLib.getDocument === 'function') {
+    return passedLib;
+  }
+  if (window.pdfjsLib && typeof window.pdfjsLib.getDocument === 'function') {
+    return window.pdfjsLib;
+  }
+  return pdfjsDist;
+}
 
-  const loadingTask = pdfjsLib.getDocument({
-    data: new Uint8Array(pdfBufferCopy),
-    // Ensures fonts and cMaps don't fail in web workers
-    cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@legacy/cmaps/',
-    cMapPacked: true,
+export async function extractPdfTexts(libOrData, dataOrOptions, maybeOptions) {
+  let lib, data, options;
+
+  // Handle both signatures:
+  // Signature A: extractPdfTexts(pdfjsLib, data, options)
+  // Signature B: extractPdfTexts(data, options)
+  if (libOrData && typeof libOrData.getDocument === 'function') {
+    lib = libOrData;
+    data = dataOrOptions;
+    options = maybeOptions || {};
+  } else {
+    lib = resolveLib();
+    data = libOrData;
+    options = dataOrOptions || {};
+  }
+
+  const safeData = clonePdfData(data);
+  const doc = await lib.getDocument({ data: safeData, ...options }).promise;
+  const pages = [];
+
+  try {
+    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
+      const page = await doc.getPage(pageNumber);
+      const content = await page.getTextContent();
+      const text = content.items
+        .map((item) => (typeof item.str === 'string' ? item.str : ''))
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (text) pages.push({ pageNumber, text });
+    }
+  } finally {
+    if (typeof doc.destroy === 'function') {
+      try { await doc.destroy(); } catch (e) {}
+    }
+  }
+
+  return pages;
+}
+
+export async function renderPdfPagesToImages(libOrData, dataOrOptions, maybeOptions) {
+  let lib, data, options;
+
+  if (libOrData && typeof libOrData.getDocument === 'function') {
+    lib = libOrData;
+    data = dataOrOptions;
+    options = maybeOptions || {};
+  } else {
+    lib = resolveLib();
+    data = libOrData;
+    options = dataOrOptions || {};
+  }
+
+  const {
+    createCanvas,
+    onPage,
+    maxWidth = 1600,
+    quality = 0.78,
+    ...getDocumentOptions
+  } = options;
+
+  const makeCanvas = createCanvas || ((width, height) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    return canvas;
   });
 
-  const pdf = await loadingTask.promise;
-  const numPages = pdf.numPages;
-  const extractedPages = [];
+  const safeData = clonePdfData(data);
+  const doc = await lib.getDocument({ data: safeData, ...getDocumentOptions }).promise;
 
-  for (let pageNum = 1; pageNum <= numPages; pageNum++) {
-    const page = await pdf.getPage(pageNum);
-    const textContent = await page.getTextContent();
-    
-    // Extract textual tokens
-    const textItems = textContent.items.map(item => item.str).join(' ').trim();
-
-    // 3. Detect if this page is a flat image scan (zero or near-zero text)
-    if (textItems.length < 30) {
-      // Flat scan detected: render page to canvas and run OCR
-      const ocrText = await renderPageAndRunOCR(page);
-      extractedPages.push({
-        pageNumber: pageNum,
-        text: ocrText || "[No readable text found on scanned page]"
-      });
-    } else {
-      extractedPages.push({
-        pageNumber: pageNum,
-        text: textItems
-      });
-    }
-  }
-
-  // 4. Save to IndexedDB using another safe slice or the original untouched buffer
-  // Create independent copy for IndexedDB so rawBuffer stays intact after PDF processing
-  const rawBufferCopy = new ArrayBuffer(rawBuffer.byteLength); new Uint8Array(rawBufferCopy).set(new Uint8Array(rawBuffer)); await saveToIndexedDB(fileOrBlob.name, new Uint8Array(rawBufferCopy), extractedPages);
-
-  return extractedPages;
-}
-
-/**
- * Renders a PDF page to an offscreen canvas and extracts text using Tesseract.js
- */
-async function renderPageAndRunOCR(page) {
-  // Render at 2.0x scale for clear OCR recognition
-  const viewport = page.getViewport({ scale: 2.0 });
-  const canvas = document.createElement('canvas');
-  const context = canvas.getContext('2d');
-  canvas.width = viewport.width;
-  canvas.height = viewport.height;
-
-  await page.render({
-    canvasContext: context,
-    viewport: viewport
-  }).promise;
-
-  // Run Tesseract OCR on the canvas element directly
-  if (window.Tesseract) {
-    try {
-      const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
-      return text.trim();
-    } catch (err) {
-      console.error('OCR processing error:', err);
-      return '';
-    }
-  }
-  return '';
-}
-
-// Named exports for backward compatibility with index.html and app.js import pattern:
-export async function extractPdfTexts(pdfjsLib, data, options = {}) {
-  // Use processDocument with a Blob/FILE input
-  if (typeof data === 'string' || data instanceof Blob || data instanceof ArrayBuffer) {
-    const fileOrBlob = data instanceof Blob ? data : new Blob([data]);
-    const result = await processDocument(fileOrBlob);
-    return result;
-  }
-  // Fallback: if data is already a Uint8Array or similar, create a minimal Blob
-  return [];
-}
-
-export async function renderPdfPagesToImages(pdfjsLib, data, options = {}) {
-  // Use renderPdfPagesToImages logic - render pages to canvas for OCR/vision
-  if (typeof data === 'string' || data instanceof Blob || data instanceof ArrayBuffer) {
-    const fileOrBlob = data instanceof Blob ? data : new Blob([data]);
-    // Render pages to images for OCR
-    const loadingTask = pdfjsLib.getDocument({
-      data: new Uint8Array(data),
-      cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@legacy/cmaps/',
-      cMapPacked: true,
-    });
-    const pdf = await loadingTask.promise;
+  try {
     const images = [];
-    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-      const page = await pdf.getPage(pageNum);
-      const viewport = page.getViewport({ scale: 1 });
-      const canvas = document.createElement('canvas');
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
+    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
+      const page = await doc.getPage(pageNumber);
+      const natural = page.getViewport({ scale: 1 });
+      const scale = Math.max(0.4, Math.min(2.5, maxWidth / natural.width));
+      const viewport = page.getViewport({ scale });
+      const canvas = makeCanvas(Math.floor(viewport.width), Math.floor(viewport.height));
       const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Could not create canvas to render the PDF page.');
+
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      await page.render({ canvasContext: ctx, viewport, background: '#ffffff' }).promise;
-      images.push({ pageNumber: pageNum, dataUrl: canvas.toDataURL('image/jpeg', 0.78) });
+
+      await page.render({ canvas, canvasContext: ctx, viewport, background: '#ffffff' }).promise;
+      images.push({ pageNumber, dataUrl: canvas.toDataURL('image/jpeg', quality) });
+      if (onPage) await onPage(pageNumber, doc.numPages);
     }
     return images;
-  }
-  return [];
-}
-
-// New API exports:
-export async function processDocument(fileOrBlob) {
-  // 1. Read file as ArrayBuffer once
-  const rawBuffer = await fileOrBlob.arrayBuffer();
-
-  // 2. Clone the buffer using new ArrayBuffer() to create independent copies
-  // PDF.js worker will consume and detach its copy, leaving rawBuffer completely intact.
-  const pdfBufferCopy = new ArrayBuffer(rawBuffer.byteLength); new Uint8Array(pdfBufferCopy).set(new Uint8Array(rawBuffer));
-
-  const loadingTask = pdfjsLib.getDocument({
-    data: new Uint8Array(pdfBufferCopy),
-    // Ensures fonts and cMaps don't fail in web workers
-    cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@legacy/cmaps/',
-    cMapPacked: true,
-  });
-
-  const pdf = await loadingTask.promise;
-  const numPages = pdf.numPages;
-  const extractedPages = [];
-
-  for (let pageNum = 1; pageNum <= numPages; pageNum++) {
-    const page = await pdf.getPage(pageNum);
-    const textContent = await page.getTextContent();
-    
-    // Extract textual tokens
-    const textItems = textContent.items.map(item => item.str).join(' ').trim();
-
-    // 3. Detect if this page is a flat image scan (zero or near-zero text)
-    if (textItems.length < 30) {
-      // Flat scan detected: render page to canvas and run OCR
-      const ocrText = await renderPageAndRunOCR(page);
-      extractedPages.push({
-        pageNumber: pageNum,
-        text: ocrText || "[No readable text found on scanned page]"
-      });
-    } else {
-      extractedPages.push({
-        pageNumber: pageNum,
-        text: textItems
-      });
+  } finally {
+    if (typeof doc.destroy === 'function') {
+      try { await doc.destroy(); } catch (e) {}
     }
   }
-
-  // 4. Save to IndexedDB using another safe slice or the original untouched buffer
-  // Create independent copy for IndexedDB so rawBuffer stays intact after PDF processing
-  const rawBufferCopy = new ArrayBuffer(rawBuffer.byteLength); new Uint8Array(rawBufferCopy).set(new Uint8Array(rawBuffer)); await saveToIndexedDB(fileOrBlob.name, new Uint8Array(rawBufferCopy), extractedPages);
-
-  return extractedPages;
 }
 
-export async function renderPageAndRunOCR(page) {
-  // Render at 2.0x scale for clear OCR recognition
-  const viewport = page.getViewport({ scale: 2.0 });
-  const canvas = document.createElement('canvas');
-  const context = canvas.getContext('2d');
-  canvas.width = viewport.width;
-  canvas.height = viewport.height;
-
-  await page.render({
-    canvasContext: context,
-    viewport: viewport
-  }).promise;
-
-  // Run Tesseract OCR on the canvas element directly
-  if (window.Tesseract) {
-    try {
-      const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
-      return text.trim();
-    } catch (err) {
-      console.error('OCR processing error:', err);
-      return '';
-    }
-  }
-  return '';
-}
+// Aliases for casing compatibility
+export { extractPdfTexts as extractpdftexts };
+export { renderPdfPagesToImages as renderpdfpagestoimages };
