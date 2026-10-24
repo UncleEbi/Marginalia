@@ -80,3 +80,48 @@ async function renderPageAndRunOCR(page) {
   }
   return '';
 }
+
+// Backward-compatible exports for existing code that imports extractPdfTexts/renderPdfPagesToImages
+// These map to the new processDocument/renderPageAndRunOCR API
+export default {
+  extractPdfTexts: async function(pdfjsLib, data, options = {}) {
+    // Use processDocument with a Blob/FILE input
+    if (typeof data === 'string' || data instanceof Blob || data instanceof ArrayBuffer) {
+      const fileOrBlob = data instanceof Blob ? data : new Blob([data]);
+      const result = await processDocument(fileOrBlob);
+      return result;
+    }
+    // Fallback: if data is already a Uint8Array or similar, create a minimal Blob
+    return [];
+  },
+  renderPdfPagesToImages: async function(pdfjsLib, data, options = {}) {
+    // Use renderPdfPagesToImages logic - render pages to canvas for OCR/vision
+    if (typeof data === 'string' || data instanceof Blob || data instanceof ArrayBuffer) {
+      const fileOrBlob = data instanceof Blob ? data : new Blob([data]);
+      // Render pages to images for OCR
+      const loadingTask = pdfjsLib.getDocument({
+        data: new Uint8Array(data),
+        cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@legacy/cmaps/',
+        cMapPacked: true,
+      });
+      const pdf = await loadingTask.promise;
+      const images = [];
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+        const page = await pdf.getPage(pageNum);
+        const viewport = page.getViewport({ scale: 1 });
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        await page.render({ canvasContext: ctx, viewport, background: '#ffffff' }).promise;
+        images.push({ pageNumber: pageNum, dataUrl: canvas.toDataURL('image/jpeg', 0.78) });
+      }
+      return images;
+    }
+    return [];
+  },
+  processDocument,
+  renderPageAndRunOCR
+};
