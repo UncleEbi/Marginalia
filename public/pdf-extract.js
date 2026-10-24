@@ -1,99 +1,81 @@
-// public/pdf-extract.js
-//
-// PDF text extraction lives in its own ES module for two reasons:
-//   1. pdf.js v4 and newer ship ES modules only — the old `pdf.min.js` global (UMD) build no longer
-//      exists, so the library has to be imported from a module script anyway;
-//   2. it can be unit-tested in Node against the same pdfjs-dist version the browser loads.
-//
-// `pdfjsLib` is injected rather than imported: the browser passes the CDN import from the module
-// script in index.html, while the tests pass pdfjs-dist.
-//
-// Returns [{ pageNumber, text }] for the pages that contain extractable text. Pages with no text
-// (scans, full-page images) are skipped; an empty array means the PDF has no digital text at all.
+/**
+ * Safely loads and processes a document, handling both standard text 
+ * and flat image scans without detaching the source buffer.
+ */
+async function processDocument(fileOrBlob) {
+  // 1. Read file as ArrayBuffer once
+  const rawBuffer = await fileOrBlob.arrayBuffer();
 
-// `options` is passed through to pdf.js getDocument() — the browser uses it for standardFontDataUrl.
-export async function extractPdfTexts(pdfjsLib, data, options = {}) {
-  if (!pdfjsLib || typeof pdfjsLib.getDocument !== 'function') {
-    throw new Error('A PDF.js library instance is required to read PDFs.');
-  }
+  // 2. Clone the buffer using .slice(0)
+  // PDF.js worker will consume and detach "pdfBufferCopy",
+  // leaving "rawBuffer" completely intact.
+  const pdfBufferCopy = rawBuffer.slice(0);
 
-  const doc = await pdfjsLib.getDocument({ data, ...options }).promise;
-  const pages = [];
-
-  try {
-    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
-      const page = await doc.getPage(pageNumber);
-      const content = await page.getTextContent();
-      const text = content.items
-        .map((item) => (typeof item.str === 'string' ? item.str : ''))
-        .join(' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-      if (text) pages.push({ pageNumber, text });
-    }
-  } finally {
-    // Release the worker/transport as soon as the text is out — the app no longer needs the document
-    if (typeof doc.destroy === 'function') {
-      try { await doc.destroy(); } catch (e) { /* nothing useful to do if teardown fails */ }
-    }
-  }
-
-  return pages;
-}
-
-// Renders every page to a JPEG data URL so a flat image scan (no text layer) can be transcribed by
-// vision OCR instead of being rejected as unreadable.
-//
-// `createCanvas` and `onPage` are injectable: Node tests pass a fake canvas (there is no DOM there)
-// and the reader passes a progress callback. Everything else is passed through to getDocument().
-export async function renderPdfPagesToImages(pdfjsLib, data, options = {}) {
-  if (!pdfjsLib || typeof pdfjsLib.getDocument !== 'function') {
-    throw new Error('A PDF.js library instance is required to render PDF pages.');
-  }
-
-  const {
-    createCanvas,
-    onPage,
-    maxWidth = 1600,
-    quality = 0.78,
-    ...getDocumentOptions
-  } = options;
-
-  const makeCanvas = createCanvas || ((width, height) => {
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    return canvas;
+  const loadingTask = pdfjsLib.getDocument({
+    data: new Uint8Array(pdfBufferCopy),
+    // Ensures fonts and cMaps don't fail in web workers
+    cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@legacy/cmaps/',
+    cMapPacked: true,
   });
 
-  const doc = await pdfjsLib.getDocument({ data, ...getDocumentOptions }).promise;
+  const pdf = await loadingTask.promise;
+  const numPages = pdf.numPages;
+  const extractedPages = [];
 
-  try {
-    const images = [];
-    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
-      const page = await doc.getPage(pageNumber);
-      const natural = page.getViewport({ scale: 1 });
-      // Render at roughly `maxWidth` CSS pixels: wide enough for vision OCR to read small print,
-      // small enough that the JPEG stays well under Vercel's request-body limit.
-      const scale = Math.max(0.4, Math.min(2.5, maxWidth / natural.width));
-      const viewport = page.getViewport({ scale });
-      const canvas = makeCanvas(Math.floor(viewport.width), Math.floor(viewport.height));
-      const ctx = canvas.getContext('2d');
-      if (!ctx) throw new Error('This browser could not create a canvas to render the PDF page.');
+  for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+    const page = await pdf.getPage(pageNum);
+    const textContent = await page.getTextContent();
+    
+    // Extract textual tokens
+    const textItems = textContent.items.map(item => item.str).join(' ').trim();
 
-      // Scans often sit on a transparent page box; paint it white so the JPEG never has black text
-      // on a black/transparent background.
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      await page.render({ canvas, canvasContext: ctx, viewport, background: '#ffffff' }).promise;
-      images.push({ pageNumber, dataUrl: canvas.toDataURL('image/jpeg', quality) });
-      if (onPage) await onPage(pageNumber, doc.numPages);
-    }
-    return images;
-  } finally {
-    if (typeof doc.destroy === 'function') {
-      try { await doc.destroy(); } catch (e) { /* nothing useful to do if teardown fails */ }
+    // 3. Detect if this page is a flat image scan (zero or near-zero text)
+    if (textItems.length < 30) {
+      // Flat scan detected: render page to canvas and run OCR
+      const ocrText = await renderPageAndRunOCR(page);
+      extractedPages.push({
+        pageNumber: pageNum,
+        text: ocrText || "[No readable text found on scanned page]"
+      });
+    } else {
+      extractedPages.push({
+        pageNumber: pageNum,
+        text: textItems
+      });
     }
   }
+
+  // 4. Save to IndexedDB using another safe slice or the original untouched buffer
+  await saveToIndexedDB(fileOrBlob.name, rawBuffer.slice(0), extractedPages);
+
+  return extractedPages;
+}
+
+/**
+ * Renders a PDF page to an offscreen canvas and extracts text using Tesseract.js
+ */
+async function renderPageAndRunOCR(page) {
+  // Render at 2.0x scale for clear OCR recognition
+  const viewport = page.getViewport({ scale: 2.0 });
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+
+  await page.render({
+    canvasContext: context,
+    viewport: viewport
+  }).promise;
+
+  // Run Tesseract OCR on the canvas element directly
+  if (window.Tesseract) {
+    try {
+      const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
+      return text.trim();
+    } catch (err) {
+      console.error('OCR processing error:', err);
+      return '';
+    }
+  }
+  return '';
 }
