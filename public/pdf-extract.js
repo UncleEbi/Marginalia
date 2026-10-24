@@ -9,7 +9,7 @@ async function processDocument(fileOrBlob) {
   // 2. Clone the buffer using .slice(0)
   // PDF.js worker will consume and detach "pdfBufferCopy",
   // leaving "rawBuffer" completely intact.
-  const pdfBufferCopy = new Uint8Array(rawBuffer);
+  const pdfBufferCopy = new ArrayBuffer(rawBuffer.byteLength); new Uint8Array(pdfBufferCopy).set(new Uint8Array(rawBuffer));
 
   const loadingTask = pdfjsLib.getDocument({
     data: new Uint8Array(pdfBufferCopy),
@@ -46,7 +46,8 @@ async function processDocument(fileOrBlob) {
   }
 
   // 4. Save to IndexedDB using another safe slice or the original untouched buffer
-  await saveToIndexedDB(fileOrBlob.name, new Uint8Array(rawBuffer), extractedPages);
+  // Create independent copy for IndexedDB so rawBuffer stays intact after PDF processing
+  const rawBufferCopy = new ArrayBuffer(rawBuffer.byteLength); new Uint8Array(rawBufferCopy).set(new Uint8Array(rawBuffer)); await saveToIndexedDB(fileOrBlob.name, new Uint8Array(rawBufferCopy), extractedPages);
 
   return extractedPages;
 }
