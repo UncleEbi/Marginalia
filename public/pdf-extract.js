@@ -1,10 +1,8 @@
-// public/pdf-extract.js  Self-contained: imports pdf.js directly, never depends on app.js passing window.pdfjsLib
-import * as pdfjsDist from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs';
-
-// Configure the worker immediately
-if (!pdfjsDist.GlobalWorkerOptions.workerSrc) {
-  pdfjsDist.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs';
-}
+// public/pdf-extract.js  Self-contained: this module imports nothing, so it loads anywhere.
+// pdf.js itself comes from the caller: index.html imports the one pinned version (PDFJS_VERSION)
+// and passes it in, and the tests pass pdfjs-dist from node_modules the same way. A second, static
+// CDN import here would (a) pin a second version that can drift from the pinned one, and (b) make
+// this file impossible to import in Node, which is exactly what the PDF test suites do.
 
 /**
  * Safely creates an independent copy of an ArrayBuffer or TypedArray
@@ -20,17 +18,26 @@ function clonePdfData(data) {
   return data;
 }
 
+const LIB_REQUIRED = 'A PDF.js library instance is required to read this PDF.';
+
 /**
- * Helper to get an active pdfjsLib instance whether passed as an argument or from the direct import.
+ * True when the first argument was meant to be the library but cannot read PDFs (no getDocument),
+ * as opposed to being the document data of the one-argument form.
  */
-function resolveLib(passedLib) {
-  if (passedLib && typeof passedLib.getDocument === 'function') {
-    return passedLib;
-  }
-  if (window.pdfjsLib && typeof window.pdfjsLib.getDocument === 'function') {
+function isInvalidLibArg(arg) {
+  if (!arg || typeof arg !== 'object' || typeof arg.getDocument === 'function') return false;
+  return !(arg instanceof ArrayBuffer) && !ArrayBuffer.isView(arg);
+}
+
+/**
+ * The library always comes from the caller: the pinned instance index.html loaded, otherwise
+ * window.pdfjsLib for the one-argument form. There is no hidden copy behind this file.
+ */
+function resolveLib() {
+  if (typeof window !== 'undefined' && window.pdfjsLib && typeof window.pdfjsLib.getDocument === 'function') {
     return window.pdfjsLib;
   }
-  return pdfjsDist;
+  throw new Error(LIB_REQUIRED);
 }
 
 export async function extractPdfTexts(libOrData, dataOrOptions, maybeOptions) {
@@ -44,6 +51,7 @@ export async function extractPdfTexts(libOrData, dataOrOptions, maybeOptions) {
     data = dataOrOptions;
     options = maybeOptions || {};
   } else {
+    if (isInvalidLibArg(libOrData)) throw new Error(LIB_REQUIRED);
     lib = resolveLib();
     data = libOrData;
     options = dataOrOptions || {};
@@ -81,6 +89,7 @@ export async function renderPdfPagesToImages(libOrData, dataOrOptions, maybeOpti
     data = dataOrOptions;
     options = maybeOptions || {};
   } else {
+    if (isInvalidLibArg(libOrData)) throw new Error(LIB_REQUIRED);
     lib = resolveLib();
     data = libOrData;
     options = dataOrOptions || {};
