@@ -1020,8 +1020,9 @@ async function showShelfModal(mode = "shelf") {
 
       card.addEventListener('click', () => {
         stopAudio();
-        bookPages = b.pages;
-        bookChapters = b.chapters || [{ title: "Beginning", pageIndex: 0 }];
+        bookPages = repairSavedPages(b.pages);
+        bookChapters = (b.chapters || [{ title: "Beginning", pageIndex: 0 }])
+          .map(ch => ({ ...ch, title: repairMojibake(ch.title) }));
         if (sleepTimerMode === 'chapter') clearSleepTimer(); // saved chapter boundary belongs to the old document
         currentDocName = b.title;
         currentPage = b.currentPage || 0;
@@ -3259,7 +3260,7 @@ function decodeEpubText(bytes) {
     try {
       const replacementCount = (s) => (s.match(/\uFFFD/g) || []).length;
       const asDeclared = new TextDecoder(declared[1]).decode(bytes);
-      if (replacementCount(asDeclared) < replacementCount(new TextDecoder('utf-8').decode(bytes))) return asDeclared;
+      if (replacementCount(asDeclared) < replacementCount(new TextDecoder('utf-8').decode(bytes))) return repairMojibake(asDeclared);
     } catch (e) { /* unknown label — keep the UTF-8 reading */ }
   }
   return decodeTextRobustly(bytes);
@@ -3357,7 +3358,7 @@ async function parseEpubArchive(zip) {
       let chapTitle = "";
       const titleMatch = rawHtml.match(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/i) || rawHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
       if (titleMatch) {
-        chapTitle = titleMatch[1].replace(/<[^>]+>/g, '').trim();
+        chapTitle = repairMojibake(titleMatch[1].replace(/<[^>]+>/g, '').trim());
       }
       if (!chapTitle || chapTitle.length < 2) {
         chapTitle = `Section ${fIdx + 1}`;
@@ -3587,6 +3588,9 @@ async function processUploadedDocument(file) {
 function splitIntoSentences(text) {
   if (!text || !text.trim()) return [];
 
+  // Undo UTF-8 text that was decoded as windows-1252/latin1 before it is stored per sentence
+  text = repairMojibake(text);
+
   // --- Clean raw HTML/XML entities here before splitting ---
   text = text
     .replace(/&apos;/g, "'")
@@ -3607,18 +3611,89 @@ function splitIntoSentences(text) {
   return matches.map(s => s.replace(/\s+/g, ' ').trim()).filter(s => s.length > 0);
 }
 
+// Decodes bytes explicitly as UTF-8, which is what EPUB, DOCX, HTML and text files are supposed to
+// be. Only bytes that are not valid UTF-8 fall back to latin1, and text that still looks like a
+// UTF-8 file mislabeled as windows-1252 is repaired here before the reader ever sees it.
 function decodeTextRobustly(uint8) {
   let raw = new TextDecoder('utf-8').decode(uint8);
-  if (raw.includes('�') || /[ÂÃ -¿]{2,}/.test(raw)) {
+  if (raw.includes('\uFFFD')) {
     try {
       const asLatin1 = new TextDecoder('latin1').decode(uint8);
-      const asUtf8 = new TextDecoder('utf-8').decode(new TextEncoder().encode(asLatin1));
-      if (!asUtf8.includes('�')) {
-        raw = asUtf8;
-      }
+      // C1 control characters mean the bytes were binary noise, not latin1 text
+      if (!/[\u0080-\u009F]/.test(asLatin1)) raw = asLatin1;
     } catch (e) {}
   }
-  return raw;
+  return repairMojibake(raw);
+}
+
+// --- MOJIBAKE REPAIR ---
+// A UTF-8 file that declares (or is guessed to be) windows-1252 shows every smart quote, dash and
+// accent as noise: "donâ€™t" instead of "don’t", "Ã©" instead of "é". Repairing it happens in two
+// layers: re-reading the bytes as UTF-8 when they round-trip cleanly, and otherwise a fixed table.
+
+// Replacement table for damage a byte round-trip cannot undo. Three-character sequences must come
+// first: a bare "â€" would otherwise swallow the prefix of "â€“" (en dash) and "â€”" (em dash).
+// Right quotes lose their third byte because 0x9D is undefined in cp1252, hence the bare "â€".
+function cleanMojibake(text) {
+  if (!text || !/Ã|Â|â€/.test(text)) return text;
+  return text
+    .replace(/â€™/g, '’')
+    .replace(/â€˜/g, '‘')
+    .replace(/â€œ/g, '“')
+    .replace(/â€\u009D/g, '”')
+    .replace(/â€“/g, '–')
+    .replace(/â€”/g, '—')
+    .replace(/â€¦/g, '…')
+    .replace(/â€¢/g, '•')
+    .replace(/â€‹/g, '')
+    .replace(/â€/g, '”')
+    .replace(/\u00C2\u00A0/g, ' ')           // "Â" plus no-break space was one no-break space
+    .replace(/\u00C2(?=[\s.,;:!?)\]])/g, '') // stray "Â" in front of spacing or punctuation
+    .replace(/[\u0080-\u009F]/g, '');       // undefined cp1252 bytes, e.g. the lost 0x9D
+}
+
+// Rebuilds the bytes behind a wrong decode and reads them back as UTF-8, which repairs what a fixed
+// table cannot cover ("Ã©" -> "é", "Â£" -> "£"). Falls back to the table when the text mixes
+// encodings, so a genuine "Ã" or "Â" in the original is never destroyed.
+function repairMojibake(text) {
+  if (!text || !/Ã|Â|â€/.test(text)) return text;
+
+  const CP1252_TO_BYTE = {
+    '€': 0x80, '‚': 0x82, 'ƒ': 0x83, '„': 0x84, '…': 0x85, '†': 0x86, '‡': 0x87,
+    'ˆ': 0x88, '‰': 0x89, 'Š': 0x8A, '‹': 0x8B, 'Œ': 0x8C, 'Ž': 0x8E, '‘': 0x91,
+    '’': 0x92, '“': 0x93, '”': 0x94, '•': 0x95, '–': 0x96, '—': 0x97, '˜': 0x98,
+    '™': 0x99, 'š': 0x9A, '›': 0x9B, 'œ': 0x9C, 'ž': 0x9E, 'Ÿ': 0x9F
+  };
+
+  const bytes = new Uint8Array(text.length);
+  let length = 0;
+  for (const ch of text) {
+    const byte = CP1252_TO_BYTE[ch] !== undefined ? CP1252_TO_BYTE[ch] : ch.codePointAt(0);
+    if (byte > 0xFF) { length = -1; break; }
+    bytes[length++] = byte;
+  }
+
+  if (length > 0) {
+    try {
+      const decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, length));
+      if (!decoded.includes('\uFFFD') && !/Ã|Â|â€/.test(decoded)) return decoded;
+    } catch (e) { /* mixed encodings: use the replacement table instead */ }
+  }
+  return cleanMojibake(text);
+}
+
+// Documents imported before this fix were saved with mojibake already in their sentences, so the
+// library repairs them again when one is reopened instead of asking the reader to re-import.
+function repairSavedPages(pages) {
+  if (!Array.isArray(pages)) return pages;
+  return pages.map(page => (Array.isArray(page) ? page.map(block => {
+    if (typeof block === 'string') return repairMojibake(block);
+    if (block && typeof block === 'object') {
+      if (typeof block.text === 'string') return { ...block, text: repairMojibake(block.text) };
+      if (typeof block.caption === 'string') return { ...block, caption: repairMojibake(block.caption) };
+    }
+    return block;
+  }) : page));
 }
 
 // PRIMARY FILE IMPORT LISTENER (freemium teaser pattern)

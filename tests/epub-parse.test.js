@@ -16,7 +16,7 @@ globalThis.DOMParser = new JSDOM('').window.DOMParser;
 for (const name of [
   'normalizeZipPath', 'safeDecodeURIComponent', 'buildZipKeyIndex', 'findZipKey',
   'decodeEpubText', 'parseHtmlToBlocks', 'splitIntoSentences', 'decodeTextRobustly',
-  'garbageTextRatio', 'parseEpubArchive'
+  'cleanMojibake', 'repairMojibake', 'garbageTextRatio', 'parseEpubArchive'
 ]) {
   globalThis[name] = extractFunction(name);
 }
@@ -64,6 +64,20 @@ test('a normal EPUB becomes readable pages', async () => {
   assert.ok(result.pages.length > 0, 'pages were produced');
   assert.match(text, /The wind\./);
   assert.equal(result.chapters[0].title, 'One');
+});
+
+test('chapters and titles stored as windows-1252 mojibake are repaired on import', async () => {
+  // What an older EPUB looks like on disk: UTF-8 smart quotes were misread as cp1252 and saved back
+  const chapter = `<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Donâ€™t Panic</title></head>
+<body><p>Itâ€™s the cafÃ© on the corner.</p></body></html>`;
+
+  const result = await parseEpubArchive(makeEpub({}, chapter));
+  const text = result.pages.flat().join(' ');
+
+  assert.match(text, /It\u2019s the caf\u00E9 on the corner\./);
+  assert.doesNotMatch(text, /â€™|Ã©/);
+  assert.equal(result.chapters[0].title, 'Don\u2019t Panic');
 });
 
 test('an LCP-licensed EPUB with encrypted chapters is reported as DRM-protected', async () => {

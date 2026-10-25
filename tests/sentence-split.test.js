@@ -11,6 +11,11 @@ import { extractFunction, appSource } from './helpers/extract-function.mjs';
 import { extractPdfTexts } from '../public/pdf-extract.js';
 import { makePdf } from './helpers/make-pdf.mjs';
 
+// splitIntoSentences repairs cp1252-mislabeled UTF-8 through these two helpers
+for (const name of ['cleanMojibake', 'repairMojibake']) {
+  globalThis[name] = extractFunction(name);
+}
+
 const splitIntoSentences = extractFunction('splitIntoSentences');
 
 test('splits a paragraph into sentences', () => {
