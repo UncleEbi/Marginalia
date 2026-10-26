@@ -505,6 +505,7 @@ let userManualCalibration = 1.0;
 let sentenceSpeechStartTime = 0;
 let estimatedSentenceDurationMs = 0;
 let wordAnimFrameId = null;
+let lastHighlightedWord = -1;
 
 const browserSpeech = window.speechSynthesis;
 let currentUtterance = null;
@@ -648,6 +649,7 @@ function cancelAllSpeech() {
   currentUtterance = null;
   audioElement.onended = null;
   audioElement.ontimeupdate = null;
+  audioElement.onloadedmetadata = null;
   browserSpeech.cancel();
   try { audioElement.pause(); } catch (e) {}
   cancelWordAnimation();
@@ -1879,6 +1881,38 @@ function computeWordTimeline(words, speed, totalDuration = null) {
   };
 }
 
+// Native boundary events report a character offset into the sentence. Engines disagree on whether
+// that offset is the start of the word being spoken or a position inside it (hyphenated words,
+// quotes and numbers vary by platform), so the word index is resolved from the word run that
+// contains the offset. Counting the words before the offset instead lands one word ahead whenever
+// an engine reports a mid-word position.
+function wordIndexAtChar(text, charIndex) {
+  if (!text) return 0;
+  const limit = Math.max(0, Math.min(charIndex || 0, text.length));
+  const wordsBefore = text.slice(0, limit).split(/\s+/).filter(Boolean).length;
+  const atWordStart = limit === 0 || /\s/.test(text[limit - 1]);
+  return atWordStart ? wordsBefore : Math.max(0, wordsBefore - 1);
+}
+
+// Every native boundary is ground truth: the voice really did reach word N after this many seconds.
+// Dividing that by the estimate's start for the same word measures how wrong the estimate is for
+// this voice. The ratio is smoothed so the karaoke tracks the real pace - including how long the
+// engine takes to actually start talking - instead of the generic syllable-weighted guess, and it
+// keeps correcting within the sentence rather than only at the end of the next one.
+function nextAnchorRatio(prevRatio, actualSec, expectedSec) {
+  if (!(expectedSec > 0.05) || !(actualSec > 0)) return prevRatio;
+  const sample = actualSec / expectedSec;
+  if (sample < 0.4 || sample > 3) return prevRatio; // one bogus sample must not yank the timeline
+  return prevRatio * 0.65 + sample * 0.35;
+}
+
+// Cadence is a property of the voice, so it is remembered per voice: a slow voice's learned
+// multiplier would otherwise be handed to the next voice the reader picks.
+const cadenceByVoice = new Map();
+function voiceCadenceKey() {
+  return `${activeEngine}|${voicePicker.value}`;
+}
+
 function cancelWordAnimation() {
   if (wordAnimFrameId) {
     cancelAnimationFrame(wordAnimFrameId);
@@ -1985,6 +2019,7 @@ function renderPage(idx) {
 }
 
 function highlightActiveSentence() {
+  lastHighlightedWord = -1; // the sentence DOM is about to be (re)built
   document.querySelectorAll('.sentence').forEach(el => el.classList.remove('active-sentence'));
   document.querySelectorAll('.reader-diagram').forEach(el => el.classList.remove('active-diagram'));
   document.querySelectorAll('.word').forEach(el => el.classList.remove('active-word'));
@@ -2019,8 +2054,12 @@ function highlightActiveSentence() {
 function highlightActiveWord(wIdx) {
   if (highlightMode !== 'word') {
     document.querySelectorAll('.word.active-word').forEach(el => el.classList.remove('active-word'));
+    lastHighlightedWord = -1;
     return;
   }
+  // The frame loop runs ~60x a second, and the sentence can be hundreds of words long
+  if (wIdx === lastHighlightedWord) return;
+  lastHighlightedWord = wIdx;
   document.querySelectorAll(`#sent-${currentSentenceIdx} .word`).forEach((el, index) => {
     if (index === wIdx) el.classList.add('active-word');
     else el.classList.remove('active-word');
@@ -2088,44 +2127,47 @@ function speakBrowser(text) {
   utter.volume = playbackVolume;
   applyChosenVoice(utter);
 
+  // The cadence belongs to the voice: restore what this voice has already taught us about its pace
+  learnedCadenceMultiplier = cadenceByVoice.get(voiceCadenceKey()) || learnedCadenceMultiplier;
   const wordsArr = text.trim().split(/\s+/).filter(w => w.length > 0);
   const computed = computeWordTimeline(wordsArr, playbackSpeed);
   const timeline = computed.timeline;
   estimatedSentenceDurationMs = computed.totalEstMs;
 
-  let boundaryCount = 0;
-  let usingNativeBoundaries = false;
+  // Divisor for elapsed time: 1 until native boundaries prove the estimate is off, then the
+  // smoothed actual/estimated ratio for this voice (see nextAnchorRatio)
+  let anchorRatio = 1;
+  let utterStartedAt = 0;
 
   utter.onboundary = (e) => {
-    if (currentUtterance !== utter) return;
-    if (e.name === 'word') {
-      boundaryCount++;
-      if (boundaryCount > 1) {
-        usingNativeBoundaries = true;
-        cancelWordAnimation();
-      }
-      if (highlightMode === 'word') {
-        const words = text.slice(0, e.charIndex).trim().split(/\s+/);
-        highlightActiveWord(words[0] === "" ? 0 : words.length);
-      }
+    if (currentUtterance !== utter || !e || e.name !== 'word' || !utterStartedAt) return;
+    const idx = wordIndexAtChar(text, e.charIndex);
+    if (timeline[idx]) {
+      anchorRatio = nextAnchorRatio(anchorRatio,
+        (performance.now() - utterStartedAt) / 1000,
+        timeline[idx].start);
     }
+    if (highlightMode === 'word') highlightActiveWord(idx);
   };
 
   utter.onstart = () => {
     if (currentUtterance !== utter) return;
-    if (highlightMode === 'word') highlightActiveWord(0);
-    sentenceSpeechStartTime = performance.now();
+    utterStartedAt = sentenceSpeechStartTime = performance.now();
+    anchorRatio = 1;
+    if (highlightMode !== 'word') return;
+    highlightActiveWord(0);
 
-    const leadInDelayMs = 180 / playbackSpeed;
-
+    // The loop is never handed over to the boundary events: platforms that stop emitting them
+    // mid-sentence (Android does, on several voices) would freeze the highlight where they stopped.
+    // When boundaries do arrive they steer it instead, via anchorRatio.
     function renderFrame() {
-      if (!isPlaying || usingNativeBoundaries || highlightMode !== 'word' || currentUtterance !== utter) return;
-      const elapsedMs = performance.now() - sentenceSpeechStartTime;
-      const effectiveElapsedSec = Math.max(0, (elapsedMs - leadInDelayMs) / 1000);
+      if (!isPlaying || highlightMode !== 'word' || currentUtterance !== utter) return;
+      const wallMs = performance.now() - utterStartedAt;
+      const elapsedSec = wallMs / 1000 / anchorRatio;
 
       let activeIdx = 0;
       for (let i = 0; i < timeline.length; i++) {
-        if (effectiveElapsedSec >= timeline[i].start) {
+        if (elapsedSec >= timeline[i].start) {
           activeIdx = i;
         } else {
           break;
@@ -2133,14 +2175,13 @@ function speakBrowser(text) {
       }
       highlightActiveWord(activeIdx);
 
-      if (elapsedMs < estimatedSentenceDurationMs + 1200) {
+      // Keep animating for as long as this (possibly slower) voice is still expected to be speaking
+      if (wallMs < estimatedSentenceDurationMs * Math.max(1, anchorRatio) + 1500) {
         wordAnimFrameId = requestAnimationFrame(renderFrame);
       }
     }
 
-    if (highlightMode === 'word') {
-      wordAnimFrameId = requestAnimationFrame(renderFrame);
-    }
+    wordAnimFrameId = requestAnimationFrame(renderFrame);
   };
 
   utter.onend = () => {
@@ -2148,11 +2189,12 @@ function speakBrowser(text) {
     if (currentUtterance !== utter) return;
     cancelWordAnimation();
 
-    if (sentenceSpeechStartTime && estimatedSentenceDurationMs > 400) {
-      const actualElapsedMs = performance.now() - sentenceSpeechStartTime;
+    if (utterStartedAt && estimatedSentenceDurationMs > 400) {
+      const actualElapsedMs = performance.now() - utterStartedAt;
       const observedRatio = actualElapsedMs / estimatedSentenceDurationMs;
       if (observedRatio >= 0.65 && observedRatio <= 1.6) {
         learnedCadenceMultiplier = (learnedCadenceMultiplier * 0.6) + (observedRatio * 0.4);
+        cadenceByVoice.set(voiceCadenceKey(), learnedCadenceMultiplier);
       }
     }
 
@@ -2351,17 +2393,25 @@ async function speakServerless(text, opts = {}) {
     const wordsArr = text.trim().split(/\s+/).filter(w => w.length > 0);
     let timeline = null;
 
-    // Attach handlers BEFORE play() so a very short clip can't finish unobserved
-    audioElement.ontimeupdate = () => {
-      if (myToken !== speakToken) return;
-      if (!timeline && audioElement.duration) {
+    // The timeline is shaped by the clip's real duration, so it is built as soon as the metadata
+    // lands. The highlight itself is driven from requestAnimationFrame: currentTime is sampled
+    // ~60 times a second, where ontimeupdate fires about four times a second and left the karaoke
+    // visibly trailing the voice at 1.5x and above.
+    const buildTimeline = () => {
+      if (!timeline && audioElement.duration && Number.isFinite(audioElement.duration)) {
         timeline = computeWordTimeline(wordsArr, playbackSpeed, audioElement.duration).timeline;
       }
-      if (timeline && highlightMode === 'word') {
+      return timeline;
+    };
+
+    function renderFrame() {
+      if (myToken !== speakToken) return;
+      const tl = buildTimeline();
+      if (tl && highlightMode === 'word') {
         const cur = audioElement.currentTime;
         let activeIdx = 0;
-        for (let i = 0; i < timeline.length; i++) {
-          if (cur >= timeline[i].start) {
+        for (let i = 0; i < tl.length; i++) {
+          if (cur >= tl[i].start) {
             activeIdx = i;
           } else {
             break;
@@ -2369,9 +2419,15 @@ async function speakServerless(text, opts = {}) {
         }
         highlightActiveWord(activeIdx);
       }
-    };
+      if (!audioElement.paused && !audioElement.ended) {
+        wordAnimFrameId = requestAnimationFrame(renderFrame);
+      }
+    }
+
+    audioElement.onloadedmetadata = () => { buildTimeline(); };
 
     audioElement.onended = () => {
+      cancelWordAnimation();
       if (myToken !== speakToken || standalone || !isPlaying) return;
       currentSentenceIdx++;
       playCurrentSentence();
@@ -2382,6 +2438,12 @@ async function speakServerless(text, opts = {}) {
     audioElement.playbackRate = playbackSpeed;
     audioElement.volume = playbackVolume;
     await audioElement.play();
+
+    buildTimeline(); // preloaded clips already know their duration
+    if (highlightMode === 'word') {
+      cancelWordAnimation();
+      wordAnimFrameId = requestAnimationFrame(renderFrame);
+    }
 
     if (!standalone) preloadUpcoming(myToken);
 
@@ -2404,6 +2466,7 @@ function stopAudio() {
   syncMediaSessionState(false);
   cancelAllSpeech();
   document.querySelectorAll('.word').forEach(el => el.classList.remove('active-word'));
+  lastHighlightedWord = -1;
 }
 
 // --- CONTROLS HOOKS ---
@@ -3039,7 +3102,7 @@ voicePicker.addEventListener('change', () => {
     localStorage.setItem(`marginalia_neural_voice_${activeEngine}`, voicePicker.value);
   }
   clearAudioCache();
-  learnedCadenceMultiplier = 1.0;
+  learnedCadenceMultiplier = cadenceByVoice.get(voiceCadenceKey()) || 1.0;
   const selectedOption = voicePicker.options[voicePicker.selectedIndex];
   activeVoiceBadge.textContent = `${activeEngine === 'browser' ? '🎙️' : '⚡'} ${selectedOption ? selectedOption.text.split('(')[0].trim() : 'Voice'}`;
   
@@ -3058,7 +3121,7 @@ document.querySelectorAll('.engine-tab').forEach(tab => {
     activeEngine = tab.dataset.engine;
     localStorage.setItem('marginalia_active_engine', activeEngine); // return to this engine next visit
     clearAudioCache();
-    learnedCadenceMultiplier = 1.0;
+    learnedCadenceMultiplier = cadenceByVoice.get(voiceCadenceKey()) || 1.0;
     populateVoices();
     if (isPlaying) {
       stopAudio();
@@ -3728,7 +3791,7 @@ fileInput.addEventListener('change', async (event) => {
 
     currentPage = 0;
     currentSentenceIdx = 0;
-    learnedCadenceMultiplier = 1.0;
+    learnedCadenceMultiplier = cadenceByVoice.get(voiceCadenceKey()) || 1.0;
     preloadStatus.textContent = "Ready";
     renderPage(0);
 
