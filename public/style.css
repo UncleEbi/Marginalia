@@ -778,6 +778,11 @@ button.dock-time:hover { color: var(--accent); }
   border-color: rgba(255, 255, 255, 0.2);
 }
 
+/* The two scope buttons in the AI Summary modal stack flush otherwise */
+#sumChapterBtn {
+  margin-bottom: 12px;
+}
+
 /* DRAWER */
 .drawer-overlay {
   position: fixed;
