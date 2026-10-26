@@ -975,6 +975,13 @@ button.dock-time:hover { color: var(--accent); }
   flex-shrink: 0;
 }
 
+/* Close/Done/Cancel rows that keep their inline flex styles; .modal-card gives its children no
+   spacing of their own, so they otherwise sit flush against the last control above them. */
+.modal-footer-row {
+  margin-top: 0.75rem;
+  flex-shrink: 0;
+}
+
 .modal-title { font-size: 1.15rem; font-weight: 700; }
 
 /* SLEEP TIMER OPTIONS */
