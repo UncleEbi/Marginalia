@@ -1,8 +1,9 @@
-// Tests for the Pro plan table and the Paystack handlers that depend on it.
+// Tests for the paid plan table and the Paystack handlers that depend on it.
 //
 // The prices are the contract: the paywall shows them, checkout charges them, and the webhook
-// refuses anything that does not match them. These tests pin the table and the verification rules
-// so a pricing change cannot silently desync the three.
+// refuses anything that does not match them. These tests pin the table (two tiers x three terms,
+// each with its own allowance) and the verification rules so a pricing change cannot silently
+// desync the three.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,63 +12,100 @@ import crypto from 'node:crypto';
 import initHandler from '../api/paystack-init.js';
 import webhookHandler from '../api/paystack-webhook.js';
 import {
-  PRO_PLANS, DEFAULT_PLAN_ID, PRO_CURRENCY, MAX_PRO_STACK_DAYS, NGN_PER_USD,
-  getPlan, isProActive, nextProExpiry, proPriceDisplay, proUsdEquivalentDisplay, evaluateChargeEvent
+  PRO_PLANS, DEFAULT_PLAN_ID, PRO_CURRENCY, MAX_PRO_STACK_DAYS, NGN_PER_USD, TIERS,
+  getPlan, tierAllowance, isProActive, nextProExpiry, proPriceDisplay, proUsdEquivalentDisplay,
+  evaluateChargeEvent
 } from '../lib/pro-plan.js';
 
 const DAY = 86400000;
 const NOW = Date.parse('2026-10-15T12:00:00Z');
 const iso = (ms) => new Date(ms).toISOString();
-const monthly = getPlan('pro_monthly');
-const quarterly = getPlan('pro_quarterly');
-const yearly = getPlan('pro_yearly');
+
+const studentMonthly = getPlan('student_monthly');
+const studentQuarterly = getPlan('student_quarterly');
+const studentYearly = getPlan('student_yearly');
+const studioMonthly = getPlan('studio_monthly');
+const studioQuarterly = getPlan('studio_quarterly');
+const studioYearly = getPlan('studio_yearly');
 
 // ---------------------------------------------------------------- plan table
 
-test('offers monthly, 3-month and 12-month plans in that order', () => {
-  assert.deepEqual(PRO_PLANS.map((p) => p.id), ['pro_monthly', 'pro_quarterly', 'pro_yearly']);
-  assert.equal(DEFAULT_PLAN_ID, 'pro_monthly');
+test('lists Student Pass then Pro Studio, each monthly -> 3 months -> 12 months', () => {
+  assert.deepEqual(PRO_PLANS.map((p) => p.id), [
+    'student_monthly', 'student_quarterly', 'student_yearly',
+    'studio_monthly', 'studio_quarterly', 'studio_yearly'
+  ]);
+  assert.equal(DEFAULT_PLAN_ID, 'student_monthly', 'the cheapest entry price is the default');
+  assert.deepEqual(PRO_PLANS.map((p) => p.days), [30, 90, 365, 30, 90, 365]);
 });
 
-test('monthly price is the ₦12,000 equivalent of $9 (CBN ≈ ₦1,332/$)', () => {
-  assert.equal(monthly.amountKobo, 1200000);
-  assert.equal(monthly.days, 30);
-  // Sanity-check the intent, not just the number: ₦12,000 ≈ $9 at the rate used
-  assert.ok(Math.abs(monthly.amountKobo / 100 / 1332 - 9) < 0.2, 'monthly is within a few percent of $9');
+test('the two tiers are the proposed naira prices', () => {
+  assert.equal(studentMonthly.amountKobo, 200000, 'Student Pass is ₦2,000 / month');
+  assert.equal(studioMonthly.amountKobo, 500000, 'Pro Studio is ₦5,000 / month');
+  assert.equal(proPriceDisplay(studentMonthly.amountKobo), '₦2,000');
+  assert.equal(proPriceDisplay(studioMonthly.amountKobo), '₦5,000');
 });
 
-test('longer plans are priced off the monthly anchor', () => {
-  assert.equal(quarterly.amountKobo, monthly.amountKobo * 3, '3 months costs 3x monthly');
-  assert.equal(quarterly.days, 90);
-  assert.equal(yearly.amountKobo, monthly.amountKobo * 10, '12 months costs 10x monthly (2 months free)');
-  assert.equal(yearly.days, 365);
-  assert.match(yearly.note, /2 months free/);
+test('longer terms are priced off each tier’s own monthly anchor', () => {
+  assert.equal(studentQuarterly.amountKobo, studentMonthly.amountKobo * 3);
+  assert.equal(studentYearly.amountKobo, studentMonthly.amountKobo * 10, 'a year is 10 months (2 free)');
+  assert.equal(studioQuarterly.amountKobo, studioMonthly.amountKobo * 3);
+  assert.equal(studioYearly.amountKobo, studioMonthly.amountKobo * 10);
+  assert.deepEqual(
+    PRO_PLANS.map((p) => proPriceDisplay(p.amountKobo)),
+    ['₦2,000', '₦6,000', '₦20,000', '₦5,000', '₦15,000', '₦50,000']
+  );
+  assert.match(studentYearly.note, /2 months free/);
+});
+
+test('each plan seeds the tier allowance for every month it pays for', () => {
+  // Student Pass: 50 summaries + 15,000 neural chars per month
+  assert.equal(studentMonthly.summaryCredits, 50);
+  assert.equal(studentMonthly.neuralChars, 15000);
+  assert.equal(studentQuarterly.summaryCredits, 150);
+  assert.equal(studentQuarterly.neuralChars, 45000);
+  assert.equal(studentYearly.summaryCredits, 600);
+  assert.equal(studentYearly.neuralChars, 180000);
+
+  // Pro Studio: same summaries, the 100,000-char studio cap per month
+  assert.equal(studioMonthly.summaryCredits, 50);
+  assert.equal(studioMonthly.neuralChars, 100000);
+  assert.equal(studioYearly.summaryCredits, 600);
+  assert.equal(studioYearly.neuralChars, 1200000);
+});
+
+test('tiers carry their own label and monthly allowance', () => {
+  assert.equal(TIERS.student.label, 'Student Pass');
+  assert.equal(TIERS.studio.label, 'Pro Studio');
+  assert.deepEqual(tierAllowance('studio'), { label: 'Pro Studio', summaryCredits: 50, neuralChars: 100000 });
+  assert.equal(tierAllowance('free'), null, 'free is not a purchasable tier');
+  assert.equal(studentMonthly.tierLabel, 'Student Pass');
+  assert.equal(studioYearly.tier, 'studio');
 });
 
 test('unknown plan ids resolve to nothing', () => {
   assert.equal(getPlan('pro_lifetime'), null);
+  assert.equal(getPlan('pro_monthly'), null, 'the single-tier ids are gone');
   assert.equal(getPlan(''), null);
   assert.equal(getPlan(undefined), null);
 });
 
-test('prices display in the charged currency', () => {
-  assert.equal(proPriceDisplay(monthly.amountKobo), '₦12,000');
-  assert.equal(proPriceDisplay(quarterly.amountKobo), '₦36,000');
-  assert.equal(proPriceDisplay(yearly.amountKobo), '₦120,000');
-});
-
-test('each plan shows the documented USD estimate at the anchored rate', () => {
-  assert.equal(NGN_PER_USD, 1332, 'the estimate uses the rate the prices were derived from');
-  assert.equal(proUsdEquivalentDisplay(monthly.amountKobo), '$9.00');
-  assert.equal(proUsdEquivalentDisplay(quarterly.amountKobo), '$27.00');
-  assert.equal(proUsdEquivalentDisplay(yearly.amountKobo), '$90.00');
+test('each plan shows a USD estimate that does not overstate the cheap plan', () => {
+  assert.equal(NGN_PER_USD, 1332, 'the estimate uses the rate the naira prices were derived from');
+  // Cents below $10 (₦2,000 is ~$1.50, and "$2.00" would be a third more), whole dollars above it
+  assert.equal(proUsdEquivalentDisplay(studentMonthly.amountKobo), '$1.50');
+  assert.equal(proUsdEquivalentDisplay(studentQuarterly.amountKobo), '$4.50');
+  assert.equal(proUsdEquivalentDisplay(studentYearly.amountKobo), '$15');
+  assert.equal(proUsdEquivalentDisplay(studioMonthly.amountKobo), '$3.75');
+  assert.equal(proUsdEquivalentDisplay(studioQuarterly.amountKobo), '$11');
+  assert.equal(proUsdEquivalentDisplay(studioYearly.amountKobo), '$38');
 });
 
 test('the USD estimate is hidden, not invented, when it cannot be computed', () => {
   assert.equal(proUsdEquivalentDisplay(0), '');
   assert.equal(proUsdEquivalentDisplay('abc'), '');
-  assert.equal(proUsdEquivalentDisplay(monthly.amountKobo, 0), '', 'no rate → no estimate');
-  assert.equal(proUsdEquivalentDisplay(monthly.amountKobo, -5), '', 'negative rate → no estimate');
+  assert.equal(proUsdEquivalentDisplay(studentMonthly.amountKobo, 0), '', 'no rate → no estimate');
+  assert.equal(proUsdEquivalentDisplay(studentMonthly.amountKobo, -5), '', 'negative rate → no estimate');
 });
 
 // ------------------------------------------------------- expiry per plan
@@ -81,7 +119,7 @@ test('each plan grants its own duration', () => {
 
 test('renewing while active stacks from the current expiry', () => {
   const existing = NOW + 10 * DAY;
-  assert.equal(nextProExpiry(iso(existing), NOW, yearly.days, NOW).getTime(), existing + 365 * DAY);
+  assert.equal(nextProExpiry(iso(existing), NOW, studioYearly.days, NOW).getTime(), existing + 365 * DAY);
 });
 
 test('a stacked expiry cannot run past the cap', () => {
@@ -99,7 +137,7 @@ test('pro is active only while the expiry is in the future', () => {
 
 // ------------------------------------------------ webhook event evaluation
 
-const event = (over = {}, metaOver = {}, planId = 'pro_monthly') => ({
+const event = (over = {}, metaOver = {}, planId = 'student_monthly') => ({
   event: 'charge.success',
   data: {
     status: 'success',
@@ -122,8 +160,8 @@ test('accepts a correctly priced charge for each plan', () => {
 });
 
 test('rejects a charge whose amount does not match the plan it claims', () => {
-  // Paying the monthly price but claiming the yearly plan must not grant a year
-  const decision = evaluateChargeEvent(event({ amount: monthly.amountKobo }, {}, 'pro_yearly'));
+  // Paying the Student Pass price but claiming Pro Studio must not grant the studio quota
+  const decision = evaluateChargeEvent(event({ amount: studentMonthly.amountKobo }, {}, 'studio_monthly'));
   assert.equal(decision.ok, false);
   assert.match(decision.reason, /does not match/);
 });
@@ -160,18 +198,29 @@ const res = () => ({
 });
 const sign = (payload, secret) => crypto.createHmac('sha512', secret).update(payload).digest('hex');
 
-test('GET /api/paystack-init lists every plan with its display price', async () => {
+test('GET /api/paystack-init lists every plan with its price, tier and allowance', async () => {
   const r = res();
   await initHandler({ method: 'GET', headers: {} }, r);
 
   assert.equal(r.statusCode, 200);
   assert.equal(r.body.currency, PRO_CURRENCY);
-  assert.equal(r.body.default_plan, 'pro_monthly');
-  assert.deepEqual(r.body.plans.map((p) => p.id), ['pro_monthly', 'pro_quarterly', 'pro_yearly']);
-  assert.deepEqual(r.body.plans.map((p) => p.amount_display), ['₦12,000', '₦36,000', '₦120,000']);
+  assert.equal(r.body.default_plan, 'student_monthly');
+  assert.deepEqual(r.body.plans.map((p) => p.id), [
+    'student_monthly', 'student_quarterly', 'student_yearly',
+    'studio_monthly', 'studio_quarterly', 'studio_yearly'
+  ]);
+  assert.deepEqual(r.body.plans.map((p) => p.tier_label),
+    ['Student Pass', 'Student Pass', 'Student Pass', 'Pro Studio', 'Pro Studio', 'Pro Studio']);
+  assert.deepEqual(r.body.plans.map((p) => p.amount_display),
+    ['₦2,000', '₦6,000', '₦20,000', '₦5,000', '₦15,000', '₦50,000']);
+  assert.deepEqual(r.body.plans.map((p) => p.amount_usd_display),
+    ['$1.50', '$4.50', '$15', '$3.75', '$11', '$38']);
+  assert.deepEqual(r.body.plans.map((p) => p.days), [30, 90, 365, 30, 90, 365]);
+  assert.deepEqual(r.body.plans.map((p) => [p.summary_credits, p.neural_chars]), [
+    [50, 15000], [150, 45000], [600, 180000],
+    [50, 100000], [150, 300000], [600, 1200000]
+  ]);
   assert.equal(r.body.usd_rate, NGN_PER_USD);
-  assert.deepEqual(r.body.plans.map((p) => p.amount_usd_display), ['$9.00', '$27.00', '$90.00']);
-  assert.deepEqual(r.body.plans.map((p) => p.days), [30, 90, 365]);
 });
 
 test('POST rejects an unknown plan before touching Paystack', async () => {
@@ -185,7 +234,7 @@ test('POST rejects an unknown plan before touching Paystack', async () => {
 test('POST without a session is 401, and other methods are 405', async () => {
   process.env.PAYSTACK_SECRET_KEY = 'test_secret';
   const unauth = res();
-  await initHandler({ method: 'POST', headers: {}, body: { plan: 'pro_yearly' } }, unauth);
+  await initHandler({ method: 'POST', headers: {}, body: { plan: 'studio_yearly' } }, unauth);
   assert.equal(unauth.statusCode, 401);
 
   const bad = res();
@@ -208,7 +257,7 @@ test('webhook verifies the signature before anything else', async () => {
 
 test('webhook ignores a mismatched amount with 200 and never upgrades', async () => {
   process.env.PAYSTACK_SECRET_KEY = 'whsec_test';
-  const payload = JSON.stringify(event({ amount: 5000 }, {}, 'pro_yearly'));
+  const payload = JSON.stringify(event({ amount: 5000 }, {}, 'studio_yearly'));
   const r = res();
   await webhookHandler({ method: 'POST', headers: { 'x-paystack-signature': sign(payload, 'whsec_test') }, body: payload }, r);
   assert.equal(r.statusCode, 200);
@@ -228,7 +277,7 @@ test('webhook reports 500 when it cannot reach the database, so Paystack retries
   process.env.PAYSTACK_SECRET_KEY = 'whsec_test';
   process.env.SUPABASE_URL = 'http://127.0.0.1:1';
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'fake';
-  const payload = JSON.stringify(event({}, {}, 'pro_quarterly'));
+  const payload = JSON.stringify(event({}, {}, 'student_quarterly'));
   const r = res();
   await webhookHandler({ method: 'POST', headers: { 'x-paystack-signature': sign(payload, 'whsec_test') }, body: payload }, r);
   assert.equal(r.statusCode, 500);

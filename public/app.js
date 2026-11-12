@@ -342,6 +342,20 @@ function isProActiveClient(profile) {
   return Number.isFinite(exp) && exp > Date.now();
 }
 
+// Monthly allowances of the paid tiers (mirrors TIERS in lib/pro-plan.js). The server seeds the
+// balances at purchase; these only label their denominators, so a paid account is never shown
+// against the 5,000-character free allowance.
+const PLAN_ALLOWANCES = {
+  student: { name: 'Student Pass', neuralChars: 15000, summaries: 50 },
+  studio: { name: 'Pro Studio', neuralChars: 100000, summaries: 50 }
+};
+
+// The allowance an account actually bought, or null for free and expired accounts.
+function planAllowance(profile) {
+  if (!isProActiveClient(profile)) return null;
+  return PLAN_ALLOWANCES[profile.pro_tier] || null;
+}
+
 // --- PRO PLANS (every price comes from the server; the UI never invents one) ---
 let proPlansCache = null;
 
@@ -371,7 +385,8 @@ async function refreshProPriceLabels() {
   const data = await fetchProPlans();
   const monthly = planById(data, data && data.default_plan);
   if (monthly && profileUpgradeBtn) {
-    profileUpgradeBtn.textContent = `🌟 Upgrade to Pro (${monthly.amount_display}/mo)`;
+    // The default plan is the cheapest tier's monthly term, so this is the "from" price
+    profileUpgradeBtn.textContent = `🌟 Upgrade — from ${monthly.amount_display}/mo`;
   }
 }
 
@@ -395,13 +410,14 @@ async function openPaywall() {
     return;
   }
 
-  // "Marginalia Pro — ₦12,000 / month (Approx. ~$9.00 USD · Billed in NGN)" so global visitors
-  // aren't confused by the naira numbers. Every figure still comes from the server.
+  // "Student Pass — ₦2,000 / month (Approx. ~$1.50 USD · Billed in NGN)" so global visitors
+  // aren't confused by the naira numbers. Every figure still comes from the server, and the
+  // headline names the cheapest tier because that is the entry price.
   const monthly = planById(data, data.default_plan);
   if (headline && monthly) {
     const usd = monthly.amount_usd_display;
     headline.innerHTML = `
-      <span class="pro-price-main">Marginalia Pro — ${escapeHtml(monthly.amount_display)} / month</span>
+      <span class="pro-price-main">${escapeHtml(monthly.tier_label || 'Marginalia Pro')} — ${escapeHtml(monthly.amount_display)} / month</span>
       <span class="pro-price-detail">${usd ? `Approx. ~${escapeHtml(usd)} USD · ` : ''}Billed in ${escapeHtml(String(data.currency || 'NGN'))}</span>
     `;
     headline.style.display = '';
@@ -410,9 +426,11 @@ async function openPaywall() {
   data.plans.forEach((plan) => {
     const btn = document.createElement('button');
     btn.className = 'pro-plan-option' + (plan.id === data.default_plan ? ' featured' : '');
+    // Six rows share three duration labels, so each one has to name its tier
+    const planTitle = plan.tier_label ? `${plan.tier_label} · ${plan.label}` : plan.label;
     btn.innerHTML = `
       <span class="pro-plan-label">
-        ${escapeHtml(plan.label)}${plan.note ? ` <em>· ${escapeHtml(plan.note)}</em>` : ''}
+        ${escapeHtml(planTitle)}${plan.note ? ` <em>· ${escapeHtml(plan.note)}</em>` : ''}
       </span>
       <span class="pro-plan-price-col">
         <span class="pro-plan-price">${escapeHtml(plan.amount_display)}</span>
@@ -1360,7 +1378,7 @@ async function openProfileModal() {
 
   const { data: profile, error: profileError } = await supabaseClient
     .from('profiles')
-    .select('neural_chars_remaining, summary_credits_remaining, tier, pro_expires_at')
+    .select('neural_chars_remaining, summary_credits_remaining, tier, pro_tier, pro_expires_at')
     .eq('id', user.id)
     .maybeSingle();
 
@@ -1377,20 +1395,25 @@ async function openProfileModal() {
   }
 
   const tier = profile?.tier || 'free';
+  const allowance = planAllowance(profile);
   if (tier === 'pro') {
-    profileModalTier.textContent = isProActiveClient(profile)
-      ? `🌟 Pro · until ${new Date(profile.pro_expires_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`
-      : '⚡ Free Trial Account (Pro expired)';
+    profileModalTier.textContent = allowance
+      ? `🌟 ${allowance.name} · until ${new Date(profile.pro_expires_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`
+      : isProActiveClient(profile)
+        ? '🌟 Pro'
+        : '⚡ Free Trial Account (Pro expired)';
   } else {
     profileModalTier.textContent = '⚡ Free Trial Account';
   }
 
-  const chars = profile?.neural_chars_remaining ?? 5000;
-  profileNeuralCount.textContent = `${chars.toLocaleString()} / 5,000 Chars`;
-  const fillPct = Math.max(0, Math.min(100, (chars / 5000) * 100));
+  // The denominator is the allowance this account actually bought; free accounts get 5,000
+  const charAllowance = allowance ? allowance.neuralChars : 5000;
+  const chars = profile?.neural_chars_remaining ?? charAllowance;
+  profileNeuralCount.textContent = `${chars.toLocaleString()} / ${charAllowance.toLocaleString()} Chars`;
+  const fillPct = Math.max(0, Math.min(100, (chars / charAllowance) * 100));
   profileNeuralProgress.style.width = `${fillPct}%`;
 
-  const summaries = profile?.summary_credits_remaining ?? 3;
+  const summaries = profile?.summary_credits_remaining ?? (allowance ? allowance.summaries : 3);
   profileSummaryCount.textContent = `${summaries} Remaining`;
 
   const hasByok = Boolean(localStorage.getItem('marginalia_byok_openai') || localStorage.getItem('marginalia_byok_eleven'));
@@ -1714,10 +1737,12 @@ summarizeBtn.addEventListener('click', async () => {
       try {
         const { data: { session } } = await supabaseClient.auth.getSession();
         if (session) {
-          const { data: profile } = await supabaseClient.from('profiles').select('summary_credits_remaining, tier').eq('id', session.user.id).maybeSingle();
+          const { data: profile } = await supabaseClient.from('profiles').select('summary_credits_remaining, tier, pro_tier, pro_expires_at').eq('id', session.user.id).maybeSingle();
           if (profile) {
-            if (isProActiveClient(profile)) notice = "Plan: Pro (unlimited AI summaries)";
-            else {
+            const allowance = planAllowance(profile);
+            if (allowance) {
+              notice = `Plan: ${allowance.name} (${profile.summary_credits_remaining ?? 0} AI summaries left)`;
+            } else {
               const trials = profile.summary_credits_remaining ?? 3;
               notice = trials > 0 ? `Free trial: ${trials} AI summaries left` : "AI trial used up: offline summary active";
             }
@@ -1769,7 +1794,7 @@ async function triggerSummarize(mode) {
           }
           if (data && (res.status === 402 || data.trialExhausted)) {
             profileSummaryCount.textContent = '0 Remaining';
-            showToast("Free AI summaries used up. Using offline summary.");
+            showToast("AI summaries used up. Using offline summary.");
           } else if (res.ok && data && data.summary) {
             summary = data.summary;
             label = 'AI Summary';
@@ -1779,8 +1804,8 @@ async function triggerSummarize(mode) {
             } else if (typeof data.summaries_remaining === 'number') {
               profileSummaryCount.textContent = `${data.summaries_remaining} Remaining`;
               showToast(data.summaries_remaining === 0
-                ? "That was your last free AI summary."
-                : `Free AI summaries left: ${data.summaries_remaining}`);
+                ? "That was your last AI summary."
+                : `AI summaries left: ${data.summaries_remaining}`);
             }
           } else {
             const why = (data && data.error) ? data.error : `server error ${res.status}`;

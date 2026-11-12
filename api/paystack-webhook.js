@@ -12,10 +12,7 @@
 //     with 200 so Paystack does not retry them forever; transient failures return 500 so it does
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
-import {
-  PRO_SUMMARY_CREDITS, PRO_NEURAL_CHARS,
-  evaluateChargeEvent, nextProExpiry
-} from '../lib/pro-plan.js';
+import { getPlan, evaluateChargeEvent, nextProExpiry } from '../lib/pro-plan.js';
 
 // Prefer whatever raw bytes the platform preserved; otherwise re-serialise the parsed body
 // (V8 keeps key order and compact formatting, which round-trips Paystack's JSON byte-for-byte
@@ -37,9 +34,12 @@ function safeEqual(a, b) {
 }
 
 // Applies a verified charge: extends Pro by the purchased plan's duration (first purchase,
-// renewal, or an identical retry), and records the reference so the same payment is never
-// applied twice.
-async function applyProUpgrade(db, { userId, reference, paidAt, durationDays }) {
+// renewal, or an identical retry), seeds the tier's allowance, and records the reference so the
+// same payment is never applied twice.
+async function applyProUpgrade(db, { userId, reference, paidAt, durationDays, planId }) {
+  const plan = getPlan(planId);
+  if (!plan) throw new Error(`Unknown plan ${planId} in a verified charge.`);
+
   for (let attempt = 0; attempt < 5; attempt++) {
     const { data: row, error: readErr } = await db
       .from('profiles')
@@ -48,9 +48,9 @@ async function applyProUpgrade(db, { userId, reference, paidAt, durationDays }) 
       .maybeSingle();
 
     if (readErr) {
-      const missingColumn = /pro_expires_at/i.test(readErr.message || '');
+      const missingColumn = /pro_expires_at|pro_tier/i.test(readErr.message || '');
       throw new Error(missingColumn
-        ? 'profiles is missing the pro_expires_at column — run the SQL migration in supabase/migrations/ first.'
+        ? 'profiles is missing pro_expires_at or pro_tier — run the SQL migrations in supabase/migrations/ first.'
         : `Could not read the profile: ${readErr.message}`);
     }
     if (!row) return { applied: false, reason: 'no profile row for the paid user_id' };
@@ -66,10 +66,12 @@ async function applyProUpgrade(db, { userId, reference, paidAt, durationDays }) 
       .from('profiles')
       .update({
         tier: 'pro',
+        pro_tier: plan.tier,
         pro_expires_at: newExpiry.toISOString(),
         last_payment_reference: reference,
-        summary_credits_remaining: PRO_SUMMARY_CREDITS,
-        neural_chars_remaining: PRO_NEURAL_CHARS
+        // The plan's allowance for the whole term it just paid for
+        summary_credits_remaining: plan.summaryCredits,
+        neural_chars_remaining: plan.neuralChars
       })
       .eq('id', userId)
       .eq('tier', row.tier);
@@ -136,7 +138,7 @@ export default async function handler(req, res) {
     const result = await applyProUpgrade(db, decision);
 
     if (result.applied && !result.alreadyProcessed) {
-      console.log(`Paystack: ${decision.planId} (${decision.durationDays}d) granted to ${decision.userId} until ${result.expiresAt} (ref ${decision.reference}).`);
+      console.log(`Paystack: ${decision.planId} / ${plan.tier} (${decision.durationDays}d) granted to ${decision.userId} until ${result.expiresAt} (ref ${decision.reference}).`);
     }
     return res.status(200).send(result.alreadyProcessed ? 'Already processed' : 'Webhook processed');
   } catch (err) {

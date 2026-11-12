@@ -9,7 +9,8 @@ const supabase = createClient(
 
 // Flat image scans have no text layer, so the reader renders each PDF page to an image and posts it
 // here to get the text back. The credit gate matches /api/describe-image: BYOK users pay their own
-// key, signed-in users spend one summary credit per page, and Pro reads without a credit cost.
+// key, and every signed-in account spends one summary credit per page — free accounts start with 3,
+// a purchase seeds the plan's allowance (see lib/pro-plan.js), so a paid account is capped too.
 const OCR_SYSTEM_PROMPT =
   'You are an OCR engine. Transcribe every word of visible text from this scanned page image, ' +
   'in natural reading order. Keep paragraph breaks as blank lines and keep lists as separate lines. ' +
@@ -63,9 +64,11 @@ export default async function handler(req, res) {
       trialsLeft = profile?.summary_credits_remaining ?? 0;
     }
 
-    if (!isPro && trialsLeft <= 0) {
+    if (trialsLeft <= 0) {
       return res.status(402).json({
-        error: 'Free trial AI credits exhausted. Add an OpenAI key in Options or upgrade to Pro.',
+        error: isPro
+          ? "Your plan's AI credits are used up. Renew your plan or add your own OpenAI key in Options."
+          : 'Free trial AI credits exhausted. Add an OpenAI key in Options or upgrade to Pro.',
         trialExhausted: true
       });
     }
@@ -113,7 +116,7 @@ export default async function handler(req, res) {
     const raw = aiData.choices?.[0]?.message?.content?.trim() || '';
     const text = raw === '(no readable text)' ? '' : raw;
 
-    if (!customOpenAiKey && !isPro && user) {
+    if (!customOpenAiKey && user) {
       await supabase
         .from('profiles')
         .update({ summary_credits_remaining: Math.max(0, trialsLeft - 1) })

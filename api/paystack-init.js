@@ -2,8 +2,8 @@
 //
 // Pro checkout. The SERVER owns every price: the request may only name a plan, never an amount.
 //
-//   GET  -> 200 { currency, default_plan, usd_rate, plans: [{ id, label, note, days, amount_kobo,
-//                                                    amount_display, amount_usd_display }] }
+//   GET  -> 200 { currency, default_plan, usd_rate, plans: [{ id, tier, tier_label, label, note,
+//           days, amount_kobo, amount_display, amount_usd_display, summary_credits, neural_chars }] }
 //           No auth: the paywall uses it to show prices.
 //   POST -> 200 { authorization_url, plan, amount_kobo, currency, days }
 //           headers: Authorization (Supabase session, required)
@@ -15,9 +15,15 @@ import { PRO_CURRENCY, PRO_PLANS, DEFAULT_PLAN_ID, getPlan, proPriceDisplay, pro
 function planList() {
   return PRO_PLANS.map((p) => ({
     id: p.id,
+    // Which tier this row buys and what it grants for the whole term, so the paywall can say
+    // what the money gets without duplicating the allowances in the client.
+    tier: p.tier,
+    tier_label: p.tierLabel,
     label: p.label,
     note: p.note,
     days: p.days,
+    summary_credits: p.summaryCredits,
+    neural_chars: p.neuralChars,
     amount_kobo: p.amountKobo,
     amount_display: proPriceDisplay(p.amountKobo),
     // Display-only estimate for global visitors; null when it cannot be computed, so the UI

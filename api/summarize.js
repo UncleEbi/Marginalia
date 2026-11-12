@@ -145,16 +145,18 @@ export default async function handler(req, res) {
         await downgradeExpiredPro(db, userId);
       }
 
-      // 2. Use up one free summary BEFORE generating it (given back below if generation fails)
-      if (!isPro) {
-        summariesRemaining = await changeCredits(db, userId, -1);
-        if (summariesRemaining === null) {
-          throw new HttpError(402,
-            'Free trial summaries exhausted. Add an OpenAI key in Options or upgrade to Pro.',
-            { trialExhausted: true, summaries_remaining: 0 });
-        }
-        reservedCredit = true;
+      // 2. Spend one summary BEFORE generating it (given back below if generation fails).
+      // Every tier spends from this balance; the tier only decides how big it is (3 free, or the
+      // plan's allowance seeded at purchase), so a paid account is capped rather than unlimited.
+      summariesRemaining = await changeCredits(db, userId, -1);
+      if (summariesRemaining === null) {
+        throw new HttpError(402,
+          isPro
+            ? "Your plan's AI summaries are used up. Renew your plan or add an OpenAI key in Options."
+            : 'Free trial summaries exhausted. Add an OpenAI key in Options or upgrade to Pro.',
+          { trialExhausted: true, summaries_remaining: 0 });
       }
+      reservedCredit = true;
     }
 
     // 3. Generate the summary
@@ -196,8 +198,8 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       summary,
-      summaries_remaining: isPro || isByok ? null : summariesRemaining,
-      unlimited: isPro || isByok,
+      summaries_remaining: isByok ? null : summariesRemaining,
+      unlimited: isByok,
       byok: isByok
     });
 

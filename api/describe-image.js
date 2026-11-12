@@ -49,9 +49,11 @@ export default async function handler(req, res) {
       trialsLeft = profile?.summary_credits_remaining ?? 0;
     }
 
-    if (!isPro && trialsLeft <= 0) {
+    if (trialsLeft <= 0) {
       return res.status(402).json({
-        error: 'Free trial AI credits exhausted. Add an OpenAI key in Options or upgrade to Pro.',
+        error: isPro
+          ? "Your plan's AI credits are used up. Renew your plan or add your own OpenAI key in Options."
+          : 'Free trial AI credits exhausted. Add an OpenAI key in Options or upgrade to Pro.',
         trialExhausted: true
       });
     }
@@ -101,7 +103,7 @@ export default async function handler(req, res) {
     const aiData = await aiRes.json();
     const explanation = aiData.choices?.[0]?.message?.content?.trim();
 
-    if (!customOpenAiKey && !isPro && user) {
+    if (!customOpenAiKey && user) {
       await supabase
         .from('profiles')
         .update({ summary_credits_remaining: Math.max(0, trialsLeft - 1) })
