@@ -613,6 +613,7 @@ const profileModalTier = document.getElementById('profileModalTier');
 const profileNeuralCount = document.getElementById('profileNeuralCount');
 const profileNeuralProgress = document.getElementById('profileNeuralProgress');
 const profileSummaryCount = document.getElementById('profileSummaryCount');
+const profileRefillNote = document.getElementById('profileRefillNote');
 const profileByokStatus = document.getElementById('profileByokStatus');
 const profileOpenOptionsBtn = document.getElementById('profileOpenOptionsBtn');
 const profileUpgradeBtn = document.getElementById('profileUpgradeBtn');
@@ -1329,6 +1330,7 @@ function resetProfileModalPlaceholders() {
   profileNeuralCount.textContent = '—';
   profileNeuralProgress.style.width = '0%';
   profileSummaryCount.textContent = '—';
+  if (profileRefillNote) profileRefillNote.style.display = 'none';
   profileByokStatus.textContent = '—';
   profileByokStatus.style.color = 'var(--text-muted)';
 }
@@ -1378,7 +1380,7 @@ async function openProfileModal() {
 
   const { data: profile, error: profileError } = await supabaseClient
     .from('profiles')
-    .select('neural_chars_remaining, summary_credits_remaining, tier, pro_tier, pro_expires_at')
+    .select('neural_chars_remaining, summary_credits_remaining, tier, pro_tier, pro_expires_at, pro_quota_resets_at')
     .eq('id', user.id)
     .maybeSingle();
 
@@ -1388,6 +1390,7 @@ async function openProfileModal() {
     profileNeuralCount.textContent = '—';
     profileNeuralProgress.style.width = '0%';
     profileSummaryCount.textContent = '—';
+    profileRefillNote.style.display = 'none';
     const keys = Boolean(localStorage.getItem('marginalia_byok_openai') || localStorage.getItem('marginalia_byok_eleven'));
     profileByokStatus.textContent = keys ? 'Active (Keys Configured)' : 'None Added';
     profileModal.style.display = 'flex';
@@ -1415,6 +1418,16 @@ async function openProfileModal() {
 
   const summaries = profile?.summary_credits_remaining ?? (allowance ? allowance.summaries : 3);
   profileSummaryCount.textContent = `${summaries} Remaining`;
+
+  // Paid allowances refill every period; say when, so a spent balance does not read as a dead end.
+  // Free accounts never refill, so the line stays hidden for them.
+  const refillAt = profile?.pro_quota_resets_at ? Date.parse(profile.pro_quota_resets_at) : NaN;
+  if (allowance && Number.isFinite(refillAt)) {
+    profileRefillNote.textContent = `\u{1F504} Refreshes ${new Date(refillAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+    profileRefillNote.style.display = '';
+  } else {
+    profileRefillNote.style.display = 'none';
+  }
 
   const hasByok = Boolean(localStorage.getItem('marginalia_byok_openai') || localStorage.getItem('marginalia_byok_eleven'));
   if (hasByok) {
