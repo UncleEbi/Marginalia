@@ -46,19 +46,9 @@
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
   <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png" />
 
-  <!-- iPad Launch Screens (apple-touch-startup-image)
-       iOS only shows a splash on "Add to Home Screen" apps, and it only uses the image whose
-       media query exactly matches the device's CSS viewport. Each iPad family therefore needs
-       its own image at that model's native @2x resolution, in both orientations:
-         iPad 9.7" / Air 1-2 / mini 4   768 x 1024   -> 1536 x 2048
-         iPad mini 6                    744 x 1133   -> 1488 x 2266
-         iPad 7/8/9 (10.2")            810 x 1080   -> 1620 x 2160
-         iPad 10 / Air 11" M2-M3 (10.9") 820 x 1180 -> 1640 x 2360
-         iPad Pro 10.5" / Air 3         834 x 1112   -> 1668 x 2224
-         iPad Pro 11" (1-4) / Air 4-5   834 x 1194   -> 1668 x 2388
-         iPad Pro 11" M4                834 x 1210   -> 1668 x 2420
-         iPad Pro 12.9" / 13"           1024 x 1366  -> 2048 x 2732
-       All are flat #0b1120 with the app mark, so they blend into the manifest background. -->
+  <!-- Launch screens (apple-touch-startup-image): one image per device viewport and orientation
+       in icons/splash/, at that model's native scale. iOS only uses the image whose media query
+       matches the viewport exactly, so the filename names the device and the query its ratio. -->
   <link rel="apple-touch-startup-image" media="screen and (device-width: 768px) and (device-height: 1024px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="icons/splash/ipad-9-7-portrait.png" />
   <link rel="apple-touch-startup-image" media="screen and (device-width: 1024px) and (device-height: 768px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)" href="icons/splash/ipad-9-7-landscape.png" />
 
@@ -84,22 +74,8 @@
   <link rel="apple-touch-startup-image" media="screen and (device-width: 1366px) and (device-height: 1024px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)" href="icons/splash/ipad-pro-12-9-landscape.png" />
 
 
-  <!-- iPhone Launch Screens (apple-touch-startup-image)
-       Same rule as the iPad set: the media query must match the device viewport exactly,
-       and the image must be that viewport at the model's native scale. iPhone XR/11 and
-       XS Max/11 Pro Max share a 414x896 viewport, so the pixel ratio is part of the query.
-         5/5s/SE1        320 x 568  @2x -> 640 x 1136
-         6/7/8/SE2-3     375 x 667  @2x -> 750 x 1334
-         6+/7+/8+        414 x 736  @2x -> 828 x 1472
-         X/XS/11P/mini   375 x 812  @3x -> 1125 x 2436
-         XR/11           414 x 896  @2x -> 828 x 1792
-         XS Max/11P Max  414 x 896  @3x -> 1242 x 2688
-         12/13/14        390 x 844  @3x -> 1170 x 2532
-         12PM/13PM/14+   428 x 926  @3x -> 1284 x 2778
-         14 Pro/15/16    393 x 852  @3x -> 1179 x 2556
-         14PM/15+/15PM/16+ 430 x 932 @3x -> 1290 x 2796
-         16 Pro          402 x 874  @3x -> 1206 x 2622
-         16 Pro Max      440 x 956  @3x -> 1320 x 2868 -->
+  <!-- iPhone launch screens, same rule. The pixel ratio is part of the query because iPhone
+       XR/11 and XS Max/11 Pro Max share a 414x896 viewport at different scales. -->
   <link rel="apple-touch-startup-image" media="screen and (device-width: 320px) and (device-height: 568px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="icons/splash/iphone-5-se1-portrait.png" />
   <link rel="apple-touch-startup-image" media="screen and (device-width: 568px) and (device-height: 320px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)" href="icons/splash/iphone-5-se1-landscape.png" />
   <link rel="apple-touch-startup-image" media="screen and (device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="icons/splash/iphone-8-se2-portrait.png" />
