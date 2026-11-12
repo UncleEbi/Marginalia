@@ -12,9 +12,10 @@ import crypto from 'node:crypto';
 import initHandler from '../api/paystack-init.js';
 import webhookHandler from '../api/paystack-webhook.js';
 import {
-  PRO_PLANS, DEFAULT_PLAN_ID, PRO_CURRENCY, MAX_PRO_STACK_DAYS, NGN_PER_USD, TIERS, PRO_PERIOD_DAYS,
+  PRO_PLANS, DEFAULT_PLAN_ID, DEFAULT_CURRENCY, MAX_PRO_STACK_DAYS, NGN_PER_USD, TIERS, PRO_PERIOD_DAYS,
   getPlan, tierAllowance, isProActive, nextProExpiry, nextQuotaReset, isQuotaResetDue, renewProQuota,
-  refreshProQuota, proPriceDisplay, proUsdEquivalentDisplay, evaluateChargeEvent
+  refreshProQuota, planAmount, currencyForCountry, proPriceDisplay, proUsdEquivalentDisplay,
+  evaluateChargeEvent
 } from '../lib/pro-plan.js';
 
 const DAY = 86400000;
@@ -39,21 +40,46 @@ test('lists Student Pass then Pro Studio, each monthly -> 3 months -> 12 months'
   assert.deepEqual(PRO_PLANS.map((p) => p.days), [30, 90, 365, 30, 90, 365]);
 });
 
-test('the two tiers are the proposed naira prices', () => {
-  assert.equal(studentMonthly.amountKobo, 200000, 'Student Pass is ₦2,000 / month');
-  assert.equal(studioMonthly.amountKobo, 500000, 'Pro Studio is ₦5,000 / month');
-  assert.equal(proPriceDisplay(studentMonthly.amountKobo), '₦2,000');
-  assert.equal(proPriceDisplay(studioMonthly.amountKobo), '₦5,000');
+test('the naira market keeps the proposed prices', () => {
+  assert.equal(planAmount(studentMonthly, 'NGN'), 200000, 'Student Pass is ₦2,000 / month');
+  assert.equal(planAmount(studioMonthly, 'NGN'), 500000, 'Pro Studio is ₦5,000 / month');
+  assert.equal(proPriceDisplay(planAmount(studentMonthly, 'NGN'), 'NGN'), '₦2,000');
+  assert.equal(proPriceDisplay(planAmount(studioMonthly, 'NGN'), 'NGN'), '₦5,000');
 });
 
-test('longer terms are priced off each tier’s own monthly anchor', () => {
-  assert.equal(studentQuarterly.amountKobo, studentMonthly.amountKobo * 3);
-  assert.equal(studentYearly.amountKobo, studentMonthly.amountKobo * 10, 'a year is 10 months (2 free)');
-  assert.equal(studioQuarterly.amountKobo, studioMonthly.amountKobo * 3);
-  assert.equal(studioYearly.amountKobo, studioMonthly.amountKobo * 10);
+test('the international market pays dollars, far above the naira price', () => {
+  assert.equal(planAmount(studentMonthly, 'USD'), 799, 'Student Pass is $7.99 / month');
+  assert.equal(planAmount(studioMonthly, 'USD'), 1999, 'Pro Studio is $19.99 / month');
+  assert.equal(proPriceDisplay(planAmount(studentMonthly, 'USD'), 'USD'), '$7.99');
+  assert.equal(proPriceDisplay(planAmount(studioMonthly, 'USD'), 'USD'), '$19.99');
+  // The dollar table is its own price, not ₦2,000 converted (~$1.50)
+  assert.ok(planAmount(studentMonthly, 'USD') / 100 > (200000 / 100) / NGN_PER_USD * 4);
+});
+
+test('the market is chosen from the country, and only one market is ever offered', () => {
+  assert.equal(currencyForCountry('NG'), 'NGN');
+  assert.equal(currencyForCountry('ng'), 'NGN');
+  assert.equal(currencyForCountry('US'), 'USD');
+  assert.equal(currencyForCountry('GB'), 'USD');
+  assert.equal(currencyForCountry(''), DEFAULT_CURRENCY, 'no country → home market');
+  assert.equal(currencyForCountry(undefined), DEFAULT_CURRENCY);
+  assert.equal(currencyForCountry(null), DEFAULT_CURRENCY);
+});
+
+test('longer terms are priced off each tier’s own monthly anchor, in both markets', () => {
+  for (const currency of ['NGN', 'USD']) {
+    assert.equal(planAmount(studentQuarterly, currency), planAmount(studentMonthly, currency) * 3);
+    assert.equal(planAmount(studentYearly, currency), planAmount(studentMonthly, currency) * 10, 'a year is 10 months (2 free)');
+    assert.equal(planAmount(studioQuarterly, currency), planAmount(studioMonthly, currency) * 3);
+    assert.equal(planAmount(studioYearly, currency), planAmount(studioMonthly, currency) * 10);
+  }
   assert.deepEqual(
-    PRO_PLANS.map((p) => proPriceDisplay(p.amountKobo)),
+    PRO_PLANS.map((p) => proPriceDisplay(planAmount(p, 'NGN'), 'NGN')),
     ['₦2,000', '₦6,000', '₦20,000', '₦5,000', '₦15,000', '₦50,000']
+  );
+  assert.deepEqual(
+    PRO_PLANS.map((p) => proPriceDisplay(planAmount(p, 'USD'), 'USD')),
+    ['$7.99', '$23.97', '$79.90', '$19.99', '$59.97', '$199.90']
   );
   assert.match(studentYearly.note, /2 months free/);
 });
@@ -88,19 +114,19 @@ test('unknown plan ids resolve to nothing', () => {
 test('each plan shows a USD estimate that does not overstate the cheap plan', () => {
   assert.equal(NGN_PER_USD, 1332, 'the estimate uses the rate the naira prices were derived from');
   // Cents below $10 (₦2,000 is ~$1.50, and "$2.00" would be a third more), whole dollars above it
-  assert.equal(proUsdEquivalentDisplay(studentMonthly.amountKobo), '$1.50');
-  assert.equal(proUsdEquivalentDisplay(studentQuarterly.amountKobo), '$4.50');
-  assert.equal(proUsdEquivalentDisplay(studentYearly.amountKobo), '$15');
-  assert.equal(proUsdEquivalentDisplay(studioMonthly.amountKobo), '$3.75');
-  assert.equal(proUsdEquivalentDisplay(studioQuarterly.amountKobo), '$11');
-  assert.equal(proUsdEquivalentDisplay(studioYearly.amountKobo), '$38');
+  assert.equal(proUsdEquivalentDisplay(planAmount(studentMonthly, 'NGN')), '$1.50');
+  assert.equal(proUsdEquivalentDisplay(planAmount(studentQuarterly, 'NGN')), '$4.50');
+  assert.equal(proUsdEquivalentDisplay(planAmount(studentYearly, 'NGN')), '$15');
+  assert.equal(proUsdEquivalentDisplay(planAmount(studioMonthly, 'NGN')), '$3.75');
+  assert.equal(proUsdEquivalentDisplay(planAmount(studioQuarterly, 'NGN')), '$11');
+  assert.equal(proUsdEquivalentDisplay(planAmount(studioYearly, 'NGN')), '$38');
 });
 
 test('the USD estimate is hidden, not invented, when it cannot be computed', () => {
   assert.equal(proUsdEquivalentDisplay(0), '');
   assert.equal(proUsdEquivalentDisplay('abc'), '');
-  assert.equal(proUsdEquivalentDisplay(studentMonthly.amountKobo, 0), '', 'no rate → no estimate');
-  assert.equal(proUsdEquivalentDisplay(studentMonthly.amountKobo, -5), '', 'negative rate → no estimate');
+  assert.equal(proUsdEquivalentDisplay(planAmount(studentMonthly, 'NGN'), 0), '', 'no rate → no estimate');
+  assert.equal(proUsdEquivalentDisplay(planAmount(studentMonthly, 'NGN'), -5), '', 'negative rate → no estimate');
 });
 
 // ------------------------------------------------------- expiry per plan
@@ -235,12 +261,12 @@ test('refreshProQuota refills a due account and leaves a current one alone', asy
 
 // ------------------------------------------------ webhook event evaluation
 
-const event = (over = {}, metaOver = {}, planId = 'student_monthly') => ({
+const event = (over = {}, metaOver = {}, planId = 'student_monthly', currency = 'NGN') => ({
   event: 'charge.success',
   data: {
     status: 'success',
-    amount: getPlan(planId).amountKobo,
-    currency: PRO_CURRENCY,
+    amount: planAmount(getPlan(planId), currency),
+    currency,
     reference: 'ref_abc123',
     paid_at: '2026-10-15T11:55:00Z',
     metadata: { user_id: 'user-1', plan: planId, ...metaOver },
@@ -248,20 +274,36 @@ const event = (over = {}, metaOver = {}, planId = 'student_monthly') => ({
   }
 });
 
-test('accepts a correctly priced charge for each plan', () => {
+test('accepts a correctly priced charge for each plan in either currency', () => {
   for (const plan of PRO_PLANS) {
-    const decision = evaluateChargeEvent(event({}, {}, plan.id));
-    assert.equal(decision.ok, true, `${plan.id} accepted`);
-    assert.equal(decision.planId, plan.id);
-    assert.equal(decision.durationDays, plan.days);
+    for (const currency of ['NGN', 'USD']) {
+      const decision = evaluateChargeEvent(event({}, {}, plan.id, currency));
+      assert.equal(decision.ok, true, `${plan.id} in ${currency} accepted`);
+      assert.equal(decision.planId, plan.id);
+      assert.equal(decision.durationDays, plan.days);
+      assert.equal(decision.currency, currency);
+    }
   }
 });
 
 test('rejects a charge whose amount does not match the plan it claims', () => {
   // Paying the Student Pass price but claiming Pro Studio must not grant the studio quota
-  const decision = evaluateChargeEvent(event({ amount: studentMonthly.amountKobo }, {}, 'studio_monthly'));
+  const decision = evaluateChargeEvent(event({ amount: planAmount(studentMonthly, 'NGN') }, {}, 'studio_monthly', 'NGN'));
   assert.equal(decision.ok, false);
   assert.match(decision.reason, /does not match/);
+});
+
+test('rejects a dollar amount arriving as a naira charge', () => {
+  // $7.99 has to be a $7.99 charge; arriving as NGN it is not ₦2,000 and buys nothing
+  const decision = evaluateChargeEvent(event({ amount: 799 }, {}, 'student_monthly', 'NGN'));
+  assert.equal(decision.ok, false);
+  assert.match(decision.reason, /does not match/);
+});
+
+test('rejects a currency the plans are not sold in', () => {
+  const decision = evaluateChargeEvent(event({ currency: 'EUR' }, {}, 'student_monthly', 'EUR'));
+  assert.equal(decision.ok, false);
+  assert.match(decision.reason, /not sold in EUR/);
 });
 
 test('rejects an unknown plan in the metadata', () => {
@@ -273,7 +315,6 @@ test('rejects an unknown plan in the metadata', () => {
 test('rejects missing plan, missing user, wrong currency and failed status', () => {
   assert.equal(evaluateChargeEvent(event({}, { plan: '' })).ok, false, 'missing plan');
   assert.equal(evaluateChargeEvent(event({}, { user_id: undefined })).ok, false, 'missing user_id');
-  assert.equal(evaluateChargeEvent(event({ currency: 'USD' })).ok, false, 'wrong currency');
   assert.equal(evaluateChargeEvent(event({ status: 'failed' })).ok, false, 'failed status');
   assert.equal(evaluateChargeEvent({ event: 'invoice.created', data: {} }).ok, false, 'other event type');
   assert.equal(evaluateChargeEvent(null).ok, false, 'null payload');
@@ -301,7 +342,8 @@ test('GET /api/paystack-init lists every plan with its price, tier and allowance
   await initHandler({ method: 'GET', headers: {} }, r);
 
   assert.equal(r.statusCode, 200);
-  assert.equal(r.body.currency, PRO_CURRENCY);
+  assert.equal(r.body.currency, 'NGN', 'no geo header → home market');
+  assert.equal(r.body.country, null);
   assert.equal(r.body.default_plan, 'student_monthly');
   assert.deepEqual(r.body.plans.map((p) => p.id), [
     'student_monthly', 'student_quarterly', 'student_yearly',
@@ -319,6 +361,27 @@ test('GET /api/paystack-init lists every plan with its price, tier and allowance
     [50, 100000], [50, 100000], [50, 100000]
   ]);
   assert.equal(r.body.usd_rate, NGN_PER_USD);
+});
+
+test('a visitor outside Nigeria sees only dollar prices', async () => {
+  const r = res();
+  await initHandler({ method: 'GET', headers: { 'x-vercel-ip-country': 'US' } }, r);
+
+  assert.equal(r.statusCode, 200);
+  assert.equal(r.body.currency, 'USD');
+  assert.equal(r.body.country, 'US');
+  assert.deepEqual(r.body.plans.map((p) => p.amount), [799, 2397, 7990, 1999, 5997, 19990]);
+  assert.deepEqual(r.body.plans.map((p) => p.amount_display),
+    ['$7.99', '$23.97', '$79.90', '$19.99', '$59.97', '$199.90']);
+  assert.deepEqual(r.body.plans.map((p) => p.amount_usd_display), [null, null, null, null, null, null],
+    'a dollar price needs no dollar estimate beside it');
+});
+
+test('a Nigerian visitor is offered naira even behind another proxy', async () => {
+  const r = res();
+  await initHandler({ method: 'GET', headers: { 'cf-ipcountry': 'NG' } }, r);
+  assert.equal(r.body.currency, 'NGN');
+  assert.equal(r.body.plans[0].amount_display, '₦2,000');
 });
 
 test('POST rejects an unknown plan before touching Paystack', async () => {
