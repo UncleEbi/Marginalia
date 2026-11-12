@@ -10,7 +10,7 @@
 //   - `voice` as an alias of `voiceId`
 //   - `Accept: audio/mpeg` returns the raw mp3 bytes instead of JSON
 import { createClient } from '@supabase/supabase-js';
-import { isProActive, downgradeExpiredPro, FREE_NEURAL_CHARS } from '../lib/pro-plan.js';
+import { isProActive, downgradeExpiredPro, FREE_NEURAL_CHARS, refreshProQuota } from '../lib/pro-plan.js';
 
 const OPENAI_MAX_CHARS = 4096; // hard limit of the OpenAI speech endpoint
 
@@ -263,11 +263,8 @@ export default async function handler(req, res) {
         return res.status(401).json({ error: 'Invalid or expired user session.' });
       }
 
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('neural_chars_remaining, tier, pro_expires_at')
-        .eq('id', user.id)
-        .single();
+      // Applies a due monthly allowance refill before the balance is read
+      const { profile } = await refreshProQuota(supabase, user.id);
 
       remainingChars = profile?.neural_chars_remaining ?? FREE_NEURAL_CHARS;
       if (profile?.tier === 'pro' && !isProActive(profile)) {

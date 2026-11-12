@@ -12,9 +12,9 @@ import crypto from 'node:crypto';
 import initHandler from '../api/paystack-init.js';
 import webhookHandler from '../api/paystack-webhook.js';
 import {
-  PRO_PLANS, DEFAULT_PLAN_ID, PRO_CURRENCY, MAX_PRO_STACK_DAYS, NGN_PER_USD, TIERS,
-  getPlan, tierAllowance, isProActive, nextProExpiry, proPriceDisplay, proUsdEquivalentDisplay,
-  evaluateChargeEvent
+  PRO_PLANS, DEFAULT_PLAN_ID, PRO_CURRENCY, MAX_PRO_STACK_DAYS, NGN_PER_USD, TIERS, PRO_PERIOD_DAYS,
+  getPlan, tierAllowance, isProActive, nextProExpiry, nextQuotaReset, isQuotaResetDue, renewProQuota,
+  refreshProQuota, proPriceDisplay, proUsdEquivalentDisplay, evaluateChargeEvent
 } from '../lib/pro-plan.js';
 
 const DAY = 86400000;
@@ -58,20 +58,15 @@ test('longer terms are priced off each tier’s own monthly anchor', () => {
   assert.match(studentYearly.note, /2 months free/);
 });
 
-test('each plan seeds the tier allowance for every month it pays for', () => {
-  // Student Pass: 50 summaries + 15,000 neural chars per month
-  assert.equal(studentMonthly.summaryCredits, 50);
-  assert.equal(studentMonthly.neuralChars, 15000);
-  assert.equal(studentQuarterly.summaryCredits, 150);
-  assert.equal(studentQuarterly.neuralChars, 45000);
-  assert.equal(studentYearly.summaryCredits, 600);
-  assert.equal(studentYearly.neuralChars, 180000);
-
-  // Pro Studio: same summaries, the 100,000-char studio cap per month
-  assert.equal(studioMonthly.summaryCredits, 50);
-  assert.equal(studioMonthly.neuralChars, 100000);
-  assert.equal(studioYearly.summaryCredits, 600);
-  assert.equal(studioYearly.neuralChars, 1200000);
+test('every term grants the tier’s monthly allowance, refilled each period', () => {
+  // The term buys time, not a bigger lump: a yearly plan refills monthly for twelve months
+  for (const plan of PRO_PLANS) {
+    const tier = TIERS[plan.tier];
+    assert.equal(plan.summaryCredits, tier.summaryCredits, `${plan.id} grants the monthly summaries`);
+    assert.equal(plan.neuralChars, tier.neuralChars, `${plan.id} grants the monthly chars`);
+  }
+  assert.deepEqual(PRO_PLANS.map((p) => p.months), [1, 3, 12, 1, 3, 12]);
+  assert.equal(studioMonthly.neuralChars, 100000, 'the studio cap is per month, not per term');
 });
 
 test('tiers carry their own label and monthly allowance', () => {
@@ -133,6 +128,109 @@ test('pro is active only while the expiry is in the future', () => {
   assert.equal(isProActive({ tier: 'pro', pro_expires_at: iso(NOW - DAY) }, NOW), false);
   assert.equal(isProActive({ tier: 'pro', pro_expires_at: null }, NOW), false);
   assert.equal(isProActive({ tier: 'free', pro_expires_at: iso(NOW + DAY) }, NOW), false);
+});
+
+// ------------------------------------------------ monthly allowance refills
+
+test('the next refill lands a whole period ahead, never in the past', () => {
+  assert.equal(PRO_PERIOD_DAYS, 30);
+  assert.equal(nextQuotaReset(NOW, NOW).getTime(), NOW + 30 * DAY, 'fresh anchor lands one period out');
+  assert.equal(nextQuotaReset(iso(NOW + 5 * DAY), NOW).getTime(), NOW + 5 * DAY, 'inside the period: unchanged');
+  // A refill that runs a day late still steps from the purchase date, so the next one is 29 days
+  // out rather than 30: the monthly anniversary does not drift forward every time someone is slow.
+  assert.equal(nextQuotaReset(iso(NOW - DAY), NOW).getTime(), NOW + 29 * DAY);
+
+  // Three months away still gets one refill, not three stacked ones
+  const stale = NOW - 75 * DAY;
+  const moved = nextQuotaReset(iso(stale), NOW).getTime();
+  assert.ok(moved > NOW, 'the anchor always lands in the future');
+  assert.equal(moved, stale + 90 * DAY);
+});
+
+test('a refill is due only for an active subscription with an anchor in the past', () => {
+  const active = { tier: 'pro', pro_tier: 'student', pro_expires_at: iso(NOW + 200 * DAY) };
+  assert.equal(isQuotaResetDue({ ...active, pro_quota_resets_at: iso(NOW - DAY) }, NOW), true);
+  assert.equal(isQuotaResetDue({ ...active, pro_quota_resets_at: iso(NOW + DAY) }, NOW), false);
+  assert.equal(isQuotaResetDue({ ...active, pro_quota_resets_at: null }, NOW), false, 'no anchor: left alone');
+  assert.equal(isQuotaResetDue({ ...active, pro_quota_resets_at: iso(NOW - DAY), pro_expires_at: iso(NOW - DAY) }, NOW), false, 'expired');
+  assert.equal(isQuotaResetDue({ tier: 'free', pro_quota_resets_at: iso(NOW - DAY) }, NOW), false, 'free');
+});
+
+// Minimal stand-in for the Supabase row builder: one profile row, written only while the anchor
+// the caller read still matches (the compare-and-swap renewProQuota relies on).
+function fakeDb(row) {
+  const state = { row: { ...row }, updates: 0 };
+  const api = {
+    from() {
+      const q = {
+        filters: [], patch: null,
+        update(patch) { q.patch = patch; return q; },
+        select() { return q; },
+        eq(k, v) { q.filters.push([k, v]); return q; },
+        maybeSingle() {
+          const matches = q.filters.every(([k, v]) => state.row[k] === v);
+          return Promise.resolve({ data: matches ? state.row : null, error: null });
+        },
+        then(resolve) {
+          const matches = q.filters.every(([k, v]) => state.row[k] === v);
+          if (matches && q.patch) { Object.assign(state.row, q.patch); state.updates++; }
+          return Promise.resolve({ data: matches ? [state.row] : [], error: null }).then(resolve);
+        }
+      };
+      return q;
+    }
+  };
+  return { api, state };
+}
+
+test('a due refill restores the monthly allowance and moves the anchor', async () => {
+  const { api, state } = fakeDb({
+    id: 'user-1', tier: 'pro', pro_tier: 'studio',
+    pro_expires_at: iso(NOW + 300 * DAY), pro_quota_resets_at: iso(NOW),
+    summary_credits_remaining: 0, neural_chars_remaining: 12
+  });
+
+  const renewed = await renewProQuota(api, 'user-1', state.row, NOW);
+  assert.equal(renewed.summary_credits_remaining, 50, 'studio summaries per month');
+  assert.equal(renewed.neural_chars_remaining, 100000, 'studio chars per month');
+  assert.equal(Date.parse(renewed.pro_quota_resets_at), NOW + 30 * DAY);
+  assert.equal(state.updates, 1);
+});
+
+test('two refills racing on the same snapshot only apply once', async () => {
+  const { api, state } = fakeDb({
+    id: 'user-1', tier: 'pro', pro_tier: 'student',
+    pro_expires_at: iso(NOW + 300 * DAY), pro_quota_resets_at: iso(NOW - DAY),
+    summary_credits_remaining: 2, neural_chars_remaining: 0
+  });
+  const snapshot = { ...state.row };
+
+  assert.ok(await renewProQuota(api, 'user-1', snapshot, NOW), 'first refill lands');
+  assert.equal(await renewProQuota(api, 'user-1', snapshot, NOW), null, 'second finds the anchor moved');
+  assert.equal(state.updates, 1, 'the balance was reset exactly once');
+});
+
+test('refreshProQuota refills a due account and leaves a current one alone', async () => {
+  const due = fakeDb({
+    id: 'user-1', tier: 'pro', pro_tier: 'student',
+    pro_expires_at: iso(NOW + 200 * DAY), pro_quota_resets_at: iso(NOW - DAY),
+    summary_credits_remaining: 1, neural_chars_remaining: 40
+  });
+  const refreshed = await refreshProQuota(due.api, 'user-1', NOW);
+  assert.equal(refreshed.error, null);
+  assert.equal(refreshed.profile.summary_credits_remaining, 50, 'refilled to the monthly allowance');
+  assert.equal(refreshed.profile.neural_chars_remaining, 15000);
+  assert.equal(due.state.updates, 1);
+
+  // Mid-period: the balance is whatever the account has left, untouched
+  const current = fakeDb({
+    id: 'user-1', tier: 'pro', pro_tier: 'studio',
+    pro_expires_at: iso(NOW + 200 * DAY), pro_quota_resets_at: iso(NOW + 5 * DAY),
+    summary_credits_remaining: 7, neural_chars_remaining: 999
+  });
+  const untouched = await refreshProQuota(current.api, 'user-1', NOW);
+  assert.equal(untouched.profile.summary_credits_remaining, 7);
+  assert.equal(current.state.updates, 0);
 });
 
 // ------------------------------------------------ webhook event evaluation
@@ -217,8 +315,8 @@ test('GET /api/paystack-init lists every plan with its price, tier and allowance
     ['$1.50', '$4.50', '$15', '$3.75', '$11', '$38']);
   assert.deepEqual(r.body.plans.map((p) => p.days), [30, 90, 365, 30, 90, 365]);
   assert.deepEqual(r.body.plans.map((p) => [p.summary_credits, p.neural_chars]), [
-    [50, 15000], [150, 45000], [600, 180000],
-    [50, 100000], [150, 300000], [600, 1200000]
+    [50, 15000], [50, 15000], [50, 15000],
+    [50, 100000], [50, 100000], [50, 100000]
   ]);
   assert.equal(r.body.usd_rate, NGN_PER_USD);
 });

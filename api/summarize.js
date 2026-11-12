@@ -6,7 +6,7 @@
 //   200 -> { summary, summaries_remaining, unlimited, byok }
 //   401 sign-in needed | 402 free trial used up ({ trialExhausted: true }) | 500/502 server or provider problem
 import { createClient } from '@supabase/supabase-js';
-import { isProActive, downgradeExpiredPro } from '../lib/pro-plan.js';
+import { isProActive, downgradeExpiredPro, refreshProQuota } from '../lib/pro-plan.js';
 
 const FREE_TRIAL_SUMMARIES = 3;
 
@@ -114,16 +114,13 @@ export default async function handler(req, res) {
         ? createClient(url, key)
         : createClient(url, key, { global: { headers: { Authorization: `Bearer ${token}` } } });
 
-      const { data: profile, error: profileErr } = await db
-        .from('profiles')
-        .select('tier, pro_expires_at')
-        .eq('id', userId)
-        .maybeSingle();
+      // Reads the profile and applies a due monthly allowance refill in the same step
+      const { profile, error: profileErr } = await refreshProQuota(db, userId);
       // A failed read must never be treated as "no profile": writing a fresh row could reset a Pro user to free
       if (profileErr) {
         const missingColumn = /pro_expires_at/i.test(profileErr.message || '');
         throw new HttpError(500, 'Could not read your account. Please try again.' + (missingColumn
-          ? ' (profiles is missing pro_expires_at — run the SQL migration in supabase/migrations/ first.)'
+          ? ' (profiles is missing pro_expires_at, pro_tier or pro_quota_resets_at — run the SQL migrations in supabase/migrations/ first.)'
           : ''));
       }
 

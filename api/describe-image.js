@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { isProActive, downgradeExpiredPro, FREE_SUMMARY_CREDITS } from '../lib/pro-plan.js';
+import { isProActive, downgradeExpiredPro, FREE_SUMMARY_CREDITS, refreshProQuota } from '../lib/pro-plan.js';
 
 // Supabase settings come from the server's environment ONLY. (This file used to also read them
 // from request headers at module scope — with `req` out of scope — which could never work.)
@@ -34,11 +34,8 @@ export default async function handler(req, res) {
     }
     user = authData.user;
 
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('summary_credits_remaining, tier, pro_expires_at')
-      .eq('id', user.id)
-      .single();
+    // Applies a due monthly allowance refill before the balance is read
+    const { profile } = await refreshProQuota(supabase, user.id);
 
     isPro = isProActive(profile);
     if (profile?.tier === 'pro' && !isPro) {

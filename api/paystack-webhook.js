@@ -12,7 +12,7 @@
 //     with 200 so Paystack does not retry them forever; transient failures return 500 so it does
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
-import { getPlan, evaluateChargeEvent, nextProExpiry } from '../lib/pro-plan.js';
+import { getPlan, evaluateChargeEvent, nextProExpiry, PRO_PERIOD_DAYS } from '../lib/pro-plan.js';
 
 // Prefer whatever raw bytes the platform preserved; otherwise re-serialise the parsed body
 // (V8 keeps key order and compact formatting, which round-trips Paystack's JSON byte-for-byte
@@ -69,9 +69,11 @@ async function applyProUpgrade(db, { userId, reference, paidAt, durationDays, pl
         pro_tier: plan.tier,
         pro_expires_at: newExpiry.toISOString(),
         last_payment_reference: reference,
-        // The plan's allowance for the whole term it just paid for
+        // The first monthly allowance; the endpoints refill it every PRO_PERIOD_DAYS while the
+        // paid period lasts, so a 12-month charge does not hand over 12 months at once.
         summary_credits_remaining: plan.summaryCredits,
-        neural_chars_remaining: plan.neuralChars
+        neural_chars_remaining: plan.neuralChars,
+        pro_quota_resets_at: new Date(paidAt + PRO_PERIOD_DAYS * 86400000).toISOString()
       })
       .eq('id', userId)
       .eq('tier', row.tier);
