@@ -25,6 +25,22 @@ function getRawBody(req) {
   return JSON.stringify(req.body ?? '');
 }
 
+// Paystack hands Vercel an already-parsed body, so the signature above is computed over
+// JSON.stringify(req.body). That usually round-trips byte-for-byte, but escapes (a name with an
+// accent) or reordered keys would change the digest for a perfectly genuine delivery. Instead of
+// dropping a real payment, ask Paystack about the reference: their answer is authoritative, and a
+// forged request cannot make an invented reference verify.
+async function verifyTransaction(secret, reference) {
+  const url = `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`;
+  const response = await fetch(url, { headers: { Authorization: `Bearer ${secret}` } });
+  const body = await response.json().catch(() => null);
+  if (response.status === 404 || response.status === 400) return null; // no such transaction
+  if (!response.ok || !body || !body.status || !body.data) {
+    throw new Error(`Paystack verify failed (${response.status})`);
+  }
+  return { event: 'charge.success', data: body.data };
+}
+
 // Constant-time hex comparison; unequal lengths are rejected up front (timingSafeEqual throws).
 function safeEqual(a, b) {
   const bufA = Buffer.from(String(a || ''), 'utf8');
@@ -35,8 +51,10 @@ function safeEqual(a, b) {
 
 // Applies a verified charge: extends Pro by the purchased plan's duration (first purchase,
 // renewal, or an identical retry), seeds the tier's allowance, and records the reference so the
-// same payment is never applied twice.
-async function applyProUpgrade(db, { userId, reference, paidAt, durationDays, planId }) {
+// same payment is never applied twice. Creates the profile row when the payer does not have one
+// yet — profile rows are otherwise created lazily by the first summary/TTS call, and a payment
+// must never be acknowledged and then dropped because the account was too new.
+export async function applyProUpgrade(db, { userId, reference, paidAt, durationDays, planId, customerEmail }) {
   const plan = getPlan(planId);
   if (!plan) throw new Error(`Unknown plan ${planId} in a verified charge.`);
 
@@ -48,12 +66,39 @@ async function applyProUpgrade(db, { userId, reference, paidAt, durationDays, pl
       .maybeSingle();
 
     if (readErr) {
-      const missingColumn = /pro_expires_at|pro_tier/i.test(readErr.message || '');
+      const missingColumn = /pro_expires_at|pro_tier|pro_quota_resets_at/i.test(readErr.message || '');
       throw new Error(missingColumn
-        ? 'profiles is missing pro_expires_at or pro_tier — run the SQL migrations in supabase/migrations/ first.'
+        ? 'profiles is missing pro_expires_at, pro_tier or pro_quota_resets_at — run the SQL migrations in supabase/migrations/ first.'
         : `Could not read the profile: ${readErr.message}`);
     }
-    if (!row) return { applied: false, reason: 'no profile row for the paid user_id' };
+
+    // One monthly allowance, refilled by the endpoints every PRO_PERIOD_DAYS while Pro lasts.
+    const allowance = {
+      summary_credits_remaining: plan.summaryCredits,
+      neural_chars_remaining: plan.neuralChars,
+      pro_quota_resets_at: new Date(paidAt + PRO_PERIOD_DAYS * 86400000).toISOString()
+    };
+
+    if (!row) {
+      // First row for this account: the payment is the thing that creates it. The insert carries
+      // the whole purchase, so a concurrent delivery that wins the race simply leaves this one to
+      // retry against the row it created (duplicate id) instead of crediting twice.
+      const firstExpiry = nextProExpiry(null, paidAt, durationDays);
+      const { error: insertErr } = await db.from('profiles').insert({
+        id: userId,
+        ...(customerEmail ? { email: customerEmail } : {}),
+        tier: 'pro',
+        pro_tier: plan.tier,
+        pro_expires_at: firstExpiry.toISOString(),
+        last_payment_reference: reference,
+        ...allowance
+      });
+      if (insertErr) {
+        if (/duplicate|unique|already exists/i.test(insertErr.message || '')) continue;
+        throw new Error(`Could not create the paid profile: ${insertErr.message}`);
+      }
+      return { applied: true, expiresAt: firstExpiry.toISOString() };
+    }
 
     if (row.last_payment_reference === reference) {
       return { applied: true, alreadyProcessed: true, expiresAt: row.pro_expires_at };
@@ -69,11 +114,8 @@ async function applyProUpgrade(db, { userId, reference, paidAt, durationDays, pl
         pro_tier: plan.tier,
         pro_expires_at: newExpiry.toISOString(),
         last_payment_reference: reference,
-        // The first monthly allowance; the endpoints refill it every PRO_PERIOD_DAYS while the
-        // paid period lasts, so a 12-month charge does not hand over 12 months at once.
-        summary_credits_remaining: plan.summaryCredits,
-        neural_chars_remaining: plan.neuralChars,
-        pro_quota_resets_at: new Date(paidAt + PRO_PERIOD_DAYS * 86400000).toISOString()
+        // A 12-month charge seeds one allowance, not twelve: the endpoints refill it per period.
+        ...allowance
       })
       .eq('id', userId)
       .eq('tier', row.tier);
@@ -103,17 +145,6 @@ export default async function handler(req, res) {
     return res.status(500).send('PAYSTACK_SECRET_KEY is not configured.');
   }
 
-  const signature = req.headers['x-paystack-signature'];
-  const digest = crypto
-    .createHmac('sha512', secret)
-    .update(getRawBody(req))
-    .digest('hex');
-
-  if (!safeEqual(digest, signature)) {
-    return res.status(401).send('Invalid webhook signature');
-  }
-
-  // Signature is authentic from here on; decide whether this event grants anything.
   // The body may arrive already parsed (normal on Vercel) or as raw JSON bytes, so normalise.
   let event = req.body;
   if (typeof event === 'string' || Buffer.isBuffer(event)) {
@@ -123,6 +154,31 @@ export default async function handler(req, res) {
       return res.status(400).send('Invalid JSON payload');
     }
   }
+
+  const signature = req.headers['x-paystack-signature'];
+  const digest = crypto
+    .createHmac('sha512', secret)
+    .update(getRawBody(req))
+    .digest('hex');
+
+  if (!safeEqual(digest, signature)) {
+    const reference = event?.data?.reference || (event?.data?.id != null ? String(event.data.id) : '');
+    let verified = null;
+    try {
+      if (reference) verified = await verifyTransaction(secret, reference);
+    } catch (err) {
+      // Paystack itself is unreachable: make Paystack retry rather than reject a real payment.
+      console.error('Paystack webhook could not verify the transaction:', err.message);
+      return res.status(502).send('Could not verify the transaction; retry.');
+    }
+    if (!verified) {
+      return res.status(401).send('Invalid webhook signature');
+    }
+    console.warn(`Paystack webhook signature mismatch, accepted via transaction verify (${reference}).`);
+    event = verified;
+  }
+
+  // Authenticated (by signature or by Paystack's own record); decide whether this grants anything.
   const decision = evaluateChargeEvent(event);
   if (!decision.ok) {
     console.warn(`Paystack webhook ignored (${decision.reason}).`);
@@ -137,7 +193,10 @@ export default async function handler(req, res) {
 
   try {
     const db = createClient(supabaseUrl, supabaseKey);
-    const result = await applyProUpgrade(db, decision);
+    const result = await applyProUpgrade(db, {
+      ...decision,
+      customerEmail: event?.data?.customer?.email || null
+    });
 
     if (result.applied && !result.alreadyProcessed) {
       console.log(`Paystack: ${decision.planId} / ${plan.tier} (${decision.durationDays}d) granted to ${decision.userId} until ${result.expiresAt} (ref ${decision.reference}).`);

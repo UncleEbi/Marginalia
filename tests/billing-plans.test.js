@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 
 import initHandler from '../api/paystack-init.js';
-import webhookHandler from '../api/paystack-webhook.js';
+import webhookHandler, { applyProUpgrade } from '../api/paystack-webhook.js';
 import {
   PRO_PLANS, DEFAULT_PLAN_ID, DEFAULT_CURRENCY, MAX_PRO_STACK_DAYS, NGN_PER_USD, TIERS, PRO_PERIOD_DAYS,
   getPlan, tierAllowance, isProActive, nextProExpiry, nextQuotaReset, isQuotaResetDue, renewProQuota,
@@ -407,13 +407,64 @@ test('POST without a session is 401, and other methods are 405', async () => {
 test('webhook verifies the signature before anything else', async () => {
   process.env.PAYSTACK_SECRET_KEY = 'whsec_test';
   const payload = JSON.stringify(event());
-  const bad = res();
-  await webhookHandler({ method: 'POST', headers: { 'x-paystack-signature': sign(payload, 'wrong') }, body: payload }, bad);
-  assert.equal(bad.statusCode, 401, 'wrong signature');
+  // An unexplained signature is checked against Paystack, and there is no such transaction
+  const restore = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: false, status: 404, json: async () => ({ status: false }) });
+  try {
+    const bad = res();
+    await webhookHandler({ method: 'POST', headers: { 'x-paystack-signature': sign(payload, 'wrong') }, body: payload }, bad);
+    assert.equal(bad.statusCode, 401, 'wrong signature');
 
-  const missing = res();
-  await webhookHandler({ method: 'POST', headers: {}, body: payload }, missing);
-  assert.equal(missing.statusCode, 401, 'missing signature');
+    const missing = res();
+    await webhookHandler({ method: 'POST', headers: {}, body: payload }, missing);
+    assert.equal(missing.statusCode, 401, 'missing signature');
+  } finally {
+    globalThis.fetch = restore;
+  }
+});
+
+test('a genuine delivery Vercel re-serialised is accepted via transaction verify', async () => {
+  process.env.PAYSTACK_SECRET_KEY = 'whsec_test';
+  process.env.SUPABASE_URL = 'http://127.0.0.1:1';
+  process.env.SUPABASE_SERVICE_ROLE_KEY = 'fake';
+  const good = event();
+  let asked = null;
+
+  const restore = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    const target = String(url);
+    if (!target.includes('/transaction/verify/')) {
+      // Supabase shares global fetch; make its read fail so the test stops before applying anything
+      return { ok: false, status: 500, json: async () => ({ message: 'stub' }), text: async () => 'stub' };
+    }
+    asked = { url: target, auth: opts?.headers?.Authorization };
+    return { ok: true, status: 200, json: async () => ({ status: true, data: good.data }) };
+  };
+  try {
+    const r = res();
+    // The body arrives as an object (Vercel's parsed form) but the signature was made from other
+    // bytes, which is exactly the re-serialisation case this fallback exists for.
+    await webhookHandler({ method: 'POST', headers: { 'x-paystack-signature': sign(JSON.stringify(good), 'different') }, body: good }, r);
+    assert.equal(r.statusCode, 500, 'authenticated via verify, then reached the (unreachable) database');
+  } finally {
+    globalThis.fetch = restore;
+  }
+  assert.match(asked.url, /\/transaction\/verify\/ref_abc123$/);
+  assert.equal(asked.auth, 'Bearer whsec_test');
+});
+
+test('a webhook that cannot reach Paystack to verify returns 502 so it is retried', async () => {
+  process.env.PAYSTACK_SECRET_KEY = 'whsec_test';
+  const payload = JSON.stringify(event());
+  const restore = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('network down'); };
+  try {
+    const r = res();
+    await webhookHandler({ method: 'POST', headers: { 'x-paystack-signature': 'nope' }, body: payload }, r);
+    assert.equal(r.statusCode, 502);
+  } finally {
+    globalThis.fetch = restore;
+  }
 });
 
 test('webhook ignores a mismatched amount with 200 and never upgrades', async () => {
@@ -442,4 +493,108 @@ test('webhook reports 500 when it cannot reach the database, so Paystack retries
   const r = res();
   await webhookHandler({ method: 'POST', headers: { 'x-paystack-signature': sign(payload, 'whsec_test') }, body: payload }, r);
   assert.equal(r.statusCode, 500);
+});
+
+// ------------------------------------------------ granting a verified charge
+
+// Minimal Supabase stand-in for the sequence applyProUpgrade runs: read the row, then either
+// insert it (no row yet) or update it with a compare-and-swap on the expiry we read.
+function profileDb(initialRow = null) {
+  const state = { row: initialRow ? { ...initialRow } : null };
+  const table = {
+    select() {
+      const q = {
+        eq() { return q; },
+        is() { return q; },
+        maybeSingle: async () => ({ data: state.row ? { ...state.row } : null, error: null })
+      };
+      return q;
+    },
+    insert(row) {
+      if (state.row) {
+        return Promise.resolve({ error: { message: 'duplicate key value violates unique constraint "profiles_pkey"' } });
+      }
+      state.row = { ...row };
+      return Promise.resolve({ error: null });
+    },
+    update(patch) {
+      const q = {
+        eq() { return q; },
+        is() { return q; },
+        select: async () => {
+          if (!state.row) return { data: [], error: null };
+          state.row = { ...state.row, ...patch };
+          return { data: [{ pro_expires_at: state.row.pro_expires_at }], error: null };
+        }
+      };
+      return q;
+    }
+  };
+  return { state, from: () => table };
+}
+
+const PAID_AT = Date.parse('2026-11-13T10:00:00.000Z');
+
+test('a paid charge creates the profile row a brand-new account does not have yet', async () => {
+  const db = profileDb(null);
+  const result = await applyProUpgrade(db, {
+    userId: 'u_new',
+    reference: 'ref_new',
+    paidAt: PAID_AT,
+    durationDays: 30,
+    planId: 'student_monthly',
+    customerEmail: 'buyer@example.com'
+  });
+
+  assert.equal(result.applied, true);
+  assert.equal(db.state.row.id, 'u_new');
+  assert.equal(db.state.row.email, 'buyer@example.com');
+  assert.equal(db.state.row.tier, 'pro');
+  assert.equal(db.state.row.pro_tier, 'student');
+  assert.equal(db.state.row.last_payment_reference, 'ref_new');
+  assert.equal(db.state.row.summary_credits_remaining, 50, 'the tier allowance is seeded, not added');
+  assert.equal(db.state.row.neural_chars_remaining, 15000);
+  assert.equal(db.state.row.pro_expires_at, '2026-12-13T10:00:00.000Z');
+  assert.equal(db.state.row.pro_quota_resets_at, '2026-12-13T10:00:00.000Z', 'one month, then refills');
+});
+
+test('a purchase upgrades an existing free profile', async () => {
+  const db = profileDb({ tier: 'free', pro_expires_at: null, last_payment_reference: null });
+  const result = await applyProUpgrade(db, {
+    userId: 'u_free',
+    reference: 'ref_a',
+    paidAt: PAID_AT,
+    durationDays: 365,
+    planId: 'studio_yearly'
+  });
+
+  assert.equal(result.applied, true);
+  assert.equal(db.state.row.tier, 'pro');
+  assert.equal(db.state.row.pro_tier, 'studio');
+  assert.equal(db.state.row.neural_chars_remaining, 100000);
+  assert.equal(db.state.row.pro_expires_at, '2027-11-13T10:00:00.000Z');
+});
+
+test('a re-sent webhook does not credit the same payment twice', async () => {
+  const db = profileDb({
+    tier: 'pro',
+    pro_tier: 'student',
+    pro_expires_at: '2026-12-13T10:00:00.000Z',
+    last_payment_reference: 'ref_same',
+    summary_credits_remaining: 12,
+    neural_chars_remaining: 900
+  });
+
+  const result = await applyProUpgrade(db, {
+    userId: 'u1',
+    reference: 'ref_same',
+    paidAt: PAID_AT,
+    durationDays: 30,
+    planId: 'student_monthly'
+  });
+
+  assert.equal(result.applied, true);
+  assert.equal(result.alreadyProcessed, true);
+  assert.equal(db.state.row.pro_expires_at, '2026-12-13T10:00:00.000Z', 'expiry untouched');
+  assert.equal(db.state.row.summary_credits_remaining, 12, 'spent allowance is not topped back up');
 });
