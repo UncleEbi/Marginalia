@@ -3898,3 +3898,45 @@ renderPage(0);
 updateAuthBadge();
 updateSleepTimerUI();
 refreshProPriceLabels();
+confirmCheckoutReturn();
+
+// --- RETURN FROM PAYSTACK ---
+// Checkout sends the buyer back to "/" with ?trxref=…&reference=…. The webhook is what grants the
+// plan and it can land a second or two after the redirect, so confirm the payment arrived and then
+// watch the profile until the upgrade appears, rather than dropping them on an unchanged page.
+async function confirmCheckoutReturn() {
+  const params = new URLSearchParams(window.location.search);
+  const reference = params.get('reference') || params.get('trxref');
+  if (!reference) return;
+
+  // One announcement per payment: strip the params so a reload or a shared link cannot replay it
+  history.replaceState(null, '', window.location.pathname + window.location.hash);
+
+  const { data: { session } } = await supabaseClient.auth.getSession();
+  if (!session?.user) {
+    showToast('Payment received — sign in with the address you paid with to see your plan.');
+    return;
+  }
+
+  showToast('Payment received — activating your plan…');
+
+  // Poll rather than wait on the webhook: it is the thing that credits the account, and this is
+  // only watching for the result.
+  const deadline = Date.now() + 60000;
+  while (Date.now() < deadline) {
+    const { data: profile } = await supabaseClient
+      .from('profiles')
+      .select('tier, pro_tier, pro_expires_at')
+      .eq('id', session.user.id)
+      .maybeSingle();
+    if (profile && isProActiveClient(profile)) {
+      const name = planTierName(profile.pro_tier, PLAN_ALLOWANCES[profile.pro_tier]?.name || 'Pro');
+      const until = new Date(profile.pro_expires_at)
+        .toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+      showToast(`✅ Payment confirmed — you are on ${name} until ${until}.`);
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+  }
+  showToast('Payment received. If your plan is not showing yet, refresh in a minute — your charge is safe.');
+}
