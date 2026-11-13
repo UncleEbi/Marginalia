@@ -14,7 +14,7 @@ import webhookHandler, { applyProUpgrade } from '../api/paystack-webhook.js';
 import {
   PRO_PLANS, DEFAULT_PLAN_ID, DEFAULT_CURRENCY, MAX_PRO_STACK_DAYS, NGN_PER_USD, TIERS, PRO_PERIOD_DAYS,
   getPlan, tierAllowance, isProActive, nextProExpiry, nextQuotaReset, isQuotaResetDue, renewProQuota,
-  refreshProQuota, planAmount, currencyForCountry, proPriceDisplay, proUsdEquivalentDisplay,
+  refreshProQuota, planAmount, planTierLabel, currencyForCountry, proPriceDisplay, proUsdEquivalentDisplay,
   evaluateChargeEvent
 } from '../lib/pro-plan.js';
 
@@ -96,12 +96,19 @@ test('every term grants the tier’s monthly allowance, refilled each period', (
 });
 
 test('tiers carry their own label and monthly allowance', () => {
-  assert.equal(TIERS.student.label, 'Student Pass');
-  assert.equal(TIERS.studio.label, 'Pro Studio');
   assert.deepEqual(tierAllowance('studio'), { label: 'Pro Studio', summaryCredits: 50, neuralChars: 100000 });
   assert.equal(tierAllowance('free'), null, 'free is not a purchasable tier');
-  assert.equal(studentMonthly.tierLabel, 'Student Pass');
   assert.equal(studioYearly.tier, 'studio');
+});
+
+test('the entry tier is named for the market, not for student status abroad', () => {
+  assert.equal(planTierLabel(studentMonthly, 'NGN'), 'Student Pass');
+  assert.equal(planTierLabel(studentMonthly, 'USD'), 'Reader');
+  assert.equal(planTierLabel(studioYearly, 'NGN'), 'Pro Studio');
+  assert.equal(planTierLabel(studioYearly, 'USD'), 'Pro Studio');
+  assert.deepEqual(tierAllowance('student', 'NGN'), { label: 'Student Pass', summaryCredits: 50, neuralChars: 15000 });
+  assert.deepEqual(tierAllowance('student', 'USD'), { label: 'Reader', summaryCredits: 50, neuralChars: 15000 },
+    'same allowance, different name');
 });
 
 test('unknown plan ids resolve to nothing', () => {
@@ -375,6 +382,9 @@ test('a visitor outside Nigeria sees only dollar prices', async () => {
     ['$7.99', '$23.97', '$79.90', '$19.99', '$59.97', '$199.90']);
   assert.deepEqual(r.body.plans.map((p) => p.amount_usd_display), [null, null, null, null, null, null],
     'a dollar price needs no dollar estimate beside it');
+  assert.deepEqual(r.body.plans.map((p) => p.tier_label),
+    ['Reader', 'Reader', 'Reader', 'Pro Studio', 'Pro Studio', 'Pro Studio'],
+    'the entry tier is not called Student Pass outside Nigeria');
 });
 
 test('a Nigerian visitor is offered naira even behind another proxy', async () => {

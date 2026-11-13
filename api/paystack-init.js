@@ -14,8 +14,8 @@
 //           email and user_id come from the verified session token, never from the body.
 import { createClient } from '@supabase/supabase-js';
 import {
-  PRO_PLANS, DEFAULT_PLAN_ID, getPlan, planAmount, proPriceDisplay, proUsdEquivalentDisplay,
-  NGN_PER_USD, currencyForCountry
+  PRO_PLANS, DEFAULT_PLAN_ID, getPlan, planAmount, planTierLabel, proPriceDisplay,
+  proUsdEquivalentDisplay, NGN_PER_USD, currencyForCountry
 } from '../lib/pro-plan.js';
 
 // Vercel sets x-vercel-ip-country on every request; Cloudflare's cf-ipcountry is the fallback in
@@ -34,7 +34,8 @@ function planList(currency) {
       // Which tier this row buys and what it grants for the whole term, so the paywall can say
       // what the money gets without duplicating the allowances in the client.
       tier: p.tier,
-      tier_label: p.tierLabel,
+      // Named for this market: "Student Pass" in Nigeria, "Reader" on the dollar table.
+      tier_label: planTierLabel(p, currency),
       label: p.label,
       note: p.note,
       days: p.days,

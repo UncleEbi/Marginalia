@@ -350,6 +350,14 @@ const PLAN_ALLOWANCES = {
   studio: { name: 'Pro Studio', neuralChars: 100000, summaries: 50 }
 };
 
+// What the account bought, named for this market: "Student Pass" in Nigeria, "Reader" elsewhere.
+// The server sends both names with the price list, so the map above is only a fallback for the
+// moment before that call returns.
+function planTierName(tierId, fallback) {
+  const plan = proPlansCache?.plans?.find((p) => p.tier === tierId);
+  return plan?.tier_label || fallback;
+}
+
 // The allowance an account actually bought, or null for free and expired accounts.
 function planAllowance(profile) {
   if (!isProActiveClient(profile)) return null;
@@ -1401,7 +1409,7 @@ async function openProfileModal() {
   const allowance = planAllowance(profile);
   if (tier === 'pro') {
     profileModalTier.textContent = allowance
-      ? `🌟 ${allowance.name} · until ${new Date(profile.pro_expires_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`
+      ? `🌟 ${planTierName(profile.pro_tier, allowance.name)} · until ${new Date(profile.pro_expires_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`
       : isProActiveClient(profile)
         ? '🌟 Pro'
         : '⚡ Free Trial Account (Pro expired)';
@@ -1754,7 +1762,7 @@ summarizeBtn.addEventListener('click', async () => {
           if (profile) {
             const allowance = planAllowance(profile);
             if (allowance) {
-              notice = `Plan: ${allowance.name} (${profile.summary_credits_remaining ?? 0} AI summaries left)`;
+              notice = `Plan: ${planTierName(profile.pro_tier, allowance.name)} (${profile.summary_credits_remaining ?? 0} AI summaries left)`;
             } else {
               const trials = profile.summary_credits_remaining ?? 3;
               notice = trials > 0 ? `Free trial: ${trials} AI summaries left` : "AI trial used up: offline summary active";
