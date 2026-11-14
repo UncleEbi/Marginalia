@@ -334,6 +334,80 @@ async function initiateProUpgrade(planId = null) {
   }
 }
 
+// Starts a one-time refill pack checkout. Same shape as the subscription checkout, but the
+// server sets metadata.type = 'refill' and metadata.pack_id so Paystack treats it as a one-time
+// payment rather than a subscription.
+async function startRefillCheckout(packId) {
+  try {
+    const token = await getFreshAuthToken();
+    if (!token) {
+      alert('Please sign in first so your refill pack can be linked to your account.');
+      return;
+    }
+    const res = await fetch('/api/paystack-init', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({ pack_id: packId })
+    });
+
+    const data = await res.json();
+    if (data.authorization_url) {
+      window.location.href = data.authorization_url;
+    } else {
+      alert(data.error || 'Unable to start refill checkout.');
+    }
+  } catch (err) {
+    console.error('Refill checkout error:', err);
+    alert('Payment error. Please check your connection and try again.');
+  }
+}
+
+// When price data cannot be loaded, keep one plain upgrade option and, if refill packs exist for
+// this currency, one plain refill option so the user can still top up.
+async function renderPaywallFallback(list) {
+  const data = await fetchProPlans();
+  const packs = (data && data.refill_packs) || [];
+
+  if (!data) {
+    const btn = document.createElement('button');
+    btn.className = 'pro-plan-option';
+    btn.innerHTML = '<span class="pro-plan-label">Upgrade to Pro</span><span class="pro-plan-price">Continue →</span>';
+    btn.addEventListener('click', () => initiateProUpgrade(null));
+    list.appendChild(btn);
+  }
+
+  if (packs.length) {
+    const section = document.createElement('div');
+    section.style.cssText = 'margin-top:1rem; padding-top:0.75rem; border-top:1px dashed var(--border);';
+    const sectionTitle = document.createElement('div');
+    sectionTitle.style.cssText = 'font-size:0.85rem; color:var(--text-muted); margin-bottom:0.5rem; display:flex; align-items:center; gap:0.4rem;';
+    sectionTitle.textContent = '⚡ Refill Credits (one-time)';
+    section.appendChild(sectionTitle);
+
+    packs.forEach((pack) => {
+      const btn = document.createElement('button');
+      btn.className = 'pro-plan-option';
+      btn.type = 'button';
+      btn.innerHTML = `
+        <span class="pro-plan-label">
+          Refill · +${pack.neural_chars.toLocaleString()} neural chars${pack.ai_ops ? ` +${pack.ai_ops} AI summaries` : ''}
+        </span>
+        <span class="pro-plan-price-col">
+          <span class="pro-plan-price">${escapeHtml(pack.amount_display)}</span>
+        </span>
+      `;
+      btn.addEventListener('click', () => startRefillCheckout(pack.id));
+      section.appendChild(btn);
+    });
+
+    list.appendChild(section);
+  }
+}
+
+
 // Pro is active while the account is tier 'pro' AND the expiry is in the future
 // (mirrors isProActive in lib/pro-plan.js so the UI agrees with the server)
 function isProActiveClient(profile) {
@@ -448,6 +522,36 @@ async function openPaywall() {
     btn.addEventListener('click', () => initiateProUpgrade(plan.id));
     list.appendChild(btn);
   });
+
+  // --- REFILL PACKS (one-time credits, non-expiring) ---
+  const refillPacks = data?.refill_packs || [];
+  if (refillPacks.length) {
+    const section = document.createElement('div');
+    section.style.cssText = 'margin-top:1rem; padding-top:0.75rem; border-top:1px dashed var(--border);';
+    const sectionTitle = document.createElement('div');
+    sectionTitle.style.cssText = 'font-size:0.85rem; color:var(--text-muted); margin-bottom:0.5rem; display:flex; align-items:center; gap:0.4rem;';
+    sectionTitle.innerHTML = '⚡ Refill Credits <span style="font-weight:400; color:var(--text-muted);">one-time · non-expiring</span>';
+    section.appendChild(sectionTitle);
+
+    refillPacks.forEach((pack) => {
+      const btn = document.createElement('button');
+      btn.className = 'pro-plan-option';
+      btn.type = 'button';
+      btn.innerHTML = `
+        <span class="pro-plan-label">
+          Refill · +${pack.neural_chars.toLocaleString()} neural chars
+          ${pack.ai_ops ? ` +${pack.ai_ops} AI summaries` : ''}
+        </span>
+        <span class="pro-plan-price-col">
+          <span class="pro-plan-price">${escapeHtml(pack.amount_display)}</span>
+        </span>
+      `;
+      btn.addEventListener('click', () => startRefillCheckout(pack.id));
+      section.appendChild(btn);
+    });
+
+    list.appendChild(section);
+  }
 }
 
 async function updateBookProgressInDB(title, page, sentenceIdx) {
@@ -1341,6 +1445,8 @@ function resetProfileModalPlaceholders() {
   if (profileRefillNote) profileRefillNote.style.display = 'none';
   profileByokStatus.textContent = '—';
   profileByokStatus.style.color = 'var(--text-muted)';
+  if (profileRefillBalance) profileRefillBalance.style.display = 'none';
+  if (profileRefillBalanceTopup) profileRefillBalanceTopup.style.display = 'none';
 }
 resetProfileModalPlaceholders();
 
@@ -1388,7 +1494,7 @@ async function openProfileModal() {
 
   const { data: profile, error: profileError } = await supabaseClient
     .from('profiles')
-    .select('neural_chars_remaining, summary_credits_remaining, tier, pro_tier, pro_expires_at, pro_quota_resets_at')
+    .select('neural_chars_remaining, summary_credits_remaining, tier, pro_tier, pro_expires_at, pro_quota_resets_at, topup_neural_chars, topup_ai_ops')
     .eq('id', user.id)
     .maybeSingle();
 

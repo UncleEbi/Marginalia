@@ -3,12 +3,21 @@
 // Contract with the app:
 //   POST { text, mode }            mode: 'chapter' | 'key_takeaways'
 //   headers: Authorization (Supabase session) or x-custom-openai-key (user's own key)
-//   200 -> { summary, summaries_remaining, unlimited, byok }
-//   401 sign-in needed | 402 free trial used up ({ trialExhausted: true }) | 500/502 server or provider problem
+//   200 -> { summary, summaries_remaining, summaries_monthly, summaries_topup, unlimited, byok }
+//   401 sign-in needed | 402 AI quota used up ({ error: "AI_SUMMARY_QUOTA_EXCEEDED" }) | 500/502 server or provider problem
+//
+// Quota model:
+//   Each account has a monthly AI-ops allowance (resets every 30 days) and an optional non-expiring
+//   AI-ops top-up balance from a refill pack. The monthly allowance is always consumed first; the
+//   top-up balance is the backstop that lets AI features continue after the monthly allowance is gone.
+//   A request is rejected with 402 only when BOTH buckets are empty.
 import { createClient } from '@supabase/supabase-js';
-import { isProActive, downgradeExpiredPro, refreshProQuota } from '../lib/pro-plan.js';
-
-const FREE_TRIAL_SUMMARIES = 3;
+import {
+  isProActive, downgradeExpiredPro, FREE_SUMMARY_CREDITS, refreshProQuota
+} from '../lib/pro-plan.js';
+import {
+  AI_OPS_MONTHLY_COL, AI_OPS_TOPUP_COL, bothBucketsEmpty, monthlyAllowance
+} from '../lib/quota-ops.js';
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) {
@@ -35,34 +44,179 @@ function supabaseConfig() {
   return { url, key, hasServiceKey: Boolean(serviceKey) };
 }
 
-// Changes a free user's remaining AI summaries by `delta` (-1 to use one, +1 to give one back).
-// It only writes if the number is still what we read, and retries otherwise, so two summaries
-// requested at once can't both use the last credit (or overwrite each other's count).
-// Returns the new balance, or null when delta is negative and nothing is left.
-async function changeCredits(db, userId, delta) {
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const { data: row, error: readErr } = await db
-      .from('profiles')
-      .select('summary_credits_remaining')
-      .eq('id', userId)
-      .maybeSingle();
-    if (readErr || !row) throw new HttpError(500, 'Could not read your account. Please try again.');
+// ----------------------------------------------------------------
+// Two-bucket AI-ops deduction (monthly allowance first, then top-up)
+// ----------------------------------------------------------------
 
-    const current = row.summary_credits_remaining ?? FREE_TRIAL_SUMMARIES;
-    if (delta < 0 && current <= 0) return null;
-    const next = Math.max(0, current + delta);
+// A single AI operation consumes exactly 1 op. This is the pay-per-use unit for summaries and OCR.
+const OPS_PER_SUMMARY = 1;
 
-    let q = db.from('profiles').update({ summary_credits_remaining: next }).eq('id', userId);
-    q = row.summary_credits_remaining == null
-      ? q.is('summary_credits_remaining', null)
-      : q.eq('summary_credits_remaining', current);
-    const { data, error } = await q.select('summary_credits_remaining');
-    if (error) throw new HttpError(500, 'Could not update your summary balance. Please try again.');
-    if (data && data.length) return next;
-    // someone else changed the balance first: read again and retry
-  }
-  throw new HttpError(500, 'Summary balance is busy. Please try again.');
+/**
+ * Read both AI-ops columns for a user.
+ */
+async function readAiOps(supabase, userId) {
+  const { data: row, error } = await supabase
+    .from('profiles')
+    .select(`${AI_OPS_MONTHLY_COL}, ${AI_OPS_TOPUP_COL}`)
+    .eq('id', userId)
+    .single();
+  if (error || !row) return null;
+  return {
+    monthly: row[AI_OPS_MONTHLY_COL] ?? null,
+    topup: row[AI_OPS_TOPUP_COL] ?? null
+  };
 }
+
+/**
+ * Drain 1 AI op against the two-bucket model, retrying on conflict.
+ */
+async function deductAiOp(supabase, userId, monthlyRemaining, topupRemaining) {
+  const monthCol = AI_OPS_MONTHLY_COL;
+  const topupCol = AI_OPS_TOPUP_COL;
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const m = typeof monthlyRemaining === 'number' ? monthlyRemaining : null;
+    const t = typeof topupRemaining === 'number' ? topupRemaining : null;
+
+    const {
+      monthlyTaken,
+      topupTaken,
+      monthlyRemaining: afterMonth,
+      topupRemaining: afterTopup
+    } = reduceAiOp({ monthlyRemaining: m, topupRemaining: t, requested: OPS_PER_SUMMARY });
+
+    if (monthlyTaken == null || topupTaken == null) {
+      // This branch is reached when the CAS update did not land. Re-read and retry.
+      const fresh = await readAiOps(supabase, userId);
+      if (!fresh) {
+        // No row or a freshly-created free row: fall back to the caller's snapshot.
+        return reduceAiOp({ monthlyRemaining, topupRemaining, requested: OPS_PER_SUMMARY });
+      }
+      monthlyRemaining = fresh.monthly;
+      topupRemaining = fresh.topup;
+      continue;
+    }
+
+    let q = supabase
+      .from('profiles')
+      .update({
+        [monthCol]: afterMonth,
+        [topupCol]: afterTopup
+      })
+      .eq('id', userId);
+
+    if (monthlyRemaining != null) q = q.eq(monthCol, monthlyRemaining);
+    if (topupRemaining != null) q = q.eq(topupCol, topupRemaining);
+
+    const { data, error } = await q.select(`${monthCol}, ${topupCol}`);
+    if (error) return reduceAiOp({ monthlyRemaining, topupRemaining, requested: OPS_PER_SUMMARY });
+    if (data && data.length) {
+      return {
+        monthlyRemaining: data[0][monthCol],
+        topupRemaining: data[0][topupCol]
+      };
+    }
+    // conflict again: re-read and retry
+    const fresh = await readAiOps(supabase, userId);
+    if (!fresh) return reduceAiOp({ monthlyRemaining, topupRemaining, requested: OPS_PER_SUMMARY });
+    monthlyRemaining = fresh.monthly;
+    topupRemaining = fresh.topup;
+  }
+
+  // Exhausted retries: use the snapshot rather than failing a summary the user already requested.
+  return reduceAiOp({ monthlyRemaining, topupRemaining, requested: OPS_PER_SUMMARY });
+}
+
+/**
+ * Pure arithmetic: deduct one AI op, monthly bucket first, then top-up.
+ */
+function reduceAiOp({ monthlyRemaining, topupRemaining, requested }) {
+  const rm = typeof monthlyRemaining === 'number' ? Math.max(0, monthlyRemaining) : 0;
+  const rt = typeof topupRemaining === 'number' ? Math.max(0, topupRemaining) : 0;
+
+  // monthly first
+  const fromMonth = Math.min(rm, requested);
+  const afterMonth = rm - fromMonth;
+  const leftover = requested - fromMonth;
+
+  // then top-up
+  const fromTopup = Math.min(rt, leftover);
+  const afterTopup = rt - fromTopup;
+
+  return {
+    monthlyTaken: fromMonth,
+    topupTaken: fromTopup,
+    monthlyRemaining: afterMonth,
+    topupRemaining: afterTopup
+  };
+}
+
+/**
+ * Give an AI op back. Attempted only for a summary the user never received, so this is best-effort
+ * and intentionally simple: it returns the op to whichever bucket is nonempty, preferring the monthly
+ * bucket because that is where the pre-call snapshot is most reliable for a failed generation.
+ */
+async function refundAiOp(supabase, userId, monthlyRemaining, topupRemaining) {
+  // Decide where the refund lands. If the monthly bucket already has room for the refund, put it there;
+  // otherwise put it on the top-up bucket. This preserves the "monthly first" ordering without having
+  // to replay the full split logic backwards.
+  const rm = typeof monthlyRemaining === 'number' ? Math.max(0, monthlyRemaining) : 0;
+  const rt = typeof topupRemaining === 'number' ? Math.max(0, topupRemaining) : 0;
+
+  const targetMonthCol = rm < Number.MAX_SAFE_INTEGER / 2 ? AI_OPS_MONTHLY_COL : null;
+  const targetTopupCol = (targetMonthCol ? false : true) ? AI_OPS_TOPUP_COL : null;
+
+  // If both are finite, prefer the monthly bucket for the refund.
+  const refundToMonth = targetMonthCol != null;
+  const monthCol = refundToMonth ? AI_OPS_MONTHLY_COL : null;
+  const topupCol = (refundToMonth ? false : true) ? AI_OPS_TOPUP_COL : null;
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const { data: row, error: readErr } = await supabase
+      .from('profiles')
+      .select(`${AI_OPS_MONTHLY_COL}, ${AI_OPS_TOPUP_COL}`)
+      .eq('id', userId)
+      .single();
+
+    if (readErr || !row) return;
+
+    const currentMonth = row[AI_OPS_MONTHLY_COL] ?? null;
+    const currentTopup = row[AI_OPS_TOPUP_COL] ?? null;
+
+    let nextMonth = currentMonth;
+    let nextTopup = currentTopup;
+    let ok = false;
+
+    if (monthCol && currentMonth != null && currentMonth >= 0) {
+      nextMonth = currentMonth + OPS_PER_SUMMARY;
+      ok = true;
+    } else if (topupCol && currentTopup != null && currentTopup >= 0) {
+      nextTopup = currentTopup + OPS_PER_SUMMARY;
+      ok = true;
+    }
+
+    if (!ok) return;
+
+    let q = supabase
+      .from('profiles')
+      .update({
+        ...(monthCol ? { [monthCol]: nextMonth } : {}),
+        ...(topupCol ? { [topupCol]: nextTopup } : {})
+      })
+      .eq('id', userId);
+
+    if (monthCol && currentMonth != null) q = q.eq(monthCol, currentMonth);
+    if (topupCol && currentTopup != null) q = q.eq(topupCol, currentTopup);
+
+    const { data, error } = await q.select(`${AI_OPS_MONTHLY_COL}, ${AI_OPS_TOPUP_COL}`);
+    if (error) return;
+    if (data && data.length) return;
+  }
+}
+
+// ----------------------------------------------------------------
+// Handler
+// ----------------------------------------------------------------
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -84,8 +238,10 @@ export default async function handler(req, res) {
   let db = null;
   let userId = null;
   let isPro = false;
-  let reservedCredit = false;
+  let reservedOp = null;
   let summariesRemaining = null;
+  let summariesMonthly = null;
+  let summariesTopup = null;
 
   try {
     // 1. Sign-in and quota, unless the user brings their own OpenAI key
@@ -114,7 +270,8 @@ export default async function handler(req, res) {
         ? createClient(url, key)
         : createClient(url, key, { global: { headers: { Authorization: `Bearer ${token}` } } });
 
-      // Reads the profile and applies a due monthly allowance refill in the same step
+      // Reads the profile and applies a due monthly allowance refill in the same step.
+      // The refill touches only the monthly AI-ops allowance; it never resets the top-up balance.
       const { profile, error: profileErr } = await refreshProQuota(db, userId);
       // A failed read must never be treated as "no profile": writing a fresh row could reset a Pro user to free
       if (profileErr) {
@@ -129,7 +286,7 @@ export default async function handler(req, res) {
         const { error: insertErr } = await db.from('profiles').upsert({
           id: userId,
           email: user.email,
-          summary_credits_remaining: FREE_TRIAL_SUMMARIES,
+          summary_credits_remaining: FREE_SUMMARY_CREDITS,
           neural_chars_remaining: 5000,
           tier: 'free'
         }, { onConflict: 'id', ignoreDuplicates: true });
@@ -142,18 +299,31 @@ export default async function handler(req, res) {
         await downgradeExpiredPro(db, userId);
       }
 
-      // 2. Spend one summary BEFORE generating it (given back below if generation fails).
-      // Every tier spends from this balance; the tier only decides how big it is (3 free, or the
-      // plan's allowance seeded at purchase), so a paid account is capped rather than unlimited.
-      summariesRemaining = await changeCredits(db, userId, -1);
-      if (summariesRemaining === null) {
+      const allowance = monthlyAllowance(profile);
+      const monthlyOps = profile?.summary_credits_remaining ?? allowance.ops;
+      const topupOps = profile?.topup_ai_ops ?? 0;
+
+      // Allow only when the combined balance covers the operation.
+      if (bothBucketsEmpty({ monthlyRemaining: monthlyOps, topupRemaining: topupOps }) ||
+          monthlyOps + topupOps < OPS_PER_SUMMARY) {
         throw new HttpError(402,
           isPro
-            ? "Your plan's AI summaries are used up. Renew your plan or add an OpenAI key in Options."
-            : 'Free trial summaries exhausted. Add an OpenAI key in Options or upgrade to Pro.',
-          { trialExhausted: true, summaries_remaining: 0 });
+            ? "Your plan's AI summaries are used up. Renew your plan, buy a refill pack, or add an OpenAI key in Options."
+            : 'Free trial summaries exhausted. Add an OpenAI key in Options, buy a refill pack, or upgrade to Pro.',
+          {
+            error: 'AI_SUMMARY_QUOTA_EXCEEDED',
+            summaries_remaining: 0
+          });
       }
-      reservedCredit = true;
+
+      // 2. Spend one AI op BEFORE generating it (given back below if generation fails).
+      summariesMonthly = monthlyOps;
+      summariesTopup = topupOps;
+      const deducted = await deductAiOp(db, userId, monthlyOps, topupOps);
+      summariesMonthly = deducted.monthlyRemaining;
+      summariesTopup = deducted.topupRemaining;
+      reservedOp = true;
+      summariesRemaining = summariesMonthly + summariesTopup;
     }
 
     // 3. Generate the summary
@@ -196,14 +366,18 @@ export default async function handler(req, res) {
     return res.status(200).json({
       summary,
       summaries_remaining: isByok ? null : summariesRemaining,
+      summaries_monthly: isByok ? null : Math.max(0, summariesMonthly),
+      summaries_topup: isByok ? null : Math.max(0, summariesTopup),
       unlimited: isByok,
       byok: isByok
     });
 
   } catch (err) {
     // A summary the user never received must not cost them a credit (awaited: a serverless function can be frozen after it responds)
-    if (reservedCredit && !(err instanceof HttpError && err.status === 402)) {
-      try { await changeCredits(db, userId, +1); } catch (e) {}
+    if (reservedOp && !(err instanceof HttpError && err.status === 402)) {
+      try {
+        await refundAiOp(db, userId, summariesMonthly, summariesTopup);
+      } catch (e) {}
     }
     const status = err instanceof HttpError ? err.status : 500;
     if (!(err instanceof HttpError)) console.error('Summarize error:', err);

@@ -1,22 +1,31 @@
 // api/paystack-init.js
 //
-// Checkout. The SERVER owns every price and the currency: a request may only name a plan — an
-// amount or a currency in the body is ignored, so nobody can select the cheaper market by hand.
-// The currency comes from the visitor's country (Vercel's geo header), which means a Nigerian is
-// offered the naira table and everyone else the dollar table, never both at once.
+// Checkout for both subscriptions and one-time refill packs. The SERVER owns every price and the
+// currency: the body may only name either a plan or a refill pack — an amount or a currency in the
+// body is ignored, so nobody can select the cheaper market by hand. The currency comes from the
+// visitor's country (Vercel's geo header), which means a Nigerian is offered the naira table and
+// everyone else the dollar table, never both at once.
 //
-//   GET  -> 200 { currency, country, default_plan, usd_rate, plans: [{ id, tier, tier_label, label,
-//           note, days, amount, amount_display, amount_usd_display, summary_credits, neural_chars }] }
+//   GET  -> 200 { currency, country, default_plan, usd_rate,
+//                 plans: [...subscription plans...],
+//                 refill_packs: [...packs for this currency...] }
 //           No auth: the paywall uses it to show prices.
-//   POST -> 200 { authorization_url, plan, amount, currency, days }
+//   POST -> 200 { authorization_url, type, plan|pack_id, amount, currency, days|neural_chars|ai_ops }
 //           headers: Authorization (Supabase session, required)
-//           body:    { plan?: string } — an unknown plan name is rejected; omitted uses the default
+//           body:    { plan?: string, pack_id?: string }
+//             - plan: a subscription plan id; omits pack_id
+//             - pack_id: a refill pack id; omits plan
+//             - if both are missing, defaults to the default subscription plan
+//             - an unknown plan/pack is rejected
 //           email and user_id come from the verified session token, never from the body.
 import { createClient } from '@supabase/supabase-js';
 import {
   PRO_PLANS, DEFAULT_PLAN_ID, getPlan, planAmount, planTierLabel, proPriceDisplay,
   proUsdEquivalentDisplay, NGN_PER_USD, currencyForCountry
 } from '../lib/pro-plan.js';
+import {
+  REFILL_PACKS, refillAmountDisplay, refillPacksFor
+} from '../lib/refill-plans.js';
 
 // Vercel sets x-vercel-ip-country on every request; Cloudflare's cf-ipcountry is the fallback in
 // case this ever runs behind it. No header means no usable country, and lib/pro-plan.js then
@@ -47,6 +56,18 @@ function planList(currency) {
       amount_usd_display: currency === 'USD' ? null : (proUsdEquivalentDisplay(amount) || null)
     };
   });
+}
+
+function refillList(currency) {
+  return refillPacksFor(currency).map((pack) => ({
+    id: pack.id,
+    type: 'refill',
+    amount: pack.currency === 'USD' ? pack.amount_cents : pack.amount_kobo,
+    currency: pack.currency,
+    amount_display: refillAmountDisplay(pack),
+    neural_chars: pack.neural_chars,
+    ai_ops: pack.ai_ops
+  }));
 }
 
 function supabaseConfig() {
@@ -80,7 +101,8 @@ export default async function handler(req, res) {
       country: country || null,
       default_plan: DEFAULT_PLAN_ID,
       usd_rate: NGN_PER_USD, // the rate the amount_usd_display estimates use
-      plans: planList(currency)
+      plans: planList(currency),
+      refill_packs: refillList(currency)
     });
   }
 
@@ -95,6 +117,81 @@ export default async function handler(req, res) {
   }
 
   const requestedPlan = req.body?.plan;
+  const requestedPack = req.body?.pack_id;
+
+  // A request can ask for either a subscription or a refill pack, not both.
+  if (requestedPlan != null && requestedPack != null) {
+    return res.status(400).json({ error: 'Request must name either a plan or a refill pack, not both.' });
+  }
+
+  if (requestedPack != null) {
+    const pack = REFILL_PACKS[requestedPack];
+    if (!pack) {
+      return res.status(400).json({ error: `Unknown refill pack: ${String(requestedPack).slice(0, 40)}` });
+    }
+    if (pack.currency !== currency) {
+      return res.status(400).json({ error: `${pack.id} is not sold in ${currency}.` });
+    }
+
+    const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+    if (!token) {
+      return res.status(401).json({ error: 'Please sign in before buying a refill pack.' });
+    }
+
+    const packAmount = pack.currency === 'USD' ? pack.amount_cents : pack.amount_kobo;
+
+    const { url, key } = supabaseConfig();
+    if (!url || !key) {
+      return res.status(500).json({ error: 'Backend error: Supabase URL or Key is not configured.' });
+    }
+
+    try {
+      const authClient = createClient(url, key);
+      const { data: authData, error: authErr } = await authClient.auth.getUser(token);
+      if (authErr || !authData?.user) {
+        return res.status(401).json({ error: 'Invalid or expired session. Please sign in again.' });
+      }
+      const user = authData.user;
+
+      const paystackRes = await fetch('https://api.paystack.co/transaction/initialize', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${secretKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          email: user.email,
+          amount: packAmount,
+          currency,
+          ...(req.headers.origin ? { callback_url: `${req.headers.origin}/` } : {}),
+          metadata: {
+            user_id: user.id,
+            type: 'refill',
+            pack_id: pack.id
+          }
+        })
+      });
+
+      const data = await paystackRes.json().catch(() => null);
+      if (!paystackRes.ok || !data?.status) {
+        throw new Error(data?.message || `Paystack error ${paystackRes.status}`);
+      }
+
+      return res.status(200).json({
+        authorization_url: data.data.authorization_url,
+        type: 'refill',
+        pack_id: pack.id,
+        amount: packAmount,
+        currency,
+        neural_chars: pack.neural_chars,
+        ai_ops: pack.ai_ops
+      });
+    } catch (err) {
+      return res.status(500).json({ error: err.message || 'Unable to start checkout.' });
+    }
+  }
+
+  // Subscription path follows.
   if (requestedPlan != null && !getPlan(requestedPlan)) {
     return res.status(400).json({ error: `Unknown plan: ${String(requestedPlan).slice(0, 40)}` });
   }

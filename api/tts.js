@@ -3,14 +3,25 @@
 // Contract with the app (unchanged):
 //   POST { text, voiceId, engine, speed }
 //   headers: Authorization (Supabase session), x-custom-openai-key / x-custom-elevenlabs-key (BYOK)
-//   200 -> { audio_base64, remaining_chars }
+//   200 -> { audio_base64, remaining_chars, remaining_neural, remaining_topup_neural }
 //   errors -> { error }  (401 sign-in, 402 quota, 400 bad request, 500 server config, 502 provider failure)
+//
+// Quota model:
+//   Each account has a monthly neural allowance (resets every 30 days) and an optional non-expiring
+//   neural top-up balance from a refill pack. The monthly allowance is always consumed first; the
+//   top-up balance is the backstop that lets reading continue after the monthly allowance is gone.
+//   A request is rejected with 402 only when BOTH buckets are empty.
 //
 // Also accepted for simple/older callers:
 //   - `voice` as an alias of `voiceId`
 //   - `Accept: audio/mpeg` returns the raw mp3 bytes instead of JSON
 import { createClient } from '@supabase/supabase-js';
-import { isProActive, downgradeExpiredPro, FREE_NEURAL_CHARS, refreshProQuota } from '../lib/pro-plan.js';
+import {
+  isProActive, downgradeExpiredPro, FREE_NEURAL_CHARS, refreshProQuota
+} from '../lib/pro-plan.js';
+import {
+  NEURAL_MONTHLY_COL, NEURAL_TOPUP_COL, bothBucketsEmpty, monthlyAllowance
+} from '../lib/quota-ops.js';
 
 const OPENAI_MAX_CHARS = 4096; // hard limit of the OpenAI speech endpoint
 
@@ -193,6 +204,123 @@ async function deductChars(supabase, userId, startingBalance, charCount) {
   return Math.max(0, current - charCount);
 }
 
+// Deducts a split neural charge against the two-bucket model.
+//
+// Uses the same compare-and-swap pattern as deductChars, but on two columns at once. If the request
+// is allowed, the monthly allowance is always drained first, and only the backstop top-up balance is
+// touched when the monthly allowance cannot cover the whole request. Retries on conflict up to the
+// same 5-attempt limit used everywhere else in this file.
+async function deductSplitNeural(supabase, userId, monthlyRemaining, topupRemaining, requested) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const monthCol = NEURAL_MONTHLY_COL;
+    const topupCol = NEURAL_TOPUP_COL;
+
+    const { monthlyTaken, topupTaken, monthlyRemaining: afterMonth, topupRemaining: afterTopup } =
+      (await reduceSplitNeural(supabase, userId, monthlyRemaining, topupRemaining, requested, monthCol, topupCol));
+
+    if (monthlyTaken == null || topupTaken == null) {
+      // conflict or missing row: re-read both columns and retry
+      const { data: fresh } = await supabase
+        .from('profiles')
+        .select(`${monthCol}, ${topupCol}`)
+        .eq('id', userId)
+        .single();
+
+      if (!fresh || fresh[monthCol] == null || fresh[topupCol] == null) {
+        // No row or a freshly-created free row we cannot meaningfully split against: fall back to
+        // the caller's current snapshot. This is the same graceful degradation deductChars already uses.
+        return reduceSplitNeural({ monthlyRemaining, topupRemaining, requested });
+      }
+
+      monthlyRemaining = fresh[monthCol];
+      topupRemaining = fresh[topupCol];
+      continue;
+    }
+
+    return {
+      monthlyRemaining: afterMonth,
+      topupRemaining: afterTopup
+    };
+  }
+
+  // Exhausted retries: use the last known snapshot rather than failing audio the user already got.
+  return reduceSplitNeural({ monthlyRemaining, topupRemaining, requested });
+}
+
+// Pure arithmetic for deducting a split charge from a snapshot. Kept pure so the CAS path can call it
+// for the final numbers after a successful write.
+function reduceSplitNeural(
+  _db, _userId, monthlyRemaining, topupRemaining, requested
+) {
+  const monthCol = NEURAL_MONTHLY_COL;
+  const topupCol = NEURAL_TOPUP_COL;
+
+  const { monthlyTaken, topupTaken, monthlyRemaining: afterMonth, topupRemaining: afterTopup } =
+    (function (m, t, r) {
+      const rm = Math.max(0, m), rt = Math.max(0, t);
+      const fm = Math.min(rm, r);
+      const leftover = r - fm;
+      const ft = Math.min(rt, leftover);
+      return {
+        monthlyTaken: fm,
+        topupTaken: ft,
+        monthlyRemaining: rm - fm,
+        topupRemaining: rt - ft
+      };
+    })(monthlyRemaining, topupRemaining, requested);
+
+  return {
+    monthlyTaken,
+    topupTaken,
+    monthlyRemaining: afterMonth,
+    topupRemaining: afterTopup
+  };
+}
+
+async function deductSplitNeuralWithDb(supabase, userId, monthlyRemaining, topupRemaining, requested, monthCol, topupCol) {
+  const m = Math.max(0, monthlyRemaining);
+  const t = Math.max(0, topupRemaining);
+
+  const { monthlyTaken, topupTaken, monthlyRemainingAfter, topupRemainingAfter } =
+    reduceSplitNeural({ monthlyRemaining: m, topupRemaining: t, requested });
+
+  let q = supabase
+    .from('profiles')
+    .update({
+      [monthCol]: monthlyRemainingAfter,
+      [topupCol]: topupRemainingAfter
+    })
+    .eq('id', userId);
+
+  if (m != null) q = q.eq(monthCol, m);
+  if (t != null) q = q.eq(topupCol, t);
+
+  const { data, error } = await q.select(`${monthCol}, ${topupCol}`);
+
+  if (error) {
+    return {
+      monthlyTaken: null,
+      topupTaken: null,
+      monthlyRemaining: m,
+      topupRemaining: t
+    };
+  }
+  if (data && data.length) {
+    return {
+      monthlyTaken,
+      topupTaken,
+      monthlyRemaining: data[0][monthCol],
+      topupRemaining: data[0][topupCol]
+    };
+  }
+  return {
+    monthlyTaken: null,
+    topupTaken: null,
+    monthlyRemaining: m,
+    topupRemaining: t
+  };
+}
+
 // Gives characters back (used when the voice provider failed after we had already reserved them)
 async function refundChars(supabase, userId, charCount) {
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -208,6 +336,24 @@ async function refundChars(supabase, userId, charCount) {
       .eq('id', userId)
       .eq('neural_chars_remaining', row.neural_chars_remaining)
       .select('neural_chars_remaining');
+    if (data && data.length) return;
+  }
+}
+
+async function refundTopupNeural(supabase, userId, charCount) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const { data: row } = await supabase
+      .from('profiles')
+      .select(NEURAL_TOPUP_COL)
+      .eq('id', userId)
+      .single();
+    if (!row || row[NEURAL_TOPUP_COL] == null) return;
+    const { data } = await supabase
+      .from('profiles')
+      .update({ [NEURAL_TOPUP_COL]: row[NEURAL_TOPUP_COL] + charCount })
+      .eq('id', userId)
+      .eq(NEURAL_TOPUP_COL, row[NEURAL_TOPUP_COL])
+      .select(NEURAL_TOPUP_COL);
     if (data && data.length) return;
   }
 }
@@ -248,7 +394,8 @@ export default async function handler(req, res) {
   const charCount = text.length;
   const isByok = Boolean((engine === 'openai' && customOpenAiKey) || (engine === 'elevenlabs' && customElevenKey));
   let user = null;
-  let remainingChars = null;
+  let monthlyChars = null;
+  let topupChars = null;
 
   try {
     // Check Supabase quota only if using host-funded APIs
@@ -263,27 +410,44 @@ export default async function handler(req, res) {
         return res.status(401).json({ error: 'Invalid or expired user session.' });
       }
 
-      // Applies a due monthly allowance refill before the balance is read
+      // Applies a due monthly allowance refill before the balance is read.
+      // IMPORTANT: the refill touches only the monthly allowance columns. It never resets the
+      // top-up columns, so a bought pack continues to extend the session across monthly cycles.
       const { profile } = await refreshProQuota(supabase, user.id);
 
-      remainingChars = profile?.neural_chars_remaining ?? FREE_NEURAL_CHARS;
+      const allowance = monthlyAllowance(profile);
+      monthlyChars = profile?.neural_chars_remaining ?? allowance.neural;
+      topupChars = profile?.topup_neural_chars ?? 0;
+
       if (profile?.tier === 'pro' && !isProActive(profile)) {
         // Expired Pro: restore free quotas so a stale top-up cannot outlive the subscription
         await downgradeExpiredPro(supabase, user.id);
-        remainingChars = FREE_NEURAL_CHARS;
+        monthlyChars = FREE_NEURAL_CHARS;
+        topupChars = profile?.topup_neural_chars ?? 0;
       }
-      if (remainingChars < charCount) {
+
+      // Allow if the combined balance covers the request; the split happens at reservation time.
+      if (bothBucketsEmpty({ monthlyRemaining: monthlyChars, topupRemaining: topupChars }) ||
+          monthlyChars + topupChars < charCount) {
         return res.status(402).json({
-          error: `Insufficient neural character quota (${remainingChars.toLocaleString()} left). Add your API key in Options or upgrade.`,
-          charsExhausted: true
+          error: 'NEURAL_QUOTA_EXCEEDED',
+          fallback: 'native',
+          remaining: Math.max(0, monthlyChars) + Math.max(0, topupChars)
         });
       }
     }
 
-    // Reserve the characters at the same time as generating the audio (saves a database round trip
-    // per sentence). If generating fails, they are given back.
-    const reserve = (!isByok && user && remainingChars !== null)
-      ? deductChars(getSupabase(), user.id, remainingChars, charCount)
+    // Reserve the characters against the two-bucket model at the same time as generating the audio
+    // (saves a database round trip per sentence). If generating fails, they are given back from the
+    // monthly allowance only, because that is the bucket we had a stable read for before the provider
+    // call. The top-up bucket is handled conservatively below.
+    let reservedMonthlyDelta = null;
+    let reservedTopupDelta = null;
+    let afterMonthly = null;
+    let afterTopup = null;
+
+    const reserve = (!isByok && user && monthlyChars !== null && topupChars !== null)
+      ? deductSplitNeural(getSupabase(), user.id, monthlyChars, topupChars, charCount)
       : null;
 
     let audio = null;
@@ -301,13 +465,44 @@ export default async function handler(req, res) {
     } catch (err) {
       if (reserve) {
         // awaited (not fire-and-forget): a serverless function can be frozen right after it responds
-        try { await reserve; await refundChars(getSupabase(), user.id, charCount); } catch (e) {}
+        try {
+          const reserved = await reserve;
+          if (reserved) {
+            const toReturn = Math.max(0, reserved.monthlyRemaining - monthlyChars) +
+                            Math.max(0, reserved.topupRemaining - topupChars);
+            if (toReturn > 0) {
+              // Refund to whichever bucket the charge originally consumed from. Because the monthly
+              // allowance is always drained first, the safer default is to put it back on the monthly
+              // column where we had the pre-call snapshot. The top-up column is left untouched here
+              // unless it was the only bucket consumed, which is rare after a failed generation.
+              if (monthlyChars + topupChars > 0 && monthlyChars >= charCount) {
+                await refundChars(getSupabase(), user.id, charCount);
+              } else {
+                await refundTopupNeural(getSupabase(), user.id, charCount);
+              }
+            }
+          }
+        } catch (e) {}
       }
       throw err;
     }
 
-    const updatedRemaining = reserve ? await reserve : remainingChars;
-    const remainingForClient = isByok ? 'Unlimited (BYOK)' : updatedRemaining;
+    const reserved = reserve ? await reserve : null;
+    if (reserved) {
+      afterMonthly = reserved.monthlyRemaining;
+      afterTopup = reserved.topupRemaining;
+    } else {
+      afterMonthly = monthlyChars;
+      afterTopup = topupChars;
+    }
+
+    const remainingForClient = isByok
+      ? 'Unlimited (BYOK)'
+      : {
+          neural: Math.max(0, afterMonthly) + Math.max(0, afterTopup),
+          neural_monthly: Math.max(0, afterMonthly),
+          neural_topup: Math.max(0, afterTopup)
+        };
 
     res.setHeader('Cache-Control', 'no-store');
 
@@ -316,13 +511,18 @@ export default async function handler(req, res) {
     if (accept.includes('audio/mpeg') && !accept.includes('application/json')) {
       res.setHeader('Content-Type', 'audio/mpeg');
       res.setHeader('Content-Length', audio.length);
-      res.setHeader('X-Remaining-Chars', String(remainingForClient));
+      if (!isByok) {
+        res.setHeader('X-Remaining-Chars', String(Math.max(0, afterMonthly) + Math.max(0, afterTopup)));
+      }
       return res.status(200).send(audio);
     }
 
     return res.status(200).json({
       audio_base64: audio.toString('base64'),
-      remaining_chars: remainingForClient
+      remaining_chars: remainingForClient,
+      remaining_neural: !isByok ? Math.max(0, afterMonthly) + Math.max(0, afterTopup) : null,
+      remaining_neural_monthly: !isByok ? Math.max(0, afterMonthly) : null,
+      remaining_neural_topup: !isByok ? Math.max(0, afterTopup) : null
     });
 
   } catch (err) {
@@ -330,3 +530,5 @@ export default async function handler(req, res) {
     return res.status(err.status || 500).json({ error: err.message || 'Internal server error generating audio' });
   }
 }
+
+
