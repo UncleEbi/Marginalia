@@ -47,17 +47,17 @@ function fakePdfjs({ numPages = 2, natural = { width: 612, height: 792 } } = {})
   };
 }
 
-test('renders only the requested pages when pageNumbers is given (the shrink retry)', async () => {
+test('renders only the requested page when onlyPage is given (the shrink retry)', async () => {
   const canvases = [];
   const pdfjs = fakePdfjs({ numPages: 3 });
 
   const images = await renderPdfPagesToImages(pdfjs, new Uint8Array([1]), {
-    createCanvas: fakeCanvasFactory(canvases), maxWidth: 1100, quality: 0.5, pageNumbers: [2]
+    createCanvas: fakeCanvasFactory(canvases), maxWidth: 1100, quality: 0.6, onlyPage: 2
   });
 
   assert.deepEqual(images.map((i) => i.pageNumber), [2], 'only that page comes back');
   assert.equal(pdfjs.renders.length, 1, 'and only that page is drawn');
-  assert.match(images[0].dataUrl, /q0\.5/, 'the lower quality is honoured');
+  assert.match(images[0].dataUrl, /q0\.6/, 'the lower quality is honoured');
 });
 
 test('renders every PDF page to a JPEG data URL', async () => {
@@ -145,9 +145,9 @@ function harness({ images = ['data:image/jpeg;base64,AAA', 'data:image/jpeg;base
     getFreshAuthToken: async () => token,
     localStorage: { getItem: (k) => (k === 'marginalia_byok_openai' ? byok : null) },
     window: { renderPdfPages: async (lib, data, onPage, opts = {}) => {
-      // A shrink retry asks for specific pages and how big: answer from `shrunken`.
-      if (Array.isArray(opts.pageNumbers)) {
-        return opts.pageNumbers.filter((n) => shrunken[n]).map((n) => ({ pageNumber: n, dataUrl: shrunken[n] }));
+      // A shrink retry asks for one page at a smaller size: answer from `shrunken`.
+      if (opts.onlyPage) {
+        return shrunken[opts.onlyPage] ? [{ pageNumber: opts.onlyPage, dataUrl: shrunken[opts.onlyPage] }] : [];
       }
       if (onPage) await onPage(1, images.length);
       return images.map((dataUrl, i) => ({ pageNumber: i + 1, dataUrl }));
@@ -266,6 +266,7 @@ test('a page still over the cap after the smaller re-render is noted, not posted
   const oversized = 'data:image/jpeg;base64,' + 'a'.repeat(2 * 1024 * 1024);
   const h = harness({
     images: [oversized, 'data:image/jpeg;base64,BBB'],
+    shrunken: { 1: oversized },                 // the retry renders again, still too big
     responses: [{ status: 200, body: { text: 'Page two text.' } }]
   });
 

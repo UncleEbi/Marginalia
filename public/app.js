@@ -3915,18 +3915,17 @@ async function ocrScannedPdf(lib, uint8) {
   const skippedPageNote = (pageNumber) =>
     `Page ${pageNumber} could not be read because its scanned image is too large. The document continues below.`;
 
-  // A dense page can render past the endpoint's 2 MB image cap at the default 1600px / 0.78 quality.
-  // Re-render only that page smaller and retry once — roughly a third of the bytes, still legible to
-  // OCR — so the reader gets the text instead of a note. Returns '' when the retry cannot help.
-  const renderSmaller = async (pageNumber) => {
+  // A dense page can render past the endpoint's 2 MB image cap at the default 1600px / 0.78. Re-render
+  // just that page once at 1100px / 0.6, which measured at a quarter to a half of the bytes for a page
+  // that is still legible: OpenAI's vision step rescales the short side to 768px anyway, so anything
+  // wider is detail the model never sees. Returns '' when the retry cannot get under the cap.
+  const fitScanPage = async ({ pageNumber, dataUrl }) => {
+    if (dataUrl.length <= MAX_IMAGE_BASE64_CHARS) return dataUrl;
     preloadStatus.textContent = `Re-reading scan ${pageNumber}/${images.length}...`;
     try {
-      const [small] = await window.renderPdfPages(lib, uint8, null, {
-        maxWidth: 1100,
-        quality: 0.5,
-        pageNumbers: [pageNumber]
-      });
-      return (small && small.dataUrl) || '';
+      const [small] = await window.renderPdfPages(lib, uint8, null, { maxWidth: 1100, quality: 0.6, onlyPage: pageNumber });
+      const fits = small && small.dataUrl && small.dataUrl.length <= MAX_IMAGE_BASE64_CHARS;
+      return fits ? small.dataUrl : '';
     } catch (e) {
       return '';
     }
@@ -3935,10 +3934,8 @@ async function ocrScannedPdf(lib, uint8) {
   for (let i = 0; i < images.length; i++) {
     preloadStatus.textContent = `Reading scan ${i + 1}/${images.length}...`;
 
-    let dataUrl = images[i].dataUrl;
-    if (dataUrl.length > MAX_IMAGE_BASE64_CHARS) dataUrl = await renderSmaller(images[i].pageNumber);
-
-    if (!dataUrl || dataUrl.length > MAX_IMAGE_BASE64_CHARS) {
+    const dataUrl = await fitScanPage(images[i]);
+    if (!dataUrl) {
       // Still too large after the retry: name the page and keep the rest of the scan.
       pages.push({ pageNumber: images[i].pageNumber, text: skippedPageNote(images[i].pageNumber) });
       continue;
