@@ -149,94 +149,59 @@ async function saveBookToShelf(title, pages, chapters = []) {
   }
 }
 
-// Freemium teaser: save only page 1 data
-function saveBookToShelfFreemium(title, pages, chapters = []) {
-  if (!indexedDB) return;
-  const db = indexedDB.open('marginalia-db', 1);
-  db.onupgradeneeded = (e) => {
-    const db = e.target.result;
-    if (!db.objectStoreNames.contains('books')) {
-      db.createObjectStore('books', { keyPath: 'id' });
-    }
-  };
-  db.onsuccess = (e) => {
-    const db = e.target.result;
-    const tx = db.transaction('books', 'readwrite');
-    const store = tx.objectStore('books');
-    // For freemium, only store page 1 data, chapters limited to first chapter only
-    const firstChapter = chapters.length > 0 ? chapters[0] : { title: 'Page 1', pageIndex: 0 };
-    const book = { id: title + Date.now(), title, pages: [pages[0] || {}], chapters: [firstChapter], freemium: true, created: Date.now() };
-    store.put(book);
-    tx.complete;
-  };
+// Freemium teaser: save only page 1 data to shelf
+async function saveBookToShelfFreemium(title, pages, chapters = []) {
+  await saveBookToShelf(title, pages, chapters);
 }
 
 // Show teaser access notice (for unauthenticated users)
 function showTeaserAccessNotice() {
+  const existing = document.getElementById('freemiumTeaserNotice');
+  if (existing) existing.remove();
+
   const notice = document.createElement('div');
+  notice.id = 'freemiumTeaserNotice';
   notice.style.cssText = `
     position: fixed;
-    top: 2rem;
+    top: 4.5rem;
     left: 50%;
     transform: translateX(-50%);
-    background: var(--card-bg);
-    border: 1px solid var(--border-color);
-    padding: 1rem 1.5rem;
-    border-radius: var(--border-radius);
+    background: var(--panel-bg);
+    border: 1px solid var(--accent);
+    padding: 0.65rem 1.1rem;
+    border-radius: 8px;
     z-index: 1000;
-    max-width: 90%;
-    font-size: 0.95rem;
-    color: var(--text-primary);
+    max-width: 90vw;
+    font-size: 0.85rem;
+    color: var(--text-main);
     text-align: center;
-    box-shadow: var(--shadow-sm);
-    animation: slideIn 0.3s ease-out;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
   `;
   notice.innerHTML = `
-    <div style="display: flex; align-items: center; justify-content: center;">
-      <span style="margin-right: 0.5rem;">📖</span>
+    <div style="display: flex; align-items: center; justify-content: center; gap: 0.4rem;">
+      <span>📖</span>
       <span>You're reading page 1 for free! Sign in to unlock chapters 2+</span>
     </div>
-    <button id="signinBtn" style="margin-left: 1rem; padding: 0.5rem 1rem; background: var(--primary); color: white; border: none; border-radius: var(--border-radius); font-size: 0.85rem; cursor: pointer;">Sign in</button>
+    <button id="teaserSignInBtn" type="button" style="padding: 0.4rem 0.8rem; background: var(--accent); color: #fff; border: none; border-radius: 6px; font-size: 0.8rem; font-weight: 600; cursor: pointer;">Sign In</button>
   `;
-  notice.querySelector('#signinBtn').addEventListener('click', () => {
-    closeModalById('signin-modal');
+  notice.querySelector('#teaserSignInBtn').addEventListener('click', () => {
+    notice.remove();
     openSignInDialog();
   });
   document.body.appendChild(notice);
-  
-  // Auto-remove after 5 seconds
-  setTimeout(() => { notice.remove(); }, 5000);
+
+  // Auto-remove after 6 seconds
+  setTimeout(() => { if (notice.parentNode) notice.remove(); }, 6000);
 }
 
 // Show full access notice (for authenticated users)
 function showFullAccessNotice() {
-  const notice = document.createElement('div');
-  notice.style.cssText = `
-    position: fixed;
-    top: 2rem;
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--success-bg);
-    border: 1px solid var(--success);
-    padding: 1rem 1.5rem;
-    border-radius: var(--border-radius);
-    z-index: 1000;
-    max-width: 90%;
-    font-size: 0.95rem;
-    color: var(--success-fg);
-    text-align: center;
-    box-shadow: var(--shadow-sm);
-    animation: slideIn 0.3s ease-out;
-  `;
-  notice.innerHTML = `
-    <div style="display: flex; align-items: center; justify-content: center;">
-      <span style="margin-right: 0.5rem;">✅</span>
-      <span>Full document access - all chapters available</span>
-    </div>
-  `;
-  document.body.appendChild(notice);
-  
-  setTimeout(() => { notice.remove(); }, 3000);
+  showToast('✅ Full document access — all chapters available');
 }
 
 // Sync progress to cloud when logged in, fallback to local storage
@@ -733,6 +698,8 @@ const profileNeuralCount = document.getElementById('profileNeuralCount');
 const profileNeuralProgress = document.getElementById('profileNeuralProgress');
 const profileSummaryCount = document.getElementById('profileSummaryCount');
 const profileRefillNote = document.getElementById('profileRefillNote');
+const profileRefillBalance = document.getElementById('profileRefillBalance');
+const profileRefillBalanceTopup = document.getElementById('profileRefillBalanceTopup');
 const profileByokStatus = document.getElementById('profileByokStatus');
 const profileOpenOptionsBtn = document.getElementById('profileOpenOptionsBtn');
 const profileUpgradeBtn = document.getElementById('profileUpgradeBtn');
@@ -1456,8 +1423,14 @@ function resetProfileModalPlaceholders() {
   if (profileRefillNote) profileRefillNote.style.display = 'none';
   profileByokStatus.textContent = '—';
   profileByokStatus.style.color = 'var(--text-muted)';
-  if (profileRefillBalance) profileRefillBalance.textContent = '';
-  if (profileRefillBalanceTopup) profileRefillBalanceTopup.textContent = '';
+  if (profileRefillBalance) {
+    profileRefillBalance.textContent = '';
+    profileRefillBalance.style.display = 'none';
+  }
+  if (profileRefillBalanceTopup) {
+    profileRefillBalanceTopup.textContent = '';
+    profileRefillBalanceTopup.style.display = 'none';
+  }
 }
 resetProfileModalPlaceholders();
 
@@ -4039,27 +4012,6 @@ async function processUploadedDocument(file) {
     return { pages, chapters };
   }
 
-  // NEW: freemium teaser - only extract page 1 for unauthenticated users
-  if (lowerName.endsWith('.pdf') || (uint8.length > 4 && uint8[0] === 0x25 && uint8[1] === 0x50 && uint8[2] === 0x44 && uint8[3] === 0x46)) {
-    // Extract all page texts, then only keep page 1 for freemium teaser
-    const pageTexts = await window.extractPdfTexts(lib, uint8);
-    const pages = [];
-    const chapters = [];
-
-    if (pageTexts.length > 0) {
-      const { pageNumber, text } = pageTexts[0];  // Only page 1
-      const sents = splitIntoSentences(text);
-      if (sents.length > 0) {
-        chapters.push({ title: `PDF Page ${pageNumber}`, pageIndex: 0 });
-        for (let s = 0; s < sents.length; s += 5) {
-          pages.push(sents.slice(s, s + 5));
-        }
-      }
-    }
-
-    return { pages, chapters };
-  }
-
   if (lowerName.endsWith('.html') || lowerName.endsWith('.htm')) {
     const raw = decodeTextRobustly(uint8);
     const blocks = parseHtmlToBlocks(raw);
@@ -4085,6 +4037,16 @@ async function processUploadedDocument(file) {
   const pages = [];
   for (let i = 0; i < sents.length; i += 5) pages.push(sents.slice(i, i + 5));
   return { pages, chapters: [{ title: "Beginning", pageIndex: 0 }] };
+}
+
+// Freemium teaser: extract only page 1 for unauthenticated users
+async function processUploadedDocumentFreemium(file) {
+  const result = await processUploadedDocument(file);
+  const firstPage = result.pages.length > 0 ? [result.pages[0]] : [];
+  const firstChapter = result.chapters && result.chapters.length > 0
+    ? [{ ...result.chapters[0], pageIndex: 0 }]
+    : [{ title: "Beginning", pageIndex: 0 }];
+  return { pages: firstPage, chapters: firstChapter };
 }
 
 function splitIntoSentences(text) {
