@@ -111,3 +111,55 @@ test('profileRefillBalance and profileRefillBalanceTopup exist in index.html', (
   assert.ok(html.includes('id="profileRefillBalance"'), 'profileRefillBalance element exists in HTML');
   assert.ok(html.includes('id="profileRefillBalanceTopup"'), 'profileRefillBalanceTopup element exists in HTML');
 });
+
+test('openProfileModal falls back gracefully when topup columns are missing', async () => {
+  const dom = setupTestDom();
+  let queryCount = 0;
+  dom.window.supabase = {
+    createClient: () => ({
+      auth: {
+        getSession: async () => ({
+          data: {
+            session: {
+              user: { id: 'test-user-id', email: 'test@example.com' }
+            }
+          }
+        }),
+        onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } })
+      },
+      from: () => ({
+        select: (cols) => ({
+          eq: () => ({
+            maybeSingle: async () => {
+              queryCount++;
+              if (cols.includes('topup_neural_chars')) {
+                return {
+                  data: null,
+                  error: { message: "column 'topup_neural_chars' does not exist", code: '42703' }
+                };
+              }
+              return {
+                data: {
+                  neural_chars_remaining: 3500,
+                  summary_credits_remaining: 2,
+                  tier: 'free'
+                },
+                error: null
+              };
+            }
+          })
+        })
+      })
+    })
+  };
+
+  dom.window.eval(appJs);
+  const navProfileItem = dom.window.document.getElementById('navProfileItem');
+  navProfileItem.dispatchEvent(new dom.window.Event('click'));
+  await new Promise((r) => setTimeout(r, 200));
+
+  assert.ok(queryCount >= 2, 'second fallback query was executed after column error');
+  assert.equal(dom.window.document.getElementById('profileModalTier').textContent, '⚡ Free Trial Account');
+  assert.equal(dom.window.document.getElementById('profileNeuralCount').textContent, '3,500 / 5,000 Chars');
+});
+

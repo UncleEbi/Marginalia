@@ -1476,14 +1476,27 @@ async function openProfileModal() {
   profileModalAvatar.textContent = initial;
   profileModalEmail.textContent = email;
 
-  const { data: profile, error: profileError } = await supabaseClient
+  let { data: profile, error: profileError } = await supabaseClient
     .from('profiles')
     .select('neural_chars_remaining, summary_credits_remaining, tier, pro_tier, pro_expires_at, pro_quota_resets_at, topup_neural_chars, topup_ai_ops')
     .eq('id', user.id)
     .maybeSingle();
 
+  // If column error or schema cache issue, retry with base columns
+  if (profileError && /topup_neural_chars|topup_ai_ops|column/i.test(profileError.message || '')) {
+    console.warn('Retrying profile fetch without topup columns:', profileError.message);
+    const fallback = await supabaseClient
+      .from('profiles')
+      .select('neural_chars_remaining, summary_credits_remaining, tier, pro_tier, pro_expires_at, pro_quota_resets_at')
+      .eq('id', user.id)
+      .maybeSingle();
+    profile = fallback.data;
+    profileError = fallback.error;
+  }
+
   // A failed lookup must not be shown as real numbers (it used to fall back to a full 5,000 / 3)
   if (profileError) {
+    console.error('Failed to load profile details:', profileError);
     profileModalTier.textContent = "Couldn't load your account details";
     profileNeuralCount.textContent = '—';
     profileNeuralProgress.style.width = '0%';
