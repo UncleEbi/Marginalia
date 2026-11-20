@@ -22,7 +22,7 @@
 // only tracks *consecutive* abuse.
 //
 // A counter store that cannot be reached is a policy decision per tier:
-//   - content tiers (tts, summarize, geo, webhook) fail open and log, because a reader losing a
+//   - content tiers (tts, summarize, webhook) fail open and log, because a reader losing a
 //     narration is worse than an unthrottled minute, and the work is billed per call anyway;
 //   - auth_sensitive fails closed with 503 RATE_LIMIT_UNAVAILABLE, because sign-in is the one
 //     endpoint where "no limit" means "unlimited password guesses". Sign-in staying down while the
@@ -48,9 +48,6 @@ export const TIERS = {
   auth_sensitive: {
     email: { limit: 5, windowSeconds: 15 * 60 },
     ip: { limit: 15, windowSeconds: 15 * 60 }
-  },
-  geo: {
-    ip: { limit: 30, windowSeconds: 60 }
   },
   // Paystack can legitimately burst after a sale; this is a flood ceiling, not a business limit.
   webhook: {

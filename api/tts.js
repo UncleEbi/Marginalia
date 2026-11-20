@@ -371,7 +371,7 @@ export default async function handler(req, res) {
 
   const body = req.body || {};
 
-  // Strict payload validation happens first, before Redis rate limiting, before the Supabase auth
+  // Strict payload validation happens first, before the rate-limit check, before the Supabase auth
   // and quota reads, and before any provider call: a malformed or oversized body must never cost
   // a single database round trip or an OpenAI request.
   if (typeof body.text !== 'string') {

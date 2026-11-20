@@ -29,7 +29,7 @@ class HttpError extends Error {
   }
 }
 
-// Input ceiling, checked before any Redis, auth or OpenAI work.
+// Input ceiling, checked before any rate-limit, auth or OpenAI work.
 const MAX_SUMMARY_TEXT_CHARS = 25000;
 
 /**
@@ -147,7 +147,7 @@ export default async function handler(req, res) {
       userId = user.id;
 
       // Rate limit immediately after the JWT is verified and before the quota read, so a burst of
-      // summary requests costs nothing more than a Redis check.
+      // summary requests costs nothing more than a counter check.
       const gate = await enforceRateLimit(req, res, {
         tier: 'summarize',
         identifiers: [

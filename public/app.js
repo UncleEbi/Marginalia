@@ -1702,7 +1702,7 @@ async function updateAuthBadge(explicitRemaining = null) {
 // --- AUTH: SERVER-SIDE RATE LIMITING + TURNSTILE ---------------------------------------------
 // Sign-in no longer calls Supabase Auth from the browser, because then the only throttle would be
 // a disabled button. /api/auth verifies the Turnstile challenge, applies the per-email and per-IP
-// limits in Redis and only then reaches Supabase. A 429 tells us exactly how long to wait, and
+// limits on the server and only then reaches Supabase. A 429 tells us exactly how long to wait, and
 // whether the next attempt needs a CAPTCHA.
 const TURNSTILE_SITE_KEY = (
   document.querySelector('meta[name="turnstile-site-key"]')?.content || ''

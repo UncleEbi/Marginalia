@@ -289,7 +289,7 @@ export default async function handler(req, res) {
   }
 
   // Only after the signature (or Paystack's own record) proves the delivery is genuine do we spend
-  // a Redis round trip on it. The ceiling is high on purpose: a sale can legitimately produce a
+  // a counter round trip on it. The ceiling is high on purpose: a sale can legitimately produce a
   // burst of deliveries, and dropping one would mean a paid account never gets credited.
   const gate = await enforceRateLimit(req, res, {
     tier: 'webhook',
