@@ -15,7 +15,7 @@
 //
 //   200 { session: { access_token, refresh_token, expires_in, user } }  (signin/signup)
 //   200 { ok: true }                                                    (reset)
-//   400 { error, requireCaptcha? } | 401 { error } | 429 (rate limited) | 500 | 503
+//   400 { error, requireCaptcha? } | 401 { error } | 429 (rate limited) | 500 | 502
 import { enforceRateLimit, clientIp, normalizeEmail } from './_lib/rate-limit.js';
 import { supabaseAnonConfig } from './_lib/supabase.js';
 
@@ -76,8 +76,7 @@ export default async function handler(req, res) {
     identifiers: [
       { bucket: 'email', value: email },
       { bucket: 'ip', value: ip }
-    ],
-    failClosed: true
+    ]
   });
   if (!gate.ok) return;
 

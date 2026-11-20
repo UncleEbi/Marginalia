@@ -155,26 +155,27 @@ async function recordViolation(redis, key) {
  *   [{ bucket: 'user', value: user.id }, { bucket: 'ip', value: clientIp(req) }]
  *
  * Returns { ok: true, headers } when the request may continue, or { ok: false } after having
- * written a 429 (or a 503 when failClosed and Upstash is not configured).
+ * written a 429.
+ *
+ * With no counter store configured the tier cannot be enforced, so the request is allowed
+ * through and the outage is logged. Locking users out of sign-in is worse than losing the
+ * in-app window: the journey in front of this is the platform/WAF rate limit on /api/auth and
+ * Supabase Auth's own per-email and per-IP limits, which are always present.
  *
  * @param {object} req
  * @param {object} res
- * @param {{tier: string, identifiers: Array<{bucket: string, value: string}>, failClosed?: boolean}} options
+ * @param {{tier: string, identifiers: Array<{bucket: string, value: string}>}} options
  */
-export async function enforceRateLimit(req, res, { tier, identifiers = [], failClosed = false }) {
+export async function enforceRateLimit(req, res, { tier, identifiers = [] }) {
   const tierSpec = TIERS[tier];
   if (!tierSpec) throw new Error(`Unknown rate-limit tier "${tier}"`);
 
   const redis = getRedis();
   if (!redis) {
     console.error(
-      `[rate-limit] Upstash is not configured, so the "${tier}" tier cannot be enforced. ` +
-      'Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN in the deployment environment.'
+      `[rate-limit] No counter store configured, so the "${tier}" tier is not enforced ` +
+      'for this request. Rely on the WAF and upstream provider limits.'
     );
-    if (failClosed) {
-      res.status(503).json({ error: 'RATE_LIMIT_UNAVAILABLE' });
-      return { ok: false, retryAfter: 30 };
-    }
     return { ok: true, headers: {} };
   }
 
