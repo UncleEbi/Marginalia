@@ -18,6 +18,9 @@ import {
   evaluateChargeEvent
 } from '../lib/pro-plan.js';
 
+// Paystack's published webhook source addresses; the handler allowlists them.
+const PAYSTACK_IP = '52.31.139.75';
+
 const DAY = 86400000;
 const NOW = Date.parse('2026-10-15T12:00:00Z');
 const iso = (ms) => new Date(ms).toISOString();
@@ -422,7 +425,7 @@ test('webhook verifies the signature before anything else', async () => {
   globalThis.fetch = async () => ({ ok: false, status: 404, json: async () => ({ status: false }) });
   try {
     const bad = res();
-    await webhookHandler({ method: 'POST', headers: { 'x-paystack-signature': sign(payload, 'wrong') }, body: payload }, bad);
+    await webhookHandler({ method: 'POST', headers: { 'x-paystack-signature': sign(payload, 'wrong'), 'x-forwarded-for': PAYSTACK_IP }, body: payload }, bad);
     assert.equal(bad.statusCode, 401, 'wrong signature');
 
     const missing = res();
@@ -454,7 +457,7 @@ test('a genuine delivery Vercel re-serialised is accepted via transaction verify
     const r = res();
     // The body arrives as an object (Vercel's parsed form) but the signature was made from other
     // bytes, which is exactly the re-serialisation case this fallback exists for.
-    await webhookHandler({ method: 'POST', headers: { 'x-paystack-signature': sign(JSON.stringify(good), 'different') }, body: good }, r);
+    await webhookHandler({ method: 'POST', headers: { 'x-paystack-signature': sign(JSON.stringify(good), 'different'), 'x-forwarded-for': PAYSTACK_IP }, body: good }, r);
     assert.equal(r.statusCode, 500, 'authenticated via verify, then reached the (unreachable) database');
   } finally {
     globalThis.fetch = restore;
@@ -470,10 +473,40 @@ test('a webhook that cannot reach Paystack to verify returns 502 so it is retrie
   globalThis.fetch = async () => { throw new Error('network down'); };
   try {
     const r = res();
-    await webhookHandler({ method: 'POST', headers: { 'x-paystack-signature': 'nope' }, body: payload }, r);
+    await webhookHandler({ method: 'POST', headers: { 'x-paystack-signature': 'nope', 'x-forwarded-for': PAYSTACK_IP }, body: payload }, r);
     assert.equal(r.statusCode, 502);
   } finally {
     globalThis.fetch = restore;
+  }
+});
+
+test('a delivery from outside Paystack\'s published addresses is refused even with a valid signature', async () => {
+  process.env.PAYSTACK_SECRET_KEY = 'whsec_test';
+  const payload = JSON.stringify(event());
+  const r = res();
+  await webhookHandler({
+    method: 'POST',
+    headers: { 'x-paystack-signature': sign(payload, 'whsec_test'), 'x-forwarded-for': '203.0.113.5' },
+    body: payload
+  }, r);
+  assert.equal(r.statusCode, 403, 'a forged delivery from a foreign address never reaches the DB');
+});
+
+test('PAYSTACK_WEBHOOK_ALLOWED_IPS extends the allowlist for a Paystack egress change', async () => {
+  process.env.PAYSTACK_SECRET_KEY = 'whsec_test';
+  process.env.PAYSTACK_WEBHOOK_ALLOWED_IPS = '198.51.100.9';
+  const payload = JSON.stringify(event({ amount: 5000 }, {}, 'studio_yearly'));
+  try {
+    const r = res();
+    await webhookHandler({
+      method: 'POST',
+      headers: { 'x-paystack-signature': sign(payload, 'whsec_test'), 'x-forwarded-for': '198.51.100.9' },
+      body: payload
+    }, r);
+    assert.equal(r.statusCode, 200);
+    assert.match(r.body, /Ignored: amount/);
+  } finally {
+    delete process.env.PAYSTACK_WEBHOOK_ALLOWED_IPS;
   }
 });
 
@@ -481,7 +514,7 @@ test('webhook ignores a mismatched amount with 200 and never upgrades', async ()
   process.env.PAYSTACK_SECRET_KEY = 'whsec_test';
   const payload = JSON.stringify(event({ amount: 5000 }, {}, 'studio_yearly'));
   const r = res();
-  await webhookHandler({ method: 'POST', headers: { 'x-paystack-signature': sign(payload, 'whsec_test') }, body: payload }, r);
+  await webhookHandler({ method: 'POST', headers: { 'x-paystack-signature': sign(payload, 'whsec_test'), 'x-forwarded-for': PAYSTACK_IP }, body: payload }, r);
   assert.equal(r.statusCode, 200);
   assert.match(r.body, /Ignored: amount/);
 });
@@ -490,7 +523,7 @@ test('webhook acks unknown plan events without granting anything', async () => {
   process.env.PAYSTACK_SECRET_KEY = 'whsec_test';
   const payload = JSON.stringify(event({}, { plan: 'pro_lifetime' }));
   const r = res();
-  await webhookHandler({ method: 'POST', headers: { 'x-paystack-signature': sign(payload, 'whsec_test') }, body: payload }, r);
+  await webhookHandler({ method: 'POST', headers: { 'x-paystack-signature': sign(payload, 'whsec_test'), 'x-forwarded-for': PAYSTACK_IP }, body: payload }, r);
   assert.equal(r.statusCode, 200);
   assert.match(r.body, /Ignored: unknown plan/);
 });
@@ -501,7 +534,7 @@ test('webhook reports 500 when it cannot reach the database, so Paystack retries
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'fake';
   const payload = JSON.stringify(event({}, {}, 'student_quarterly'));
   const r = res();
-  await webhookHandler({ method: 'POST', headers: { 'x-paystack-signature': sign(payload, 'whsec_test') }, body: payload }, r);
+  await webhookHandler({ method: 'POST', headers: { 'x-paystack-signature': sign(payload, 'whsec_test'), 'x-forwarded-for': PAYSTACK_IP }, body: payload }, r);
   assert.equal(r.statusCode, 500);
 });
 

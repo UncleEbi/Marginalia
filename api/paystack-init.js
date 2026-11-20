@@ -26,6 +26,7 @@ import {
 import {
   REFILL_PACKS, refillAmountDisplay, refillPacksFor
 } from '../lib/refill-plans.js';
+import { supabaseConfig } from './_lib/supabase.js';
 
 // Vercel sets x-vercel-ip-country on every request; Cloudflare's cf-ipcountry is the fallback in
 // case this ever runs behind it. No header means no usable country, and lib/pro-plan.js then
@@ -68,19 +69,6 @@ function refillList(currency) {
     neural_chars: pack.neural_chars,
     ai_ops: pack.ai_ops
   }));
-}
-
-function supabaseConfig() {
-  const rawUrl = process.env.SUPABASE_URL || process.env.SUPABASE_PROJECT_URL || '';
-  let url = '';
-  try {
-    if (rawUrl) url = new URL(rawUrl.trim()).origin; // root origin only
-  } catch (e) {
-    url = rawUrl.replace(/\/+$/, '');
-  }
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-  const key = serviceKey || process.env.SUPABASE_ANON_KEY || '';
-  return { url, key };
 }
 
 export default async function handler(req, res) {

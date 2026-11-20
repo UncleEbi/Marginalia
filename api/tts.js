@@ -22,8 +22,13 @@ import {
 import {
   NEURAL_MONTHLY_COL, NEURAL_TOPUP_COL, bothBucketsEmpty, monthlyAllowance
 } from '../lib/quota-ops.js';
+import { enforceRateLimit, clientIp, keyFingerprint } from './_lib/rate-limit.js';
 
 const OPENAI_MAX_CHARS = 4096; // hard limit of the OpenAI speech endpoint
+
+// Validation ceiling for a single narration request. One sentence is normally ~80-200 characters,
+// so 4,000 leaves generous headroom while keeping a single request cheap and predictable.
+const MAX_TTS_CHARS = 4000;
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -365,7 +370,23 @@ export default async function handler(req, res) {
   }
 
   const body = req.body || {};
-  const text = typeof body.text === 'string' ? body.text : '';
+
+  // Strict payload validation happens first, before Redis rate limiting, before the Supabase auth
+  // and quota reads, and before any provider call: a malformed or oversized body must never cost
+  // a single database round trip or an OpenAI request.
+  if (typeof body.text !== 'string') {
+    return res.status(400).json({ error: 'text must be a string.' });
+  }
+  const text = body.text;
+  if (text.trim().length === 0) {
+    return res.status(400).json({ error: 'No text provided for narration.' });
+  }
+  if (text.length > MAX_TTS_CHARS) {
+    return res.status(400).json({
+      error: `Text is too long (${text.length} characters, limit ${MAX_TTS_CHARS}).`
+    });
+  }
+
   const engine = body.engine || 'openai';
   const voiceId = body.voiceId || body.voice || '';
   const speed = clampSpeed(body.speed);
@@ -373,14 +394,6 @@ export default async function handler(req, res) {
   const customOpenAiKey = req.headers['x-custom-openai-key'];
   const customElevenKey = req.headers['x-custom-elevenlabs-key'];
   const token = req.headers.authorization?.replace('Bearer ', '');
-
-  if (!text.trim()) {
-    return res.status(400).json({ error: 'No text provided for narration.' });
-  }
-
-  if (engine === 'openai' && text.length > OPENAI_MAX_CHARS) {
-    return res.status(400).json({ error: `Text is too long for OpenAI voices (${text.length} characters, limit ${OPENAI_MAX_CHARS}).` });
-  }
 
   if (!['openai', 'elevenlabs', 'google'].includes(engine)) {
     return res.status(400).json({ error: `Unsupported engine: ${engine}` });
@@ -410,6 +423,18 @@ export default async function handler(req, res) {
         return res.status(401).json({ error: 'Invalid or expired user session.' });
       }
 
+      // Distributed rate limiting, keyed on the verified user AND the client address, runs before
+      // the quota read and before any provider call: a flood must never reach OpenAI, and a single
+      // account must not be able to spend its allowance at machine speed from one device.
+      const gate = await enforceRateLimit(req, res, {
+        tier: 'tts',
+        identifiers: [
+          { bucket: 'user', value: user.id },
+          { bucket: 'ip', value: clientIp(req) }
+        ]
+      });
+      if (!gate.ok) return;
+
       // Applies a due monthly allowance refill before the balance is read.
       // IMPORTANT: the refill touches only the monthly allowance columns. It never resets the
       // top-up columns, so a bought pack continues to extend the session across monthly cycles.
@@ -426,6 +451,14 @@ export default async function handler(req, res) {
         topupChars = profile?.topup_neural_chars ?? 0;
       }
 
+      // A free account whose address was never confirmed is a disposable sign-up: it can register
+      // an inbox it does not own and spend host-funded OpenAI credits. Paid accounts are exempt
+      // because Paystack has already verified them.
+      const paidNow = profile?.tier === 'pro' && isProActive(profile);
+      if (!paidNow && !user.email_confirmed_at) {
+        return res.status(403).json({ error: 'EMAIL_VERIFICATION_REQUIRED' });
+      }
+
       // Allow if the combined balance covers the request; the split happens at reservation time.
       if (bothBucketsEmpty({ monthlyRemaining: monthlyChars, topupRemaining: topupChars }) ||
           monthlyChars + topupChars < charCount) {
@@ -435,6 +468,17 @@ export default async function handler(req, res) {
           remaining: Math.max(0, monthlyChars) + Math.max(0, topupChars)
         });
       }
+    } else {
+      // BYOK narrates on the reader's own provider key, so their key is the identity: limit it and
+      // the client address, and never the host's quota.
+      const gate = await enforceRateLimit(req, res, {
+        tier: 'tts',
+        identifiers: [
+          { bucket: 'byok', value: keyFingerprint(customOpenAiKey || customElevenKey) },
+          { bucket: 'ip', value: clientIp(req) }
+        ]
+      });
+      if (!gate.ok) return;
     }
 
     // Reserve the characters against the two-bucket model at the same time as generating the audio

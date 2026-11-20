@@ -13,7 +13,8 @@
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { getPlan, evaluateChargeEvent, nextProExpiry, PRO_PERIOD_DAYS } from '../lib/pro-plan.js';
-import { REFILL_PACKS, refillAmountForCurrency } from '../lib/refill-plans.js';
+import { REFILL_PACKS } from '../lib/refill-plans.js';
+import { enforceRateLimit, clientIp } from './_lib/rate-limit.js';
 
 // Prefer whatever raw bytes the platform preserved; otherwise re-serialise the parsed body
 // (V8 keeps key order and compact formatting, which round-trips Paystack's JSON byte-for-byte
@@ -134,6 +135,9 @@ export async function applyProUpgrade(db, { userId, reference, paidAt, durationD
   throw new Error('Profile update kept conflicting; left for the next webhook retry.');
 }
 
+// Duplicate copy of applyProUpgrade removed: the file previously contained two identical
+// versions of this function. Only one remains so the upgrade path stays a single, readable
+// implementation.
 // Applies a verified refill pack payment. The pack's neural and AI-ops credits are added to the
 // two non-expiring top-up columns on the user's profile row. The reference is the idempotency key,
 // so a duplicate webhook never double-credits the same pack.
@@ -214,82 +218,18 @@ export async function applyRefill(db, { userId, reference, paidAt, packId, pack 
   }
   throw new Error('Refill balance update kept conflicting; left for the next webhook retry.');
 }
-  const plan = getPlan(planId);
-  if (!plan) throw new Error(`Unknown plan ${planId} in a verified charge.`);
 
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const { data: row, error: readErr } = await db
-      .from('profiles')
-      .select('tier, pro_expires_at, last_payment_reference')
-      .eq('id', userId)
-      .maybeSingle();
+// Paystack's published webhook source addresses.
+const PAYSTACK_WEBHOOK_IPS = ['52.31.139.75', '52.49.173.169', '52.214.14.220'];
 
-    if (readErr) {
-      const missingColumn = /pro_expires_at|pro_tier|pro_quota_resets_at/i.test(readErr.message || '');
-      throw new Error(missingColumn
-        ? 'profiles is missing pro_expires_at, pro_tier or pro_quota_resets_at — run the SQL migrations in supabase/migrations/ first.'
-        : `Could not read the profile: ${readErr.message}`);
-    }
-
-    // One monthly allowance, refilled by the endpoints every PRO_PERIOD_DAYS while Pro lasts.
-    const allowance = {
-      summary_credits_remaining: plan.summaryCredits,
-      neural_chars_remaining: plan.neuralChars,
-      pro_quota_resets_at: new Date(paidAt + PRO_PERIOD_DAYS * 86400000).toISOString()
-    };
-
-    if (!row) {
-      // First row for this account: the payment is the thing that creates it. The insert carries
-      // the whole purchase, so a concurrent delivery that wins the race simply leaves this one to
-      // retry against the row it created (duplicate id) instead of crediting twice.
-      const firstExpiry = nextProExpiry(null, paidAt, durationDays);
-      const { error: insertErr } = await db.from('profiles').insert({
-        id: userId,
-        ...(customerEmail ? { email: customerEmail } : {}),
-        tier: 'pro',
-        pro_tier: plan.tier,
-        pro_expires_at: firstExpiry.toISOString(),
-        last_payment_reference: reference,
-        ...allowance
-      });
-      if (insertErr) {
-        if (/duplicate|unique|already exists/i.test(insertErr.message || '')) continue;
-        throw new Error(`Could not create the paid profile: ${insertErr.message}`);
-      }
-      return { applied: true, expiresAt: firstExpiry.toISOString() };
-    }
-
-    if (row.last_payment_reference === reference) {
-      return { applied: true, alreadyProcessed: true, expiresAt: row.pro_expires_at };
-    }
-
-    const newExpiry = nextProExpiry(row.pro_expires_at, paidAt, durationDays);
-
-    // Compare-and-swap on the fields we read: if another delivery changed them first, retry.
-    let q = db
-      .from('profiles')
-      .update({
-        tier: 'pro',
-        pro_tier: plan.tier,
-        pro_expires_at: newExpiry.toISOString(),
-        last_payment_reference: reference,
-        // A 12-month charge seeds one allowance, not twelve: the endpoints refill it per period.
-        ...allowance
-      })
-      .eq('id', userId)
-      .eq('tier', row.tier);
-    q = row.pro_expires_at == null
-      ? q.is('pro_expires_at', null)
-      : q.eq('pro_expires_at', row.pro_expires_at);
-    const { data: updated, error: updateErr } = await q.select('pro_expires_at');
-
-    if (updateErr) throw new Error(`Could not update the profile: ${updateErr.message}`);
-    if (updated && updated.length) {
-      return { applied: true, expiresAt: updated[0].pro_expires_at };
-    }
-    // someone else changed the row first: read again and retry
-  }
-  throw new Error('Profile update kept conflicting; left for the next webhook retry.');
+// The list can be extended from the environment, so a Paystack egress change is a config edit
+// instead of a rejected payment and a code deploy.
+function allowedWebhookIps() {
+  const configured = String(process.env.PAYSTACK_WEBHOOK_ALLOWED_IPS || '')
+    .split(',')
+    .map((ip) => ip.trim())
+    .filter(Boolean);
+  return new Set([...PAYSTACK_WEBHOOK_IPS, ...configured]);
 }
 
 export default async function handler(req, res) {
@@ -337,6 +277,26 @@ export default async function handler(req, res) {
     event = verified;
   }
 
+  // Paystack publishes the source addresses its webhooks are delivered from. The HMAC already
+  // proves the body came from Paystack, so this is defence in depth for a leaked secret: a forged
+  // delivery would still have to arrive from one of these addresses.
+  const sourceIp = clientIp(req);
+  if (!allowedWebhookIps().has(sourceIp)) {
+    // 403 (not 200) so Paystack retries rather than silently losing a real payment. Extend the list
+    // with PAYSTACK_WEBHOOK_ALLOWED_IPS if Paystack changes its egress range.
+    console.warn(`Paystack webhook rejected from ${sourceIp}: not a published Paystack address.`);
+    return res.status(403).send('Forbidden: unexpected source address');
+  }
+
+  // Only after the signature (or Paystack's own record) proves the delivery is genuine do we spend
+  // a Redis round trip on it. The ceiling is high on purpose: a sale can legitimately produce a
+  // burst of deliveries, and dropping one would mean a paid account never gets credited.
+  const gate = await enforceRateLimit(req, res, {
+    tier: 'webhook',
+    identifiers: [{ bucket: 'ip', value: sourceIp }]
+  });
+  if (!gate.ok) return;
+
   // Authenticated (by signature or by Paystack's own record); decide whether this grants anything.
   const decision = evaluateChargeEvent(event);
 
@@ -349,6 +309,19 @@ export default async function handler(req, res) {
     if (!pack) {
       console.warn(`Paystack webhook ignored (refill pack id "${packId || 'missing'}" not recognized).`);
       return res.status(200).send('Ignored: refill pack not recognized');
+    }
+
+    // The pack id in metadata decides what is granted, so the charge that accompanies it has to be
+    // the pack's own price in its own currency. Without this an underpaid (or wrong-currency)
+    // transaction carrying a refill pack id would still credit the full pack.
+    const packAmount = pack.currency === 'USD' ? pack.amount_cents : pack.amount_kobo;
+    const chargedAmount = Number(event?.data?.amount);
+    const chargedCurrency = event?.data?.currency;
+    if (chargedCurrency !== pack.currency || !Number.isFinite(chargedAmount) || chargedAmount < packAmount) {
+      console.warn(
+        `Paystack webhook ignored (refill ${packId} charged ${chargedAmount} ${chargedCurrency}, expected ${packAmount} ${pack.currency}).`
+      );
+      return res.status(200).send('Ignored: refill charge does not match the pack price');
     }
 
     const supabaseUrl = process.env.SUPABASE_URL;

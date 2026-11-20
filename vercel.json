@@ -19,6 +19,15 @@
           "value": "text/plain"
         }
       ]
+    },
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "https://marginalia-rme.vercel.app"
+        }
+      ]
     }
   ]
 }

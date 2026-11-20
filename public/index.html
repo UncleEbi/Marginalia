@@ -14,6 +14,7 @@
   </script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="turnstile-site-key" content="">
   <!-- Browser Tab Title -->
   <title>Marginalia — Reading Made Easy</title>
 
@@ -136,9 +137,10 @@
         pdfExtract.extractPdfTexts(lib, data, { standardFontDataUrl: `${PDFJS_BASE}/standard_fonts/` });
       // Flat image scans have no text layer, so app.js falls back to rendering each page as an
       // image for the OCR endpoint. Same pinned font data as extraction.
-      window.renderPdfPages = (lib, data, onPage) =>
+      window.renderPdfPages = (lib, data, onPage, options) =>
         pdfExtract.renderPdfPagesToImages(lib, data, {
           standardFontDataUrl: `${PDFJS_BASE}/standard_fonts/`,
+          ...options,
           onPage
         });
       window.__resolvePdfjs(pdfjsLib);
@@ -690,7 +692,17 @@
         <input type="password" id="authPass" class="auth-input-field" placeholder="••••••••" autocomplete="current-password" />
       </div>
 
-      <div class="modal-footer-bar" style="margin-top:0.4rem;">
+      <!-- Cloudflare Turnstile. Rendered on demand, only after the server asks for a challenge
+           (requireCaptcha on a 429) or after repeated failed attempts. The site key is public
+           configuration; the secret lives in the server environment. -->
+      <div id="turnstileWrap" style="display:none; margin-bottom:0.75rem;">
+        <div id="turnstileWidget"></div>
+      </div>
+
+      <div id="authLockoutNote" style="display:none; font-size:0.78rem; color:var(--text-muted); line-height:1.35; margin-bottom:0.6rem;"></div>
+
+      <div class="modal-footer-bar" style="margin-top:0.4rem; flex-wrap:wrap; gap:0.4rem;">
+        <button id="authResetBtn" type="button" style="padding:0.45rem 0.85rem; border-radius:6px; background:transparent; color:var(--text-muted); border:1px solid transparent; font-size:0.8rem; cursor:pointer; margin-right:auto;">Forgot password?</button>
         <button id="authCloseBtn" data-close="authModal" style="padding:0.45rem 0.85rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:0.85rem; cursor:pointer;">Cancel</button>
         <button id="authSignUpBtn" style="padding:0.45rem 0.85rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:0.85rem; font-weight:500; cursor:pointer;">Sign Up</button>
         <button id="authSignInBtn" style="background:var(--accent); color:#fff; border:none; font-weight:600; padding:0.45rem 1rem; border-radius:6px; font-size:0.85rem; cursor:pointer;">Sign In</button>
@@ -700,6 +712,9 @@
 
   <!-- BACKGROUND AUDIO KEEP-ALIVE ANCHORS -->
   <audio id="neuralAudio" playsinline style="display:none;"></audio>
+
+  <!-- Cloudflare Turnstile: loaded explicitly so the widget only appears when a challenge is required -->
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 
   <!-- APPLICATION LOGIC -->
   <script src="app.js"></script>

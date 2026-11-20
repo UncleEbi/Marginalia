@@ -16,8 +16,10 @@ import {
   isProActive, downgradeExpiredPro, FREE_SUMMARY_CREDITS, refreshProQuota
 } from '../lib/pro-plan.js';
 import {
-  AI_OPS_MONTHLY_COL, AI_OPS_TOPUP_COL, bothBucketsEmpty, monthlyAllowance
+  AI_OPS_MONTHLY_COL, AI_OPS_TOPUP_COL, OPS_PER_SUMMARY, bothBucketsEmpty, deductAiOp, monthlyAllowance
 } from '../lib/quota-ops.js';
+import { enforceRateLimit, clientIp, keyFingerprint } from './_lib/rate-limit.js';
+import { supabaseConfig } from './_lib/supabase.js';
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) {
@@ -27,149 +29,20 @@ class HttpError extends Error {
   }
 }
 
-// Supabase settings come from the server's environment ONLY. (They used to also be accepted from request
-// headers, which would let anyone point this server at their own Supabase project and sign themselves in.)
-function supabaseConfig() {
-  const rawUrl = process.env.SUPABASE_URL ||
-                 process.env.SUPABASE_PROJECT_URL ||
-                 process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-  let url = '';
-  try {
-    if (rawUrl) url = new URL(rawUrl.trim()).origin; // root origin only (drops /auth/v1, /rest/v1, trailing slashes)
-  } catch (e) {
-    url = rawUrl.replace(/\/+$/, '');
-  }
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-  const key = serviceKey || process.env.SUPABASE_ANON_KEY || '';
-  return { url, key, hasServiceKey: Boolean(serviceKey) };
-}
-
-// ----------------------------------------------------------------
-// Two-bucket AI-ops deduction (monthly allowance first, then top-up)
-// ----------------------------------------------------------------
-
-// A single AI operation consumes exactly 1 op. This is the pay-per-use unit for summaries and OCR.
-const OPS_PER_SUMMARY = 1;
-
-/**
- * Read both AI-ops columns for a user.
- */
-async function readAiOps(supabase, userId) {
-  const { data: row, error } = await supabase
-    .from('profiles')
-    .select(`${AI_OPS_MONTHLY_COL}, ${AI_OPS_TOPUP_COL}`)
-    .eq('id', userId)
-    .single();
-  if (error || !row) return null;
-  return {
-    monthly: row[AI_OPS_MONTHLY_COL] ?? null,
-    topup: row[AI_OPS_TOPUP_COL] ?? null
-  };
-}
-
-/**
- * Drain 1 AI op against the two-bucket model, retrying on conflict.
- */
-async function deductAiOp(supabase, userId, monthlyRemaining, topupRemaining) {
-  const monthCol = AI_OPS_MONTHLY_COL;
-  const topupCol = AI_OPS_TOPUP_COL;
-
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const m = typeof monthlyRemaining === 'number' ? monthlyRemaining : null;
-    const t = typeof topupRemaining === 'number' ? topupRemaining : null;
-
-    const {
-      monthlyTaken,
-      topupTaken,
-      monthlyRemaining: afterMonth,
-      topupRemaining: afterTopup
-    } = reduceAiOp({ monthlyRemaining: m, topupRemaining: t, requested: OPS_PER_SUMMARY });
-
-    if (monthlyTaken == null || topupTaken == null) {
-      // This branch is reached when the CAS update did not land. Re-read and retry.
-      const fresh = await readAiOps(supabase, userId);
-      if (!fresh) {
-        // No row or a freshly-created free row: fall back to the caller's snapshot.
-        return reduceAiOp({ monthlyRemaining, topupRemaining, requested: OPS_PER_SUMMARY });
-      }
-      monthlyRemaining = fresh.monthly;
-      topupRemaining = fresh.topup;
-      continue;
-    }
-
-    let q = supabase
-      .from('profiles')
-      .update({
-        [monthCol]: afterMonth,
-        [topupCol]: afterTopup
-      })
-      .eq('id', userId);
-
-    if (monthlyRemaining != null) q = q.eq(monthCol, monthlyRemaining);
-    if (topupRemaining != null) q = q.eq(topupCol, topupRemaining);
-
-    const { data, error } = await q.select(`${monthCol}, ${topupCol}`);
-    if (error) return reduceAiOp({ monthlyRemaining, topupRemaining, requested: OPS_PER_SUMMARY });
-    if (data && data.length) {
-      return {
-        monthlyRemaining: data[0][monthCol],
-        topupRemaining: data[0][topupCol]
-      };
-    }
-    // conflict again: re-read and retry
-    const fresh = await readAiOps(supabase, userId);
-    if (!fresh) return reduceAiOp({ monthlyRemaining, topupRemaining, requested: OPS_PER_SUMMARY });
-    monthlyRemaining = fresh.monthly;
-    topupRemaining = fresh.topup;
-  }
-
-  // Exhausted retries: use the snapshot rather than failing a summary the user already requested.
-  return reduceAiOp({ monthlyRemaining, topupRemaining, requested: OPS_PER_SUMMARY });
-}
-
-/**
- * Pure arithmetic: deduct one AI op, monthly bucket first, then top-up.
- */
-function reduceAiOp({ monthlyRemaining, topupRemaining, requested }) {
-  const rm = typeof monthlyRemaining === 'number' ? Math.max(0, monthlyRemaining) : 0;
-  const rt = typeof topupRemaining === 'number' ? Math.max(0, topupRemaining) : 0;
-
-  // monthly first
-  const fromMonth = Math.min(rm, requested);
-  const afterMonth = rm - fromMonth;
-  const leftover = requested - fromMonth;
-
-  // then top-up
-  const fromTopup = Math.min(rt, leftover);
-  const afterTopup = rt - fromTopup;
-
-  return {
-    monthlyTaken: fromMonth,
-    topupTaken: fromTopup,
-    monthlyRemaining: afterMonth,
-    topupRemaining: afterTopup
-  };
-}
+// Input ceiling, checked before any Redis, auth or OpenAI work.
+const MAX_SUMMARY_TEXT_CHARS = 25000;
 
 /**
  * Give an AI op back. Attempted only for a summary the user never received, so this is best-effort
- * and intentionally simple: it returns the op to whichever bucket is nonempty, preferring the monthly
- * bucket because that is where the pre-call snapshot is most reliable for a failed generation.
+ * and intentionally simple: the op is returned to whichever bucket we had a stable pre-call snapshot
+ * for. The monthly bucket is preferred because that is where the handler read before the provider
+ * call; the top-up bucket is used only when monthly was already null/unknown.
  */
 async function refundAiOp(supabase, userId, monthlyRemaining, topupRemaining) {
-  // Decide where the refund lands. If the monthly bucket already has room for the refund, put it there;
-  // otherwise put it on the top-up bucket. This preserves the "monthly first" ordering without having
-  // to replay the full split logic backwards.
-  const rm = typeof monthlyRemaining === 'number' ? Math.max(0, monthlyRemaining) : 0;
-  const rt = typeof topupRemaining === 'number' ? Math.max(0, topupRemaining) : 0;
+  const monthCol = typeof monthlyRemaining === 'number' ? AI_OPS_MONTHLY_COL : null;
+  const topupCol = monthCol == null && typeof topupRemaining === 'number' ? AI_OPS_TOPUP_COL : null;
 
-  const targetMonthCol = rm < Number.MAX_SAFE_INTEGER / 2 ? AI_OPS_MONTHLY_COL : null;
-  const targetTopupCol = (targetMonthCol ? false : true) ? AI_OPS_TOPUP_COL : null;
-
-  // If both are finite, prefer the monthly bucket for the refund.
-  const refundToMonth = targetMonthCol != null;
-  const monthCol = refundToMonth ? AI_OPS_MONTHLY_COL : null;
-  const topupCol = (refundToMonth ? false : true) ? AI_OPS_TOPUP_COL : null;
+  if (!monthCol && !topupCol) return;
 
   for (let attempt = 0; attempt < 5; attempt++) {
     const { data: row, error: readErr } = await supabase
@@ -183,30 +56,27 @@ async function refundAiOp(supabase, userId, monthlyRemaining, topupRemaining) {
     const currentMonth = row[AI_OPS_MONTHLY_COL] ?? null;
     const currentTopup = row[AI_OPS_TOPUP_COL] ?? null;
 
-    let nextMonth = currentMonth;
-    let nextTopup = currentTopup;
-    let ok = false;
+    const update = {};
+    let expected = {};
 
-    if (monthCol && currentMonth != null && currentMonth >= 0) {
-      nextMonth = currentMonth + OPS_PER_SUMMARY;
-      ok = true;
-    } else if (topupCol && currentTopup != null && currentTopup >= 0) {
-      nextTopup = currentTopup + OPS_PER_SUMMARY;
-      ok = true;
+    if (monthCol && currentMonth != null) {
+      update[monthCol] = currentMonth + OPS_PER_SUMMARY;
+      expected[monthCol] = currentMonth;
+    } else if (topupCol && currentTopup != null) {
+      update[topupCol] = currentTopup + OPS_PER_SUMMARY;
+      expected[topupCol] = currentTopup;
+    } else {
+      return;
     }
-
-    if (!ok) return;
 
     let q = supabase
       .from('profiles')
-      .update({
-        ...(monthCol ? { [monthCol]: nextMonth } : {}),
-        ...(topupCol ? { [topupCol]: nextTopup } : {})
-      })
+      .update(update)
       .eq('id', userId);
 
-    if (monthCol && currentMonth != null) q = q.eq(monthCol, currentMonth);
-    if (topupCol && currentTopup != null) q = q.eq(topupCol, currentTopup);
+    for (const [col, val] of Object.entries(expected)) {
+      q = q.eq(col, val);
+    }
 
     const { data, error } = await q.select(`${AI_OPS_MONTHLY_COL}, ${AI_OPS_TOPUP_COL}`);
     if (error) return;
@@ -225,14 +95,25 @@ export default async function handler(req, res) {
   }
 
   const body = req.body || {};
-  const text = typeof body.text === 'string' ? body.text : '';
+
+  // Strict payload validation first: nothing below this point may run for a request that is
+  // already known to be malformed or oversized.
+  if (typeof body.text !== 'string') {
+    return res.status(400).json({ error: 'text must be a string.' });
+  }
+  const text = body.text;
+  if (text.trim().length === 0) {
+    return res.status(400).json({ error: 'No text provided for summarization.' });
+  }
+  if (text.length > MAX_SUMMARY_TEXT_CHARS) {
+    return res.status(400).json({
+      error: `Text is too long (${text.length} characters, limit ${MAX_SUMMARY_TEXT_CHARS}).`
+    });
+  }
+
   const mode = body.mode === 'key_takeaways' ? 'key_takeaways' : 'chapter';
   const customOpenAiKey = req.headers['x-custom-openai-key'];
   const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
-
-  if (!text.trim()) {
-    return res.status(400).json({ error: 'No text provided for summarization.' });
-  }
 
   const isByok = Boolean(customOpenAiKey);
   let db = null;
@@ -264,6 +145,17 @@ export default async function handler(req, res) {
       }
       const user = authData.user;
       userId = user.id;
+
+      // Rate limit immediately after the JWT is verified and before the quota read, so a burst of
+      // summary requests costs nothing more than a Redis check.
+      const gate = await enforceRateLimit(req, res, {
+        tier: 'summarize',
+        identifiers: [
+          { bucket: 'user', value: userId },
+          { bucket: 'ip', value: clientIp(req) }
+        ]
+      });
+      if (!gate.ok) return;
 
       // Admin client if a service key exists, otherwise a client acting as the signed-in user
       db = hasServiceKey
@@ -299,6 +191,12 @@ export default async function handler(req, res) {
         await downgradeExpiredPro(db, userId);
       }
 
+      // Unverified free sign-ups are the classic way to farm host-funded AI credits, so they are
+      // refused until the address is confirmed (or they pay, which Paystack verifies for us).
+      if (!isPro && !user.email_confirmed_at) {
+        throw new HttpError(403, 'EMAIL_VERIFICATION_REQUIRED');
+      }
+
       const allowance = monthlyAllowance(profile);
       const monthlyOps = profile?.summary_credits_remaining ?? allowance.ops;
       const topupOps = profile?.topup_ai_ops ?? 0;
@@ -312,7 +210,9 @@ export default async function handler(req, res) {
             : 'Free trial summaries exhausted. Add an OpenAI key in Options, buy a refill pack, or upgrade to Pro.',
           {
             error: 'AI_SUMMARY_QUOTA_EXCEEDED',
-            summaries_remaining: 0
+            summaries_remaining: 0,
+            summaries_monthly: 0,
+            summaries_topup: 0
           });
       }
 
@@ -324,6 +224,16 @@ export default async function handler(req, res) {
       summariesTopup = deducted.topupRemaining;
       reservedOp = true;
       summariesRemaining = summariesMonthly + summariesTopup;
+    } else {
+      // BYOK summaries spend the reader's own OpenAI credits: limit the key fingerprint and the IP.
+      const gate = await enforceRateLimit(req, res, {
+        tier: 'summarize',
+        identifiers: [
+          { bucket: 'byok', value: keyFingerprint(customOpenAiKey) },
+          { bucket: 'ip', value: clientIp(req) }
+        ]
+      });
+      if (!gate.ok) return;
     }
 
     // 3. Generate the summary

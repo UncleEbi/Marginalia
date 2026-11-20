@@ -1,25 +1,19 @@
 import { createClient } from '@supabase/supabase-js';
 import { isProActive, downgradeExpiredPro, FREE_SUMMARY_CREDITS, refreshProQuota } from '../lib/pro-plan.js';
-
-// Supabase settings come from the server's environment ONLY (same rule as describe-image.js).
-const supabase = createClient(
-  process.env.SUPABASE_URL || '',
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ''
-);
+import { AI_OPS_MONTHLY_COL, AI_OPS_TOPUP_COL, bothBucketsEmpty, monthlyAllowance, deductAiOp } from '../lib/quota-ops.js';
+import { MAX_IMAGE_BASE64_CHARS } from './_lib/image-payload.js';
+import { supabaseConfig } from './_lib/supabase.js';
 
 // Flat image scans have no text layer, so the reader renders each PDF page to an image and posts it
-// here to get the text back. The credit gate matches /api/describe-image: BYOK users pay their own
-// key, and every signed-in account spends one summary credit per page — free accounts start with 3,
-// a purchase seeds the plan's allowance (see lib/pro-plan.js), so a paid account is capped too.
+// here to get the text back. The credit gate is now the same two-bucket model used by /api/summarize
+// and /api/describe-image: BYOK users pay their own key, and every signed-in account spends one AI
+// op per page, first against the monthly allowance, then against any bought refill top-up.
 const OCR_SYSTEM_PROMPT =
   'You are an OCR engine. Transcribe every word of visible text from this scanned page image, ' +
   'in natural reading order. Keep paragraph breaks as blank lines and keep lists as separate lines. ' +
   'Fix only obvious scanning artifacts (for example "rn" read as "m") when the context is clear. ' +
   'Never summarize, translate, or add commentary, headers, or markdown. ' +
   'If the page contains no readable text, reply with exactly: (no readable text)';
-
-// Vercel rejects request bodies over ~4.5 MB, and a page that large is oversized for OCR anyway.
-const MAX_IMAGE_CHARS = 3_500_000;
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -31,44 +25,80 @@ export default async function handler(req, res) {
   if (!imageBase64 || typeof imageBase64 !== 'string') {
     return res.status(400).json({ error: 'No image data provided.' });
   }
-  if (imageBase64.length > MAX_IMAGE_CHARS) {
+  if (imageBase64.length > MAX_IMAGE_BASE64_CHARS) {
     return res.status(413).json({ error: 'Scanned page image is too large to read.' });
   }
 
+  const isByok = Boolean(customOpenAiKey);
+  let db = null;
+  let userId = null;
   let isPro = false;
-  let user = null;
   let trialsLeft = 0;
+  let trialsMonthly = null;
+  let trialsTopup = null;
 
-  if (!customOpenAiKey) {
+  if (!isByok) {
     if (!token) {
       return res.status(401).json({ error: 'Please sign in or enter your custom OpenAI key in Options.' });
     }
 
-    const { data: authData, error: authErr } = await supabase.auth.getUser(token);
+    const { url, key, hasServiceKey } = supabaseConfig();
+    if (!url || !key) {
+      return res.status(500).json({ error: 'Backend error: Supabase URL or Key is not configured.' });
+    }
+
+    const authClient = createClient(url, key);
+    const { data: authData, error: authErr } = await authClient.auth.getUser(token);
     if (authErr || !authData?.user) {
       return res.status(401).json({ error: 'Invalid or expired user session.' });
     }
-    user = authData.user;
+    const user = authData.user;
+    userId = user.id;
+    db = hasServiceKey
+      ? createClient(url, key)
+      : createClient(url, key, { global: { headers: { Authorization: `Bearer ${token}` } } });
 
-    // Applies a due monthly allowance refill before the balance is read
-    const { profile } = await refreshProQuota(supabase, user.id);
+    const { profile, error: profileErr } = await refreshProQuota(db, userId);
+    if (profileErr) {
+      const missingColumn = /pro_expires_at/i.test(profileErr.message || '');
+      return res.status(500).json({ error: 'Could not read your account. Please try again.' + (missingColumn
+        ? ' (profiles is missing pro_expires_at, pro_tier or pro_quota_resets_at — run the SQL migrations in supabase/migrations/ first.)'
+        : '') });
+    }
+
+    if (!profile) {
+      const { error: insertErr } = await db.from('profiles').upsert({
+        id: userId,
+        email: user.email,
+        summary_credits_remaining: FREE_SUMMARY_CREDITS,
+        neural_chars_remaining: 5000,
+        tier: 'free'
+      }, { onConflict: 'id', ignoreDuplicates: true });
+      if (insertErr) return res.status(500).json({ error: 'Could not set up your account. Please try again.' });
+    }
 
     isPro = isProActive(profile);
     if (profile?.tier === 'pro' && !isPro) {
-      await downgradeExpiredPro(supabase, user.id);
-      trialsLeft = FREE_SUMMARY_CREDITS;
-    } else {
-      trialsLeft = profile?.summary_credits_remaining ?? 0;
+      await downgradeExpiredPro(db, userId);
     }
 
-    if (trialsLeft <= 0) {
+    const allowance = monthlyAllowance(profile);
+    const monthlyOps = profile?.summary_credits_remaining ?? allowance.ops;
+    const topupOps = profile?.topup_ai_ops ?? 0;
+
+    if (bothBucketsEmpty({ monthlyRemaining: monthlyOps, topupRemaining: topupOps }) ||
+        monthlyOps + topupOps < 1) {
       return res.status(402).json({
-        error: isPro
-          ? "Your plan's AI credits are used up. Renew your plan or add your own OpenAI key in Options."
-          : 'Free trial AI credits exhausted. Add an OpenAI key in Options or upgrade to Pro.',
-        trialExhausted: true
+        error: 'AI_SUMMARY_QUOTA_EXCEEDED',
+        summaries_remaining: 0,
+        summaries_monthly: 0,
+        summaries_topup: 0
       });
     }
+
+    trialsMonthly = monthlyOps;
+    trialsTopup = topupOps;
+    trialsLeft = monthlyOps + topupOps;
   }
 
   const apiKey = customOpenAiKey || process.env.OPENAI_API_KEY;
@@ -113,11 +143,8 @@ export default async function handler(req, res) {
     const raw = aiData.choices?.[0]?.message?.content?.trim() || '';
     const text = raw === '(no readable text)' ? '' : raw;
 
-    if (!customOpenAiKey && user) {
-      await supabase
-        .from('profiles')
-        .update({ summary_credits_remaining: Math.max(0, trialsLeft - 1) })
-        .eq('id', user.id);
+    if (!isByok && userId && trialsMonthly != null && trialsTopup != null) {
+      await deductAiOp(db, userId, trialsMonthly, trialsTopup);
     }
 
     return res.status(200).json({ text });

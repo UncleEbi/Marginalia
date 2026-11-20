@@ -34,6 +34,13 @@ if (SUPABASE_PROJECT_URL && !SUPABASE_PROJECT_URL.includes("your-project")) {
   }
 }
 
+// --- VISION IMAGE CAP ---
+// Mirrors MAX_IMAGE_BASE64_CHARS in api/_lib/image-payload.js. Checked here first so a rendered page
+// or figure that is too big is caught where its page number is known, instead of coming back as a 413
+// in the middle of a scan.
+const MAX_IMAGE_BASE64_CHARS = 2 * 1024 * 1024;
+const FIGURE_TOO_LARGE_MSG = "That figure is too large to analyse. The page you were reading is still open.";
+
 // --- PWA SERVICE WORKER ---
 // (The Install App drawer item is set up further down, in setupInstallDrawerItem.)
 if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
@@ -738,6 +745,10 @@ const authPass = document.getElementById('authPass');
 const authSignInBtn = document.getElementById('authSignInBtn');
 const authSignUpBtn = document.getElementById('authSignUpBtn');
 const authStatusAlert = document.getElementById('authStatusAlert');
+const turnstileWrap = document.getElementById('turnstileWrap');
+const turnstileWidgetEl = document.getElementById('turnstileWidget');
+const authLockoutNote = document.getElementById('authLockoutNote');
+const authResetBtn = document.getElementById('authResetBtn');
 
 const fontSelect = document.getElementById('fontSelect');
 const fontSizeSelect = document.getElementById('fontSizeSelect');
@@ -1445,8 +1456,8 @@ function resetProfileModalPlaceholders() {
   if (profileRefillNote) profileRefillNote.style.display = 'none';
   profileByokStatus.textContent = '—';
   profileByokStatus.style.color = 'var(--text-muted)';
-  if (profileRefillBalance) profileRefillBalance.style.display = 'none';
-  if (profileRefillBalanceTopup) profileRefillBalanceTopup.style.display = 'none';
+  if (profileRefillBalance) profileRefillBalance.textContent = '';
+  if (profileRefillBalanceTopup) profileRefillBalanceTopup.textContent = '';
 }
 resetProfileModalPlaceholders();
 
@@ -1541,6 +1552,27 @@ async function openProfileModal() {
     profileRefillNote.style.display = '';
   } else {
     profileRefillNote.style.display = 'none';
+  }
+
+  // Non-expiring refill top-ups, if any, are shown separately from the monthly allowance so the
+  // Account window names the real rollover balance the user already bought.
+  const refillNeural = typeof profile?.topup_neural_chars === 'number' ? profile.topup_neural_chars : 0;
+  const refillOps = typeof profile?.topup_ai_ops === 'number' ? profile.topup_ai_ops : 0;
+  if (profileRefillBalance) {
+    if (refillNeural > 0) {
+      profileRefillBalance.textContent = `+${refillNeural.toLocaleString()} bonus neural chars`;
+      profileRefillBalance.style.display = '';
+    } else {
+      profileRefillBalance.style.display = 'none';
+    }
+  }
+  if (profileRefillBalanceTopup) {
+    if (refillOps > 0) {
+      profileRefillBalanceTopup.textContent = `+${refillOps.toLocaleString()} bonus AI summaries`;
+      profileRefillBalanceTopup.style.display = '';
+    } else {
+      profileRefillBalanceTopup.style.display = 'none';
+    }
   }
 
   const hasByok = Boolean(localStorage.getItem('marginalia_byok_openai') || localStorage.getItem('marginalia_byok_eleven'));
@@ -1681,87 +1713,267 @@ async function updateAuthBadge(explicitRemaining = null) {
   }
 }
 
-authSignInBtn.addEventListener('click', async () => {
+// --- AUTH: SERVER-SIDE RATE LIMITING + TURNSTILE ---------------------------------------------
+// Sign-in no longer calls Supabase Auth from the browser, because then the only throttle would be
+// a disabled button. /api/auth verifies the Turnstile challenge, applies the per-email and per-IP
+// limits in Redis and only then reaches Supabase. A 429 tells us exactly how long to wait, and
+// whether the next attempt needs a CAPTCHA.
+const TURNSTILE_SITE_KEY = (
+  document.querySelector('meta[name="turnstile-site-key"]')?.content || ''
+).trim();
+
+let turnstileWidgetId = null;
+let captchaToken = '';
+let captchaRequired = false;
+let authFailures = 0;
+let authCooldownTimer = null;
+
+function turnstileReady() {
+  return Boolean(TURNSTILE_SITE_KEY && window.turnstile && turnstileWidgetEl);
+}
+
+// The Turnstile script is async, so it may still be loading when a 429 asks for a challenge.
+// Poll briefly instead of depending on a load callback that could fire before app.js runs.
+let turnstileWaitTimer = null;
+
+function renderTurnstileWidget() {
+  if (!turnstileReady() || turnstileWidgetId !== null) return false;
+  turnstileWidgetId = window.turnstile.render(turnstileWidgetEl, {
+    sitekey: TURNSTILE_SITE_KEY,
+    callback: (token) => { captchaToken = token || ''; },
+    'expired-callback': () => { captchaToken = ''; },
+    'error-callback': () => { captchaToken = ''; }
+  });
+  return true;
+}
+
+// Renders the widget once and keeps it on screen for every following attempt.
+function showCaptchaChallenge() {
+  if (!TURNSTILE_SITE_KEY || !turnstileWrap || !turnstileWidgetEl) return;
+  captchaRequired = true;
+  turnstileWrap.style.display = '';
+
+  if (renderTurnstileWidget() || turnstileWaitTimer) return;
+
+  let attempts = 0;
+  turnstileWaitTimer = setInterval(() => {
+    attempts += 1;
+    if (renderTurnstileWidget() || attempts >= 40) {
+      clearInterval(turnstileWaitTimer);
+      turnstileWaitTimer = null;
+    }
+  }, 300);
+}
+
+// A used or expired token cannot be reused, so every attempt after the first needs a reset.
+function resetCaptchaChallenge() {
+  captchaToken = '';
+  if (window.turnstile && turnstileWidgetId !== null) {
+    try { window.turnstile.reset(turnstileWidgetId); } catch (e) {}
+  }
+}
+
+function setAuthBusy(busy, label) {
+  authSignInBtn.disabled = busy;
+  authSignUpBtn.disabled = busy;
+  if (authResetBtn) authResetBtn.disabled = busy;
+  if (label) authSignInBtn.textContent = label;
+  else authSignInBtn.textContent = 'Sign In';
+}
+
+function clearAuthCooldown() {
+  if (authCooldownTimer) { clearInterval(authCooldownTimer); authCooldownTimer = null; }
+  if (authLockoutNote) { authLockoutNote.style.display = 'none'; authLockoutNote.textContent = ''; }
+  setAuthBusy(false);
+}
+
+// The countdown is driven by the server's Retry-After, not a guess, so the button never re-enables
+// early and the reader is never left staring at a dead form.
+function startAuthCooldown(seconds, reason) {
+  const until = Date.now() + Math.max(1, Number(seconds) || 30) * 1000;
+  if (authCooldownTimer) clearInterval(authCooldownTimer);
+
+  const tick = () => {
+    const left = Math.max(0, Math.ceil((until - Date.now()) / 1000));
+    if (authLockoutNote) {
+      authLockoutNote.style.display = 'block';
+      authLockoutNote.textContent = left > 0
+        ? `${reason} Try again in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}.`
+        : '';
+    }
+    if (left <= 0) clearAuthCooldown();
+  };
+
+  setAuthBusy(true, 'Please wait…');
+  tick();
+  authCooldownTimer = setInterval(tick, 1000);
+}
+
+// --- AI ROUTE GATES: RATE LIMITS AND EMAIL VERIFICATION ---
+// /api/tts and /api/summarize answer 429 with a Retry-After, and 403 with EMAIL_VERIFICATION_REQUIRED
+// for a signed-in account that has not confirmed its address. Both used to reach the reader as raw
+// server codes in an alert; these mirror the auth flow, which counts the wait down and says what to
+// do next instead of re-enabling a dead button.
+let readerNoticeTimer = null;
+let readerNoticeEl = null;
+let readerLockedUntil = 0;
+
+function clearReaderNotice() {
+  if (readerNoticeTimer) { clearInterval(readerNoticeTimer); readerNoticeTimer = null; }
+  if (readerNoticeEl) { readerNoticeEl.remove(); readerNoticeEl = null; }
+  readerLockedUntil = 0;
+}
+
+function retryAfterSeconds(res, data) {
+  return Number(data && data.retryAfter) ||
+         Number(res && res.headers && res.headers.get('Retry-After')) || 30;
+}
+
+// One notice that counts down from the server's Retry-After (never a guess), so the reader can see how
+// long the pause is and what to do when it ends.
+function showReaderCountdown(seconds, reason, onReady) {
+  clearReaderNotice();
+  const until = Date.now() + Math.max(1, Number(seconds) || 30) * 1000;
+  readerLockedUntil = until;
+
+  const el = document.createElement('div');
+  el.style.cssText = 'position:fixed; left:50%; bottom:calc(var(--safe-bottom) + 90px); transform:translateX(-50%); max-width:90vw; background:var(--panel-bg); color:var(--text-main); border:1px solid var(--border); padding:0.55rem 0.9rem; border-radius:8px; font-size:0.8rem; text-align:center; z-index:9999; box-shadow:0 4px 14px rgba(0,0,0,0.35);';
+  document.body.appendChild(el);
+  readerNoticeEl = el;
+
+  const tick = () => {
+    const left = Math.max(0, Math.ceil((until - Date.now()) / 1000));
+    if (left <= 0) {
+      clearReaderNotice();
+      if (typeof onReady === 'function') onReady();
+      return;
+    }
+    el.textContent = `${reason} Try again in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}.`;
+  };
+  tick();
+  readerNoticeTimer = setInterval(tick, 1000);
+}
+
+// Returns true when the response was one of these two gates, so the caller can stop and explain rather
+// than surfacing the server code.
+function explainAiRefusal(status, code, retryAfter, onReady) {
+  if (status === 429) {
+    showReaderCountdown(retryAfter, code === 'TEMP_LOCKOUT'
+      ? 'Too many requests — AI reading is paused for your protection.'
+      : 'Too many AI requests.', onReady);
+    return true;
+  }
+  if (status === 403 && code === 'EMAIL_VERIFICATION_REQUIRED') {
+    updateAuthBadge();
+    authModal.style.display = 'flex';
+    showAuthAlert('Confirm your email address to use AI reading. Open the link we emailed you, then sign in again.', 'error');
+    return true;
+  }
+  return false;
+}
+
+async function submitAuth(action) {
   authStatusAlert.style.display = 'none';
   if (!supabaseClient) {
-    showAuthAlert("Supabase credentials not configured in app.js.", "error");
+    showAuthAlert('Supabase credentials not configured in app.js.', 'error');
     return;
   }
+
   const email = authEmail.value.trim();
   const password = authPass.value;
-  if (!email || !password) {
-    showAuthAlert("Please enter both email and password.", "error");
+  if (!email) {
+    showAuthAlert('Please enter your email address.', 'error');
+    return;
+  }
+  if (action !== 'reset' && !password) {
+    showAuthAlert('Please enter both email and password.', 'error');
+    return;
+  }
+  if (TURNSTILE_SITE_KEY && captchaRequired && !captchaToken) {
+    showAuthAlert('Please complete the verification challenge below.', 'error');
+    showCaptchaChallenge();
     return;
   }
 
-  authSignInBtn.disabled = true;
-  authSignInBtn.textContent = "Signing in...";
+  setAuthBusy(true, action === 'reset' ? 'Sending…' : 'Signing in...');
+
   try {
-    const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
-    if (error) {
-      if (error.message.toLowerCase().includes('email not confirmed')) {
-        showAuthAlert("Email not confirmed. Check your email inbox or turn off 'Confirm email' in Supabase Dashboard (Authentication -> Providers -> Email).", "error");
-      } else {
-        showAuthAlert(error.message, "error");
-      }
-    } else {
-      if (data?.session?.access_token) {
-        localStorage.setItem('marginalia_auth_token', data.session.access_token);
-        localStorage.setItem('marginalia_auth_user', JSON.stringify(data.session.user));
-      }
-      showAuthAlert("Success! Signed in.", "success");
-      setTimeout(() => {
-        authModal.style.display = 'none';
-        updateAuthBadge();
-      }, 500);
-    }
-  } catch (err) {
-    showAuthAlert(err.message, "error");
-  } finally {
-    authSignInBtn.disabled = false;
-    authSignInBtn.textContent = "Sign In";
-  }
-});
+    const res = await fetch('/api/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, email, password, captchaToken })
+    });
+    const data = await res.json().catch(() => ({}));
 
-authSignUpBtn.addEventListener('click', async () => {
-  authStatusAlert.style.display = 'none';
-  if (!supabaseClient) {
-    showAuthAlert("Supabase credentials not configured in app.js.", "error");
-    return;
-  }
-  const email = authEmail.value.trim();
-  const password = authPass.value;
-  if (!email || !password) {
-    showAuthAlert("Please enter both email and password.", "error");
-    return;
-  }
-
-  authSignUpBtn.disabled = true;
-  authSignUpBtn.textContent = "Signing up...";
-  try {
-    const { data, error } = await supabaseClient.auth.signUp({ email, password });
-    if (error) {
-      showAuthAlert(error.message, "error");
-    } else if (data?.user && !data?.session) {
-      showAuthAlert("Account created! Check your email inbox to confirm your email, or turn off 'Confirm email' in Supabase Dashboard (Authentication -> Providers -> Email) to sign in immediately.", "info");
-    } else {
-      if (data?.session?.access_token) {
-        localStorage.setItem('marginalia_auth_token', data.session.access_token);
-        localStorage.setItem('marginalia_auth_user', JSON.stringify(data.session.user));
-      }
-      showAuthAlert("Account created & signed in!", "success");
-      setTimeout(() => {
-        authModal.style.display = 'none';
-        updateAuthBadge();
-      }, 500);
+    if (res.status === 429) {
+      const retryAfter = Number(data.retryAfter) || Number(res.headers.get('Retry-After')) || 30;
+      if (data.requireCaptcha) showCaptchaChallenge();
+      else resetCaptchaChallenge();
+      const reason = data.error === 'TEMP_LOCKOUT'
+        ? 'Too many attempts — sign-in is paused for your protection.'
+        : 'Too many attempts.';
+      showAuthAlert(reason, 'error');
+      startAuthCooldown(retryAfter, reason);
+      return;
     }
+
+    if (!res.ok) {
+      authFailures += 1;
+      if (authFailures >= 3) showCaptchaChallenge();
+      else resetCaptchaChallenge();
+      showAuthAlert(data.error || 'Authentication failed. Please try again.', 'error');
+      return;
+    }
+
+    authFailures = 0;
+
+    if (action === 'reset') {
+      showAuthAlert('If that email has an account, a password reset link is on its way.', 'success');
+      resetCaptchaChallenge();
+      return;
+    }
+
+    if (data.needsEmailConfirmation) {
+      showAuthAlert("Account created! Check your email inbox to confirm your address before signing in.", 'info');
+      resetCaptchaChallenge();
+      return;
+    }
+
+    const session = data.session;
+    if (!session?.access_token) {
+      showAuthAlert('The sign-in service returned no session. Please try again.', 'error');
+      resetCaptchaChallenge();
+      return;
+    }
+
+    // Hand the session to supabase-js so every later request carries the same JWT it manages.
+    await supabaseClient.auth.setSession({
+      access_token: session.access_token,
+      refresh_token: session.refresh_token || ''
+    });
+    localStorage.setItem('marginalia_auth_token', session.access_token);
+    if (session.user) localStorage.setItem('marginalia_auth_user', JSON.stringify(session.user));
+
+    showAuthAlert(action === 'signup' ? 'Account created & signed in!' : 'Success! Signed in.', 'success');
+    resetCaptchaChallenge();
+    setTimeout(() => {
+      authModal.style.display = 'none';
+      updateAuthBadge();
+    }, 500);
   } catch (err) {
-    showAuthAlert(err.message, "error");
+    showAuthAlert(err.message || 'Could not reach the sign-in service. Please try again.', 'error');
   } finally {
-    authSignUpBtn.disabled = false;
-    authSignUpBtn.textContent = "Sign Up";
+    if (!authCooldownTimer) setAuthBusy(false);
   }
-});
+}
+
+authSignInBtn.addEventListener('click', () => submitAuth('signin'));
+
+authSignUpBtn.addEventListener('click', () => submitAuth('signup'));
+
+if (authResetBtn) {
+  authResetBtn.addEventListener('click', () => submitAuth('reset'));
+}
 
 // --- AI SUMMARIZER (3-TIER RESILIENT PIPELINE) ---
 const SUMMARY_STOPWORDS = new Set(("a about above after again all also am an and any are as at be because been before being below between both but by can could did do does doing down during each few for from further had has have having he her here hers him his how i if in into is it its just me more most my no nor not of off on once only or other our out over own same she should so some such than that the their them then there these they this those through to too under until up very was we were what when where which while who whom why will with would you your").split(' '));
@@ -1922,6 +2134,8 @@ async function triggerSummarize(mode) {
           if (data && (res.status === 402 || data.trialExhausted)) {
             profileSummaryCount.textContent = '0 Remaining';
             showToast("AI summaries used up. Using offline summary.");
+          } else if (explainAiRefusal(res.status, data && data.error, retryAfterSeconds(res, data))) {
+            // Verification gate or rate limit: already explained; the offline summary below still reads.
           } else if (res.ok && data && data.summary) {
             summary = data.summary;
             label = 'AI Summary';
@@ -2412,6 +2626,17 @@ async function getNeuralAudioSrc(text) {
   if (hit && hit.src) return hit.src;
   if (audioInflight.has(key)) return audioInflight.get(key);
 
+  // A 429 countdown is running: do not ask again until it ends, or the server's lockout just gets
+  // longer. This mirrors the auth form, which disables its buttons for the same reason.
+  if (readerLockedUntil > Date.now()) {
+    const left = Math.ceil((readerLockedUntil - Date.now()) / 1000);
+    const err = new Error(`AI reading is paused — try again in ${left}s.`);
+    err.status = 429;
+    err.code = 'RATE_LIMITED';
+    err.retryAfter = left;
+    throw err;
+  }
+
   // capture settings now; they can change while we await
   // Always ask the server for normal-speed audio: speed is applied on the phone via playbackRate.
   // (Sending the speed too made the server-side voices play at speed x speed.)
@@ -2453,7 +2678,14 @@ async function getNeuralAudioSrc(text) {
         err.status = 401;
         throw err;
       }
-      if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+      if (!res.ok) {
+        // Carry the status and the server's wait so the play path can answer 403/429 properly.
+        const err = new Error(data.error || `Error ${res.status}`);
+        err.status = res.status;
+        err.code = data.error || '';
+        err.retryAfter = retryAfterSeconds(res, data);
+        throw err;
+      }
 
       src = data.audio_base64 ? base64ToBlobUrl(data.audio_base64) : (data.audioUrl || '');
       if (!src) throw new Error("The voice server returned no audio.");
@@ -2606,6 +2838,9 @@ async function speakServerless(text, opts = {}) {
       showToast("Your phone blocked audio. Tap play again to allow it.");
     } else if (err && err.name === 'AbortError') {
       // a newer load replaced this one; nothing to report
+    } else if (err && explainAiRefusal(err.status, err.code, err.retryAfter,
+      () => showToast('AI reading is available again — press play to continue.'))) {
+      // stopAudio() above already paused playback; the notice carries the countdown and next step.
     } else {
       alert(err.message);
     }
@@ -3296,6 +3531,11 @@ async function explainDiagram(imgSrc, captionText = "") {
     return;
   }
 
+  if (imgSrc.length > MAX_IMAGE_BASE64_CHARS) {
+    showToast(FIGURE_TOO_LARGE_MSG);
+    return;
+  }
+
   preloadStatus.textContent = "Analyzing figure...";
   contentPane.innerHTML = `<div style="text-align:center; padding:3rem; color:var(--text-muted); font-style:italic;">Analyzing diagram with Vision AI...</div>`;
 
@@ -3326,8 +3566,23 @@ async function explainDiagram(imgSrc, captionText = "") {
     }
 
     if (res.status === 402 || data.trialExhausted) {
+      if (data.error === 'AI_SUMMARY_QUOTA_EXCEEDED') {
+        // Vision AI is on the same two-bucket AI-ops model as /api/summarize.
+        paywallModal.style.display = 'flex';
+        renderPage(currentPage);
+        return;
+      }
+
       paywallModal.style.display = 'flex';
       renderPage(currentPage);
+      return;
+    }
+
+    if (res.status === 413) {
+      // The figure is past the endpoint's 2 MB image cap. Put the reader back on the page they came
+      // from and say why, instead of failing with the server's raw message.
+      renderPage(currentPage);
+      showToast(FIGURE_TOO_LARGE_MSG);
       return;
     }
 
@@ -3657,8 +3912,37 @@ async function ocrScannedPdf(lib, uint8) {
   });
 
   const pages = [];
+  const skippedPageNote = (pageNumber) =>
+    `Page ${pageNumber} could not be read because its scanned image is too large. The document continues below.`;
+
+  // A dense page can render past the endpoint's 2 MB image cap at the default 1600px / 0.78 quality.
+  // Re-render only that page smaller and retry once — roughly a third of the bytes, still legible to
+  // OCR — so the reader gets the text instead of a note. Returns '' when the retry cannot help.
+  const renderSmaller = async (pageNumber) => {
+    preloadStatus.textContent = `Re-reading scan ${pageNumber}/${images.length}...`;
+    try {
+      const [small] = await window.renderPdfPages(lib, uint8, null, {
+        maxWidth: 1100,
+        quality: 0.5,
+        pageNumbers: [pageNumber]
+      });
+      return (small && small.dataUrl) || '';
+    } catch (e) {
+      return '';
+    }
+  };
+
   for (let i = 0; i < images.length; i++) {
     preloadStatus.textContent = `Reading scan ${i + 1}/${images.length}...`;
+
+    let dataUrl = images[i].dataUrl;
+    if (dataUrl.length > MAX_IMAGE_BASE64_CHARS) dataUrl = await renderSmaller(images[i].pageNumber);
+
+    if (!dataUrl || dataUrl.length > MAX_IMAGE_BASE64_CHARS) {
+      // Still too large after the retry: name the page and keep the rest of the scan.
+      pages.push({ pageNumber: images[i].pageNumber, text: skippedPageNote(images[i].pageNumber) });
+      continue;
+    }
 
     const headers = { 'Content-Type': 'application/json' };
     if (token) headers['Authorization'] = `Bearer ${token}`;
@@ -3667,10 +3951,16 @@ async function ocrScannedPdf(lib, uint8) {
     const res = await fetch('/api/ocr', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ imageBase64: images[i].dataUrl })
+      body: JSON.stringify({ imageBase64: dataUrl })
     });
     const data = await res.json().catch(() => ({}));
 
+    if (res.status === 413) {
+      // Backstop: the server cap and the one above should agree, but if they ever drift the scan still
+      // keeps the pages it has and names the one that was refused.
+      pages.push({ pageNumber: images[i].pageNumber, text: skippedPageNote(images[i].pageNumber) });
+      continue;
+    }
     if (res.status === 402) {
       // Out of free credits: keep the pages already read and say where it stopped.
       const reason = data.error || 'AI credits ran out.';

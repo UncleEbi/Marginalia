@@ -100,6 +100,7 @@ export async function renderPdfPagesToImages(libOrData, dataOrOptions, maybeOpti
     onPage,
     maxWidth = 1600,
     quality = 0.78,
+    pageNumbers,      // optional 1-based list, so one page can be re-rendered smaller/cheaper
     ...getDocumentOptions
   } = options;
 
@@ -115,7 +116,9 @@ export async function renderPdfPagesToImages(libOrData, dataOrOptions, maybeOpti
 
   try {
     const images = [];
+    const only = Array.isArray(pageNumbers) ? new Set(pageNumbers) : null;
     for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
+      if (only && !only.has(pageNumber)) continue;
       const page = await doc.getPage(pageNumber);
       const natural = page.getViewport({ scale: 1 });
       const scale = Math.max(0.4, Math.min(2.5, maxWidth / natural.width));

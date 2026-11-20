@@ -47,6 +47,19 @@ function fakePdfjs({ numPages = 2, natural = { width: 612, height: 792 } } = {})
   };
 }
 
+test('renders only the requested pages when pageNumbers is given (the shrink retry)', async () => {
+  const canvases = [];
+  const pdfjs = fakePdfjs({ numPages: 3 });
+
+  const images = await renderPdfPagesToImages(pdfjs, new Uint8Array([1]), {
+    createCanvas: fakeCanvasFactory(canvases), maxWidth: 1100, quality: 0.5, pageNumbers: [2]
+  });
+
+  assert.deepEqual(images.map((i) => i.pageNumber), [2], 'only that page comes back');
+  assert.equal(pdfjs.renders.length, 1, 'and only that page is drawn');
+  assert.match(images[0].dataUrl, /q0\.5/, 'the lower quality is honoured');
+});
+
 test('renders every PDF page to a JPEG data URL', async () => {
   const canvases = [];
   const pdfjs = fakePdfjs({ numPages: 3 });
@@ -123,14 +136,19 @@ async function withHarness(overrides, fn) {
 }
 
 // Responses come from a queue: each entry is { status, body } for one /api/ocr call.
-function harness({ images = ['data:image/jpeg;base64,AAA', 'data:image/jpeg;base64,BBB'], responses = [], token = 'tok', byok = '' } = {}) {
+function harness({ images = ['data:image/jpeg;base64,AAA', 'data:image/jpeg;base64,BBB'], responses = [], token = 'tok', byok = '', shrunken = {} } = {}) {
   const calls = [];
   const status = { textContent: '' };
   const globals = {
     preloadStatus: status,
+    MAX_IMAGE_BASE64_CHARS: 2 * 1024 * 1024,
     getFreshAuthToken: async () => token,
     localStorage: { getItem: (k) => (k === 'marginalia_byok_openai' ? byok : null) },
-    window: { renderPdfPages: async (lib, data, onPage) => {
+    window: { renderPdfPages: async (lib, data, onPage, opts = {}) => {
+      // A shrink retry asks for specific pages and how big: answer from `shrunken`.
+      if (Array.isArray(opts.pageNumbers)) {
+        return opts.pageNumbers.filter((n) => shrunken[n]).map((n) => ({ pageNumber: n, dataUrl: shrunken[n] }));
+      }
       if (onPage) await onPage(1, images.length);
       return images.map((dataUrl, i) => ({ pageNumber: i + 1, dataUrl }));
     } },
@@ -223,6 +241,66 @@ test('running out mid-scan keeps the pages already read and appends a note', asy
   });
 });
 
+test('an oversized page is re-rendered smaller and its text is kept', async () => {
+  const oversized = 'data:image/jpeg;base64,' + 'a'.repeat(2 * 1024 * 1024);
+  const small = 'data:image/jpeg;base64,SMALL';
+  const h = harness({
+    images: [oversized, 'data:image/jpeg;base64,BBB'],
+    shrunken: { 1: small },
+    responses: [
+      { status: 200, body: { text: 'Page one text.' } },
+      { status: 200, body: { text: 'Page two text.' } }
+    ]
+  });
+
+  await withHarness(h.globals, async () => {
+    const pages = await ocrScannedPdf({}, new Uint8Array([1]));
+    assert.deepEqual(pages.map((p) => p.text), ['Page one text.', 'Page two text.'], 'no note: the page was read');
+    assert.equal(h.calls.length, 2, 'the smaller page is posted once, then the scan carries on');
+    assert.match(h.calls[0].opts.body, /SMALL/, 'the smaller render is what gets sent');
+    assert.match(h.calls[1].opts.body, /BBB/, 'the next page is unaffected');
+  });
+});
+
+test('a page still over the cap after the smaller re-render is noted, not posted', async () => {
+  const oversized = 'data:image/jpeg;base64,' + 'a'.repeat(2 * 1024 * 1024);
+  const h = harness({
+    images: [oversized, 'data:image/jpeg;base64,BBB'],
+    responses: [{ status: 200, body: { text: 'Page two text.' } }]
+  });
+
+  await withHarness(h.globals, async () => {
+    const pages = await ocrScannedPdf({}, new Uint8Array([1]));
+    assert.equal(h.calls.length, 1, 'only the readable page is sent to /api/ocr');
+    assert.equal(pages[0].pageNumber, 1, 'the note sits where the page was');
+    assert.match(pages[0].text, /Page 1 could not be read/);
+    assert.match(pages[0].text, /too large/i);
+    assert.equal(pages[1].text, 'Page two text.');
+  });
+});
+
+test('a page the server refuses with 413 still leaves a note and the scan continues', async () => {
+  const h = harness({
+    images: ['data:image/jpeg;base64,AAA', 'data:image/jpeg;base64,BBB', 'data:image/jpeg;base64,CCC'],
+    responses: [
+      { status: 413, body: { error: 'Scanned page image is too large to read.' } },
+      { status: 200, body: { text: 'Page two text.' } },
+      { status: 200, body: { text: 'Page three text.' } }
+    ]
+  });
+
+  await withHarness(h.globals, async () => {
+    const pages = await ocrScannedPdf({}, new Uint8Array([1]));
+    assert.equal(pages.length, 3, 'a note in place of the oversized page, then the readable pages');
+    assert.equal(pages[0].pageNumber, 1);
+    assert.match(pages[0].text, /Page 1 could not be read/);
+    assert.match(pages[0].text, /too large/i);
+    assert.equal(pages[1].text, 'Page two text.');
+    assert.equal(pages[2].text, 'Page three text.');
+    assert.equal(h.calls.length, 3, 'one oversized page does not end the scan');
+  });
+});
+
 test('a scan with no readable text anywhere gets a clear error, not an empty book', async () => {
   const h = harness({ responses: [{ status: 200, body: { text: '' } }] });
   await withHarness(h.globals, async () => {
@@ -248,17 +326,44 @@ test('the PDF branch falls back to OCR only when extraction found nothing', () =
 
 test('index.html exposes renderPdfPages from the same module and pinned font data', () => {
   const html = read('../public/index.html');
-  assert.match(html, /window\.renderPdfPages = \(lib, data, onPage\)/);
+  assert.match(html, /window\.renderPdfPages = \(lib, data, onPage, options\)/);
   assert.match(html, /renderPdfPagesToImages\(lib, data, \{/);
   assert.match(html, /standardFontDataUrl: `\$\{PDFJS_BASE\}\/standard_fonts\/`/, 'renders with the same pinned fonts as extraction');
 });
 
 test('the OCR endpoint keeps the shared credit gate and transcribes instead of summarizing', () => {
   const src = read('../api/ocr.js');
-  assert.match(src, /trialExhausted: true/, 'reports exhausted free credits as 402');
+  assert.match(src, /error: 'AI_SUMMARY_QUOTA_EXCEEDED'/, 'reports exhausted AI ops as 402');
+  assert.match(src, /summaries_remaining: 0/, 'the exhausted payload reports zero remaining');
   assert.match(src, /x-custom-openai-key/, 'BYOK bypasses the shared credits');
   assert.match(src, /isProActive\(profile\)/, 'Pro reads without spending credits');
   assert.match(src, /Never summarize, translate, or add commentary/, 'the prompt transcribes verbatim');
   assert.match(src, /json\(\{ text \}\)/, 'returns the page text');
-  assert.match(src, /MAX_IMAGE_CHARS/, 'rejects bodies that would exceed the platform limit');
+});
+
+test('both vision endpoints refuse an image over 2 MB before any auth or paid call', async () => {
+  const { MAX_IMAGE_BASE64_CHARS } = await import('../api/_lib/image-payload.js');
+  assert.equal(MAX_IMAGE_BASE64_CHARS, 2 * 1024 * 1024, 'the cap is 2 MB of base64');
+
+  const capture = () => {
+    const res = { statusCode: 0, payload: null };
+    res.status = (code) => {
+      res.statusCode = code;
+      return { json: (payload) => { res.payload = payload; } };
+    };
+    return res;
+  };
+  const post = (imageBase64) => ({ method: 'POST', headers: {}, body: { imageBase64 } });
+
+  for (const file of ['../api/ocr.js', '../api/describe-image.js']) {
+    const { default: handler } = await import(file);
+
+    const tooBig = capture();
+    await handler(post('a'.repeat(MAX_IMAGE_BASE64_CHARS + 1)), tooBig);
+    assert.equal(tooBig.statusCode, 413, `${file} refuses an oversized image`);
+
+    const atCap = capture();
+    await handler(post('a'.repeat(MAX_IMAGE_BASE64_CHARS)), atCap);
+    assert.equal(atCap.statusCode, 401, `${file} lets an image at the cap reach the sign-in check`);
+  }
 });
