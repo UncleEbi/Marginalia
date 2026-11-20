@@ -15,7 +15,7 @@
 //
 //   200 { session: { access_token, refresh_token, expires_in, user } }  (signin/signup)
 //   200 { ok: true }                                                    (reset)
-//   400 { error, requireCaptcha? } | 401 { error } | 429 (rate limited) | 500 | 502
+//   400 { error, requireCaptcha? } | 401 { error } | 429 (rate limited) | 500 | 502 | 503
 import { enforceRateLimit, clientIp, normalizeEmail } from './_lib/rate-limit.js';
 import { supabaseAnonConfig } from './_lib/supabase.js';
 
@@ -71,12 +71,16 @@ export default async function handler(req, res) {
   const ip = clientIp(req);
 
   // Rate limits first: a brute-force attempt must not cost a Turnstile round trip or a Supabase call.
+  // failClosed: if the counters cannot be read, the endpoint refuses (503) instead of accepting
+  // unlimited password guesses. The counters now live in the same Postgres project as everything
+  // else, so this is a genuine outage rather than a missing third-party add-on.
   const gate = await enforceRateLimit(req, res, {
     tier: 'auth_sensitive',
     identifiers: [
       { bucket: 'email', value: email },
       { bucket: 'ip', value: ip }
-    ]
+    ],
+    failClosed: true
   });
   if (!gate.ok) return;
 
