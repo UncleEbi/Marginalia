@@ -1961,6 +1961,90 @@ if (authResetBtn) {
   authResetBtn.addEventListener('click', () => submitAuth('reset'));
 }
 
+// --- PASSWORD RECOVERY: THE LANDING HALF ---
+// The recovery email links to site_url with the session in the URL hash, e.g.
+//   #access_token=…&refresh_token=…&type=recovery
+// supabase-js consumes that hash on load, so the token is read here first and the hash is cleared
+// before anything else can see it. The password change goes through /api/auth like every other
+// auth action, so this flow inherits the same ip rate limit and the same Supabase error messages
+// instead of calling GoTrue from the browser.
+const recoveryModal = document.getElementById('recoveryModal');
+const recoveryPass = document.getElementById('recoveryPass');
+const recoverySubmitBtn = document.getElementById('recoverySubmitBtn');
+const recoveryStatusAlert = document.getElementById('recoveryStatusAlert');
+const recoveryHash = new URLSearchParams((window.location.hash || '').replace(/^#/, ''));
+const recoveryAccessToken = recoveryHash.get('type') === 'recovery'
+  ? (recoveryHash.get('access_token') || '')
+  : '';
+
+function showRecoveryAlert(msg, type = 'error') {
+  recoveryStatusAlert.style.display = 'block';
+  recoveryStatusAlert.textContent = msg;
+  if (type === 'success') {
+    recoveryStatusAlert.style.background = 'rgba(16, 185, 129, 0.15)';
+    recoveryStatusAlert.style.color = '#10b981';
+    recoveryStatusAlert.style.border = '1px solid rgba(16, 185, 129, 0.3)';
+  } else {
+    recoveryStatusAlert.style.background = 'rgba(239, 68, 68, 0.15)';
+    recoveryStatusAlert.style.color = '#ef4444';
+    recoveryStatusAlert.style.border = '1px solid rgba(239, 68, 68, 0.3)';
+  }
+}
+
+async function submitNewPassword() {
+  const password = recoveryPass.value;
+  if (password.length < 6) {
+    showRecoveryAlert('Passwords need at least 6 characters.', 'error');
+    return;
+  }
+
+  recoverySubmitBtn.disabled = true;
+  recoverySubmitBtn.textContent = 'Updating…';
+
+  try {
+    const res = await fetch('/api/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update-password', accessToken: recoveryAccessToken, password })
+    });
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      showRecoveryAlert(
+        data.error || 'Could not update your password. Please request a new reset link.',
+        'error'
+      );
+      return;
+    }
+
+    // Hand the reader to the sign-in form rather than leaving the recovery session dangling.
+    recoveryModal.style.display = 'none';
+    authModal.style.display = 'flex';
+    showAuthAlert('Password updated. Sign in with your new password.', 'success');
+  } catch (err) {
+    showRecoveryAlert('Could not reach the sign-in service. Please try again.', 'error');
+  } finally {
+    recoverySubmitBtn.disabled = false;
+    recoverySubmitBtn.textContent = 'Update Password';
+  }
+}
+
+if (recoveryAccessToken) {
+  // Drop the token from the address bar so it is not left in history, a screenshot or a shared link.
+  history.replaceState(null, '', window.location.pathname + window.location.search);
+  recoveryModal.style.display = 'flex';
+  recoverySubmitBtn.addEventListener('click', submitNewPassword);
+  recoveryPass.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') submitNewPassword();
+  });
+  setTimeout(() => recoveryPass.focus(), 50);
+} else if (recoveryHash.get('error')) {
+  // Supabase sends an expired or already-used link back with error / error_description instead of a
+  // token. Say so on the sign-in form, where "Forgot password?" is one tap away.
+  authModal.style.display = 'flex';
+  showAuthAlert('That reset link has expired or was already used. Request a new one.', 'error');
+}
+
 // --- AI SUMMARIZER (3-TIER RESILIENT PIPELINE) ---
 const SUMMARY_STOPWORDS = new Set(("a about above after again all also am an and any are as at be because been before being below between both but by can could did do does doing down during each few for from further had has have having he her here hers him his how i if in into is it its just me more most my no nor not of off on once only or other our out over own same she should so some such than that the their them then there these they this those through to too under until up very was we were what when where which while who whom why will with would you your").split(' '));
 

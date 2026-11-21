@@ -12,14 +12,15 @@
 //   POST { action: 'signin', email, password, captchaToken }
 //   POST { action: 'signup', email, password, captchaToken }
 //   POST { action: 'reset',  email, captchaToken }
+//   POST { action: 'update-password', accessToken, password }
 //
 //   200 { session: { access_token, refresh_token, expires_in, user } }  (signin/signup)
-//   200 { ok: true }                                                    (reset)
+//   200 { ok: true }                                                    (reset/update-password)
 //   400 { error, requireCaptcha? } | 401 { error } | 429 (rate limited) | 500 | 502 | 503
 import { enforceRateLimit, clientIp, normalizeEmail } from './_lib/rate-limit.js';
 import { supabaseAnonConfig } from './_lib/supabase.js';
 
-const ACTIONS = new Set(['signin', 'signup', 'reset']);
+const ACTIONS = new Set(['signin', 'signup', 'reset', 'update-password']);
 
 async function verifyTurnstile(token, ip) {
   const secret = process.env.TURNSTILE_SECRET_KEY;
@@ -57,15 +58,22 @@ export default async function handler(req, res) {
   const email = normalizeEmail(body.email);
   const password = typeof body.password === 'string' ? body.password : '';
   const captchaToken = body.captchaToken || body['cf-turnstile-response'] || '';
+  // A recovery link already carries the session Supabase emailed to the account, so this action is
+  // authenticated by that token rather than by an email and password pair.
+  const accessToken = typeof body.accessToken === 'string' ? body.accessToken.trim() : '';
+  const isPasswordUpdate = action === 'update-password';
 
   if (!ACTIONS.has(action)) {
     return res.status(400).json({ error: 'Unsupported auth action.' });
   }
-  if (!email || !email.includes('@')) {
+  if (!isPasswordUpdate && (!email || !email.includes('@'))) {
     return res.status(400).json({ error: 'Enter a valid email address.' });
   }
   if (action !== 'reset' && !password) {
     return res.status(400).json({ error: 'Enter your password.' });
+  }
+  if (isPasswordUpdate && !accessToken) {
+    return res.status(400).json({ error: 'This reset link is missing its session. Request a new one.' });
   }
 
   const ip = clientIp(req);
@@ -76,15 +84,19 @@ export default async function handler(req, res) {
   // else, so this is a genuine outage rather than a missing third-party add-on.
   const gate = await enforceRateLimit(req, res, {
     tier: 'auth_sensitive',
-    identifiers: [
-      { bucket: 'email', value: email },
-      { bucket: 'ip', value: ip }
-    ],
+    // The update carries no email: nobody can guess an address here, and the recovery token is
+    // already scoped to one account. The ip window still applies.
+    identifiers: isPasswordUpdate
+      ? [{ bucket: 'ip', value: ip }]
+      : [{ bucket: 'email', value: email }, { bucket: 'ip', value: ip }],
     failClosed: true
   });
   if (!gate.ok) return;
 
-  const captcha = await verifyTurnstile(captchaToken, ip);
+  // No Turnstile on the update: the caller already holds the recovery session emailed to the
+  // account, which is stronger proof of ownership than a challenge, and the reset screen does not
+  // render the widget.
+  const captcha = isPasswordUpdate ? { ok: true } : await verifyTurnstile(captchaToken, ip);
   if (!captcha.ok) {
     return res.status(400).json({
       error: captcha.reason === 'missing'
@@ -102,17 +114,20 @@ export default async function handler(req, res) {
   const endpoints = {
     signin: { path: '/auth/v1/token?grant_type=password', payload: { email, password } },
     signup: { path: '/auth/v1/signup', payload: { email, password } },
-    reset: { path: '/auth/v1/recover', payload: { email } }
+    reset: { path: '/auth/v1/recover', payload: { email } },
+    // GoTrue only lets a session change its own password, so this one is the only endpoint that
+    // sends the reader's recovery token as the bearer instead of the anon key.
+    'update-password': { path: '/auth/v1/user', method: 'PUT', bearer: accessToken, payload: { password } }
   };
-  const { path, payload } = endpoints[action];
+  const { path, payload, method = 'POST', bearer = key } = endpoints[action];
 
   try {
     const response = await fetch(`${url}${path}`, {
-      method: 'POST',
+      method,
       headers: {
         'Content-Type': 'application/json',
         apikey: key,
-        Authorization: `Bearer ${key}`
+        Authorization: `Bearer ${bearer}`
       },
       body: JSON.stringify(payload)
     });
@@ -128,7 +143,7 @@ export default async function handler(req, res) {
 
     res.setHeader('Cache-Control', 'no-store');
 
-    if (action === 'reset') return res.status(200).json({ ok: true });
+    if (action === 'reset' || isPasswordUpdate) return res.status(200).json({ ok: true });
 
     const session = data.session || data;
     if (!session || !session.access_token) {

@@ -714,6 +714,33 @@
     </div>
   </div>
 
+  <!-- PASSWORD RECOVERY MODAL -->
+  <!-- Shown only when the page is opened from a Supabase recovery email. The session travels in the
+       URL hash, and /api/auth applies the change so this screen needs nothing but the new password. -->
+  <div id="recoveryModal" class="modal-overlay">
+    <div class="modal-card" style="max-width:390px;">
+      <div class="modal-header-bar" style="margin-bottom:0.25rem; padding-bottom:0.5rem;">
+        <div class="modal-title">Set a New Password</div>
+        <button class="bookmark-ribbon-btn" data-close="recoveryModal" style="font-size:1.1rem;">✕</button>
+      </div>
+
+      <p style="font-size:0.83rem; color:var(--text-muted); line-height:1.4; margin-bottom:0.75rem;">
+        Choose a new password for your account, then sign in with it.
+      </p>
+
+      <div id="recoveryStatusAlert" style="display:none; font-size:0.8rem; padding:0.6rem 0.75rem; border-radius:6px; line-height:1.35; margin-bottom:0.75rem;"></div>
+
+      <div class="auth-form-group">
+        <label class="auth-label">New Password</label>
+        <input type="password" id="recoveryPass" class="auth-input-field" placeholder="••••••••" autocomplete="new-password" />
+      </div>
+
+      <div class="modal-footer-bar" style="margin-top:0.4rem; justify-content:flex-end;">
+        <button id="recoverySubmitBtn" style="background:var(--accent); color:#fff; border:none; font-weight:600; padding:0.45rem 1rem; border-radius:6px; font-size:0.85rem; cursor:pointer;">Update Password</button>
+      </div>
+    </div>
+  </div>
+
   <!-- BACKGROUND AUDIO KEEP-ALIVE ANCHORS -->
   <audio id="neuralAudio" playsinline style="display:none;"></audio>
 
