@@ -24,15 +24,16 @@ test('the guard recognises a test child process, so it arms itself', () => {
 test('the guard fails a leaking test file and names the leaking test', () => {
   const env = { ...process.env };
   delete env.NODE_TEST_CONTEXT; // let the nested run be a plain runner, not a child of this one
+  // Shorten the grace period for this fixture only, so the proof runs fast; production keeps 5s.
+  env.NO_OPEN_HANDLES_GRACE_MS = '500';
 
   const run = spawnSync(
     process.execPath,
     ['--test', '--import', guard, fixture],
-    { env, encoding: 'utf8', timeout: 60_000 }
+    { env, encoding: 'utf8', timeout: 15_000 }
   );
 
   const output = `${run.stdout || ''}${run.stderr || ''}`;
-  // The guard allows a 5s grace period before it fires, so this test takes ~5s on purpose.
   assert.equal(run.status, 1, `a leaked handle must fail the run, got status ${run.status}:\n${output}`);
   assert.match(output, /will not exit/, `expected the guard's failure message:\n${output}`);
   assert.match(output, /Test: "the test that leaks a timer"/, `expected the guard to blame the leaking test:\n${output}`);

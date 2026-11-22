@@ -21,8 +21,9 @@ import { after, afterEach, beforeEach } from 'node:test';
 import { writeSync } from 'node:fs';
 
 // Long enough that the runner's own reporting and asynchronous cleanup have finished; short enough
-// that a stall turns into a failure instead of a hung terminal.
-const GRACE_MS = 5_000;
+// that a stall turns into a failure instead of a hung terminal. NO_OPEN_HANDLES_GRACE_MS only exists
+// so the guard's own proof test (tests/no-open-handles.test.js) can fail fast; leave it unset normally.
+const GRACE_MS = Number(process.env.NO_OPEN_HANDLES_GRACE_MS) || 5_000;
 
 // Only the per-file child processes need the guard. The runner process itself owns IPC channels to
 // its children, so arming a watchdog there could fire on the runner's own bookkeeping.
