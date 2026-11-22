@@ -4,7 +4,7 @@
 // that all referenced element IDs exist in public/index.html, and that document upload
 // works cleanly for unauthenticated freemium visitors without throwing missing-function errors.
 
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -15,11 +15,19 @@ const appPath = fileURLToPath(new URL('../public/app.js', import.meta.url));
 const html = readFileSync(htmlPath, 'utf8');
 const appJs = readFileSync(appPath, 'utf8');
 
+// app.js starts a 1s progress interval at load. jsdom runs timers on Node's event loop, so every
+// window created here has to be closed or `node --test` never exits after the assertions pass.
+const openDoms = [];
+after(() => {
+  for (const dom of openDoms) dom.window.close();
+});
+
 function setupTestDom() {
   const dom = new JSDOM(html, {
     runScripts: 'outside-only',
     url: 'https://marginalia-rme.vercel.app/'
   });
+  openDoms.push(dom);
 
   dom.window.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });
   dom.window.speechSynthesis = {
