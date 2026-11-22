@@ -1094,6 +1094,25 @@ button:not(:disabled):not(.player-btn-main):active {
   padding-right: 0.3rem;
 }
 
+/* Refill packs sit below the terms as their own stacked block, spaced like the plan rows. Both
+   paywall render paths use these two classes so the section cannot drift between them. */
+.pro-refill-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px dashed var(--border);
+}
+
+.pro-refill-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
 .pro-plan-option {
   display: flex;
   justify-content: space-between;
