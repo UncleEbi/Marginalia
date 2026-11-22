@@ -982,6 +982,27 @@ button.dock-time:hover { color: var(--accent); }
   flex-shrink: 0;
 }
 
+/* The account and auth cards run longer than a short phone screen (the account card is ~470px), so
+   the account card scrolls its middle and the auth card scrolls whole; the sign-out/sign-in rows
+   stay reachable. Both cap to the overlay's height instead of 88vh, for the same reason as the
+   paywall: 88vh is measured against the tallest mobile viewport, past the visible one. */
+#profileModal .modal-card,
+#authModal .modal-card {
+  max-height: 100%;
+}
+
+#authModal .modal-card {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+#profileModal .profile-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 .modal-title { font-size: 1.15rem; font-weight: 700; }
 
 /* SLEEP TIMER OPTIONS */
