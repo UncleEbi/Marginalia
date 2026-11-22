@@ -1032,11 +1032,12 @@ button:not(:disabled):not(.player-btn-main):active {
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
-/* Fitts's law on touch: dialog controls get 40px of height, and the ✕ a square 40px target, so the
-   small ones are not fiddly to hit. */
+/* Fitts's law on touch: small controls get a 40px target — dialog buttons and the ✕, the reader's
+   bookmark ribbon, and the page-turn buttons. */
 @media (pointer: coarse) {
   .modal-card button { min-height: 40px; }
-  .modal-header-bar .bookmark-ribbon-btn { min-width: 40px; }
+  .bookmark-ribbon-btn { min-width: 40px; min-height: 40px; }
+  .player-btn-nav { width: 40px; height: 40px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
