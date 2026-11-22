@@ -353,9 +353,10 @@ async function renderPaywallFallback(list) {
 
   if (packs.length) {
     const section = document.createElement('div');
-    section.style.cssText = 'margin-top:1rem; padding-top:0.75rem; border-top:1px dashed var(--border);';
+    // Stacked with a gap like the plan list, so the refill buttons do not sit flush against each other
+    section.style.cssText = 'margin-top:1rem; padding-top:0.75rem; border-top:1px dashed var(--border); display:flex; flex-direction:column; gap:0.5rem;';
     const sectionTitle = document.createElement('div');
-    sectionTitle.style.cssText = 'font-size:0.85rem; color:var(--text-muted); margin-bottom:0.5rem; display:flex; align-items:center; gap:0.4rem;';
+    sectionTitle.style.cssText = 'font-size:0.85rem; color:var(--text-muted); display:flex; align-items:center; gap:0.4rem;';
     sectionTitle.textContent = '⚡ Refill Credits (one-time)';
     section.appendChild(sectionTitle);
 
@@ -499,9 +500,10 @@ async function openPaywall() {
   const refillPacks = data?.refill_packs || [];
   if (refillPacks.length) {
     const section = document.createElement('div');
-    section.style.cssText = 'margin-top:1rem; padding-top:0.75rem; border-top:1px dashed var(--border);';
+    // Stacked with a gap like the plan list, so the refill buttons do not sit flush against each other
+    section.style.cssText = 'margin-top:1rem; padding-top:0.75rem; border-top:1px dashed var(--border); display:flex; flex-direction:column; gap:0.5rem;';
     const sectionTitle = document.createElement('div');
-    sectionTitle.style.cssText = 'font-size:0.85rem; color:var(--text-muted); margin-bottom:0.5rem; display:flex; align-items:center; gap:0.4rem;';
+    sectionTitle.style.cssText = 'font-size:0.85rem; color:var(--text-muted); display:flex; align-items:center; gap:0.4rem;';
     sectionTitle.innerHTML = '⚡ Refill Credits <span style="font-weight:400; color:var(--text-muted);">one-time · non-expiring</span>';
     section.appendChild(sectionTitle);
 
