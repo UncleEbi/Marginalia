@@ -4,7 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "test": "node --test"
+    "test": "node --test --import ./tests/setup/no-open-handles.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4"
