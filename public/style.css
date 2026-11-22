@@ -1017,11 +1017,17 @@ button.dock-time:hover { color: var(--accent); }
 }
 
 /* PRO PLAN OPTIONS (PAYWALL) */
+/* The paywall runs longer than a phone screen (six terms plus the refill packs), so the plan
+   list is the part that scrolls; the title, intro and footer stay put. */
 .pro-plan-list {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  flex-shrink: 0;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-right: 0.3rem;
 }
 
 .pro-plan-option {
@@ -1064,6 +1070,10 @@ button.dock-time:hover { color: var(--accent); }
 }
 
 /* USD ESTIMATES (PAYWALL) */
+/* Cap the paywall to the space the overlay actually has. 88vh is measured against the tallest
+   mobile viewport, which leaves the footer below the fold once the browser chrome is showing. */
+#paywallModal .modal-card { max-height: 100%; }
+
 .pro-price-headline {
   display: flex;
   flex-direction: column;
