@@ -3,7 +3,7 @@
 // be imported directly), and DOMParser comes from jsdom so the real block-extraction code runs.
 // Fixtures are built in-memory with JSZip, the same library the page loads from the CDN.
 
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { JSDOM } from 'jsdom';
@@ -11,7 +11,10 @@ import JSZip from 'jszip';
 
 import { extractFunction, appSource } from './helpers/extract-function.mjs';
 
-globalThis.DOMParser = new JSDOM('').window.DOMParser;
+const dom = new JSDOM('');
+globalThis.DOMParser = dom.window.DOMParser;
+// Close it in a hook rather than at the end of the file, so a failing assertion cannot skip cleanup.
+after(() => dom.window.close());
 
 for (const name of [
   'normalizeZipPath', 'safeDecodeURIComponent', 'buildZipKeyIndex', 'findZipKey',
