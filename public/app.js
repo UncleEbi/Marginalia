@@ -545,10 +545,13 @@ async function flushPendingProgress() {
 // BOOKMARK SYNC
 // ==============================
 // Bookmarks used to be device-only, so signing in on a second phone brought reading positions and
-// nothing to jump to. Unlike progress there is no queue here: bookmarks are few and the upsert is
-// idempotent, so every trigger pushes the whole local set and pulls first. Deletion propagates from
-// the device that deletes; a bookmark deleted elsewhere can come back from another device's copy.
-// The snippet — the quoted sentence — is sent too, which the bookmarks modal states outright.
+// nothing to jump to. Unlike progress there is no queue here: the pull comes first, and the rows it
+// returns are the account's own record of the last confirmed push, so only the local bookmarks the
+// account does not already hold are sent. That keeps a trigger with nothing new off the network
+// without a second queue, and survives a reload or a fresh device that has no local bookkeeping.
+// Deletion propagates from the device that deletes; a bookmark deleted elsewhere can come back from
+// another device's copy. The snippet — the quoted sentence — is sent too, which the bookmarks modal
+// states outright.
 
 // Pure: one user_bookmarks row as the shape the local store uses. Null for anything unreadable.
 function bookmarkFromCloudRow(row) {
@@ -592,16 +595,29 @@ function selectMissingBookmarks(local, incoming) {
   return missing;
 }
 
-// Pure: the whole local set as cloud rows. Pushing the set rather than a diff keeps this free of
-// queue bookkeeping; the unique index makes a repeat upsert a no-op.
-function selectBookmarksToPush(bookmarks) {
-  const rows = [];
-  for (const mark of Array.isArray(bookmarks) ? bookmarks : []) {
+// Pure: the local bookmarks the account does not hold yet, as cloud rows. `cloudRows` are the marks
+// the pull just returned, so this is the diff against the last confirmed push. Identity is the
+// coordinates — the same key the table is unique on — so a cloud copy with a different quote is not
+// pushed again, and repeated duplicates from a merge collapse to one row.
+function selectBookmarksToPush(local, cloudRows) {
+  const known = new Set();
+  for (const mark of Array.isArray(cloudRows) ? cloudRows : []) {
     if (!mark || typeof mark.bookTitle !== 'string') continue;
+    known.add([mark.bookTitle, Number(mark.page) || 0, Number(mark.sentenceIdx) || 0].join('\u0000'));
+  }
+  const rows = [];
+  const queued = new Set();
+  for (const mark of Array.isArray(local) ? local : []) {
+    if (!mark || typeof mark.bookTitle !== 'string') continue;
+    const page = Math.max(0, Math.floor(Number(mark.page) || 0));
+    const sentenceIdx = Math.max(0, Math.floor(Number(mark.sentenceIdx) || 0));
+    const key = [mark.bookTitle, page, sentenceIdx].join('\u0000');
+    if (known.has(key) || queued.has(key)) continue;
+    queued.add(key);
     rows.push({
       book_title: mark.bookTitle,
-      page: Math.max(0, Math.floor(Number(mark.page) || 0)),
-      sentence_idx: Math.max(0, Math.floor(Number(mark.sentenceIdx) || 0)),
+      page,
+      sentence_idx: sentenceIdx,
       snippet: String(mark.snippet == null ? '' : mark.snippet),
       created_at: new Date(Number(mark.createdAt) || Date.now()).toISOString()
     });
@@ -677,8 +693,8 @@ async function removeCloudBookmarkForLocal(mark) {
   }
 }
 
-// Pull first, adopt anything this device is missing, then push the whole local set. Never throws:
-// a missing table, a dead network or a signed-out session all mean "try again later".
+// Pull first, adopt anything this device is missing, then push what the account still lacks. Never
+// throws: a missing table, a dead network or a signed-out session all mean "try again later".
 async function syncBookmarksFromCloud() {
   if (!supabaseClient) return { added: 0, pushed: 0 };
   try {
@@ -690,9 +706,11 @@ async function syncBookmarksFromCloud() {
     const missing = selectMissingBookmarks(local, incoming);
     if (missing.length) await writeRecords("bookmarks", missing);
 
-    // Push what the shelf holds after the adopt, so one device's new bookmarks reach the account on
-    // the same pass that brought the other device's in.
-    const rows = selectBookmarksToPush(await getBookmarksFromDB());
+    // Push only what this device has and the account does not, so one device's new bookmarks reach
+    // the account on the same pass that brought the other device's in, and a trigger that follows a
+    // confirmed push sends nothing. A failed pull leaves the set empty and repeats the upsert, which
+    // the unique index makes safe.
+    const rows = selectBookmarksToPush(local, incoming);
     const pushed = rows.length > 0 && await pushBookmarksToCloud(supabaseClient, user.id, rows);
     return { added: missing.length, pushed: pushed ? rows.length : 0 };
   } catch (err) {

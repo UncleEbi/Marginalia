@@ -1,8 +1,9 @@
 // tests/bookmark-sync.test.js
 //
 // Bookmark sync is additive: pull the account's rows, adopt the ones this device is missing, then
-// push the whole local set. These tests pin the pure decisions and the exact cloud shape with a
-// fake client, so the real public/app.js code is exercised rather than a copy.
+// push only the local ones the account does not hold. These tests pin the pure decisions and the
+// exact cloud shape with a fake client, so the real public/app.js code is exercised rather than a
+// copy.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -138,11 +139,11 @@ test('adopting ignores malformed input', () => {
   assert.deepEqual(selectMissingBookmarks([{ page: 1 }], [null, { bookTitle: 7 }]), []);
 });
 
-test('the push sends the whole local set as cloud rows', () => {
+test('local bookmarks the account lacks become cloud rows', () => {
   const rows = selectBookmarksToPush([
     localMark(),
     { bookTitle: 'Ubik', page: -1, sentenceIdx: 'x', snippet: null }
-  ]);
+  ], []);
 
   assert.deepEqual(rows[0], {
     book_title: 'Dune',
@@ -157,6 +158,47 @@ test('the push sends the whole local set as cloud rows', () => {
   assert.equal(rows[1].snippet, '');
   assert.ok(Number.isFinite(Date.parse(rows[1].created_at)), 'a missing date becomes now');
 });
+
+test('a bookmark the account already holds is not pushed again', () => {
+  assert.deepEqual(selectBookmarksToPush([localMark()], [localMark()]), [], 'same coordinates, nothing to send');
+});
+
+
+
+test('the coordinates decide, so a differing quote alone is not re-pushed', () => {
+  assert.deepEqual(
+    selectBookmarksToPush([localMark({ snippet: 'trimmed locally…' })], [localMark({ snippet: 'A beginning is a very delicate time.' })]),
+    [],
+    'the account holds this bookmark whatever the local copy of the quote says'
+  );
+});
+
+
+
+test('only the new bookmarks travel, and duplicates collapse to one row', () => {
+  const rows = selectBookmarksToPush(
+    [localMark(), localMark(), localMark({ bookTitle: 'Ubik', page: 1, sentenceIdx: 0 }), { page: 2 }],
+    [localMark()]
+  );
+
+  assert.deepEqual(rows.map((row) => row.book_title), ['Ubik'], 'Dune is already on the account');
+});
+
+
+
+test('nothing new means no rows, and malformed input is ignored', () => {
+  assert.deepEqual(selectBookmarksToPush([], [localMark()]), []);
+  assert.deepEqual(selectBookmarksToPush(null, null), []);
+  assert.deepEqual(selectBookmarksToPush([{ page: 1 }], []), []);
+  assert.deepEqual(selectBookmarksToPush([localMark()], [null, { book_title: 7 }]), [localMark()].map((mark) => ({
+    book_title: mark.bookTitle,
+    page: mark.page,
+    sentence_idx: mark.sentenceIdx,
+    snippet: mark.snippet,
+    created_at: ISO
+  })), 'an unreadable cloud row cannot hide a local bookmark');
+});
+
 
 test('the pull reads only bookmark columns for one account', async () => {
   const rows = [cloudRow()];

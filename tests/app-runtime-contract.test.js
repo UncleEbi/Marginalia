@@ -501,7 +501,11 @@ function bookmarkSupabase({ userId = 'user-1', cloudRows = [], failPush = false,
         },
         upsert: (rows, options) => {
           state.upserts.push({ table, rows, options });
-          return Promise.resolve({ error: failPush ? { message: 'offline' } : null });
+          if (failPush) return Promise.resolve({ error: { message: 'offline' } });
+          // A confirmed upsert lands in the account, so the next trigger's pull sees it. That is
+          // what lets a test prove a repeat trigger pushes nothing.
+          cloudRows.push(...rows);
+          return Promise.resolve({ error: null });
         },
         delete: () => ({
           match: async (filters) => {
@@ -590,6 +594,40 @@ test('deleting a bookmark removes its cloud row without waiting for the network'
     sentence_idx: 0
   }]);
 });
+
+test('a repeat trigger pushes only the bookmarks that changed', async () => {
+  const dom = setupTestDom();
+  const db = fakeBookDB([], [{
+    id: 1, bookTitle: 'Dune', page: 2, sentenceIdx: 0, snippet: 'local quote', createdAt: Date.now()
+  }]);
+  dom.window.indexedDB = { open: () => db.open() };
+
+  const { client, state } = bookmarkSupabase();
+  dom.window.supabase = { createClient: () => client };
+
+  dom.window.eval(appJs);
+  await settle();
+  assert.equal(state.upserts.length, 1, 'startup pushed the one local bookmark');
+  assert.deepEqual(JSON.parse(JSON.stringify(state.upserts[0].rows)).map((row) => row.page), [2]);
+
+  // Opening the modal syncs again, and the account now holds that bookmark.
+  openBookmarks(dom);
+  await settle();
+  assert.equal(state.upserts.length, 1, 'a trigger with nothing new stays off the network');
+
+  // One new bookmark: the next trigger carries it alone, not the whole shelf.
+  await dom.window.saveBookmarkToDB('Dune', 9, 1, 'a fresh quote');
+  dom.window.dispatchEvent(new dom.window.Event('online'));
+  await settle();
+
+  assert.equal(state.upserts.length, 2, 'the new bookmark was pushed');
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(state.upserts[1].rows)).map((row) => [row.page, row.sentence_idx]),
+    [[9, 1]],
+    'and the already-synced bookmark was not sent again'
+  );
+});
+
 
 test('bookmark sync stays quiet when signed out', async () => {
   const dom = setupTestDom();
