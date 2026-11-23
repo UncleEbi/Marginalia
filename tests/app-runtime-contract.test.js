@@ -209,32 +209,71 @@ test('openProfileModal falls back gracefully when topup columns are missing', as
 // --- OFFLINE WRITE QUEUE ---
 // A shelf that is real enough for the queue: open() succeeds on a later tick, getAll hands back
 // copies, and put() records what was written so a test can see the flag move.
-function fakeBookDB(initialBooks) {
+function fakeBookDB(initialBooks = [], initialBookmarks = []) {
   const books = new Map(initialBooks.map((book) => [book.title, { ...book }]));
+  const bookmarks = new Map(initialBookmarks.map((mark, index) => [mark.id ?? index + 1, { ...mark }]));
   const puts = [];
-  const store = {
-    getAll() {
-      const req = {};
-      setTimeout(() => {
-        req.result = Array.from(books.values()).map((book) => ({ ...book }));
-        if (req.onsuccess) req.onsuccess();
-      }, 0);
-      return req;
-    },
-    put(record) {
-      puts.push({ ...record });
-      books.set(record.title, { ...record });
+  let nextBookmarkId = bookmarks.size + 1;
+
+  const storeFor = (name) => {
+    if (name === 'books') {
+      return {
+        getAll() {
+          const req = {};
+          setTimeout(() => {
+            req.result = Array.from(books.values()).map((book) => ({ ...book }));
+            if (req.onsuccess) req.onsuccess();
+          }, 0);
+          return req;
+        },
+        put(record) {
+          puts.push({ ...record });
+          books.set(record.title, { ...record });
+        },
+        delete() {}
+      };
     }
+    return {
+      getAll() {
+        const req = {};
+        setTimeout(() => {
+          req.result = Array.from(bookmarks.values()).map((mark) => ({ ...mark }));
+          if (req.onsuccess) req.onsuccess();
+        }, 0);
+        return req;
+      },
+      put(record) {
+        puts.push({ ...record });
+        const id = record.id == null ? nextBookmarkId++ : record.id;
+        bookmarks.set(id, { ...record, id });
+      },
+      add(record) {
+        puts.push({ ...record });
+        const id = nextBookmarkId++;
+        bookmarks.set(id, { ...record, id });
+      },
+      delete(id) {
+        bookmarks.delete(id);
+      }
+    };
   };
+
   return {
     books,
+    bookmarks,
     puts,
     open() {
       const req = {};
       setTimeout(() => {
         req.result = {
           objectStoreNames: { contains: () => true },
-          transaction: () => ({ objectStore: () => store })
+          transaction: () => {
+            const tx = { objectStore: (name) => storeFor(name) };
+            // Callers resolve on tx.oncomplete (writeRecords, deleteBookmarkFromDB), so fire it a
+            // tick after the operations they queue synchronously in this transaction.
+            setTimeout(() => { if (tx.oncomplete) tx.oncomplete(); }, 5);
+            return tx;
+          }
         };
         if (req.onsuccess) req.onsuccess({ target: req });
       }, 0);
@@ -427,12 +466,154 @@ test('local saves mark the row owed, adopted cloud rows settle it, and only a co
 });
 
 test('the queue retries on reconnect, when the page is shown, and at startup', () => {
-  assert.ok(appJs.includes("window.addEventListener('online', () => schedulePendingFlush())"), 'online retry');
+  assert.ok(appJs.includes("window.addEventListener('online', () => scheduleBackgroundSync())"), 'online retry');
   assert.ok(appJs.includes("document.addEventListener('visibilitychange', () => {"), 'visibility retry');
-  assert.ok(appJs.includes('if (!document.hidden) schedulePendingFlush(5000);'), 'shown-again retry is debounced');
+  assert.ok(appJs.includes('if (!document.hidden) scheduleBackgroundSync(5000);'), 'shown-again retry is debounced');
+  assert.ok(appJs.includes('syncBookmarksFromCloud();'), 'bookmarks catch up on the same triggers');
   assert.ok(
     appJs.includes('restoreProgressFromCloud().then(() => { flushPendingProgress(); })'),
     'startup flushes whatever the pull did not cover'
+  );
+});
+
+// --- BOOKMARK SYNC ---
+// A client for the bookmark paths: pull returns the given rows, upserts and deletes are recorded.
+// `deleteHangs` makes the cloud delete never resolve, which is how the test proves the local delete
+// does not wait on the network.
+function bookmarkSupabase({ userId = 'user-1', cloudRows = [], failPush = false, deleteHangs = false } = {}) {
+  const state = { upserts: [], deletes: [] };
+  const client = {
+    auth: {
+      getSession: async () => ({
+        data: { session: userId ? { access_token: 'token-1', user: { id: userId } } : null }
+      }),
+      onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } })
+    },
+    from(table) {
+      return {
+        select: () => {
+          const rows = table === 'user_bookmarks' ? cloudRows : [];
+          return {
+            eq: () => Object.assign(Promise.resolve({ data: rows, error: null }), {
+              maybeSingle: async () => ({ data: null, error: null })
+            })
+          };
+        },
+        upsert: (rows, options) => {
+          state.upserts.push({ table, rows, options });
+          return Promise.resolve({ error: failPush ? { message: 'offline' } : null });
+        },
+        delete: () => ({
+          match: async (filters) => {
+            state.deletes.push(filters);
+            if (deleteHangs) await new Promise(() => {});
+            return { error: null };
+          }
+        })
+      };
+    }
+  };
+  return { client, state };
+}
+
+function openBookmarks(dom) {
+  const nav = dom.window.document.getElementById('navBookmarks');
+  assert.ok(nav, 'the drawer has a bookmarks entry');
+  nav.dispatchEvent(new dom.window.Event('click'));
+}
+
+test('the bookmarks modal shows local rows and adopts the account\'s', async () => {
+  const dom = setupTestDom();
+  const db = fakeBookDB([], [{
+    id: 1, bookTitle: 'Dune', page: 2, sentenceIdx: 0, snippet: 'local quote', createdAt: Date.now()
+  }]);
+  dom.window.indexedDB = { open: () => db.open() };
+
+  const { client } = bookmarkSupabase({
+    cloudRows: [{
+      book_title: 'Ubik', page: 4, sentence_idx: 1, snippet: 'cloud quote', created_at: new Date().toISOString()
+    }]
+  });
+  dom.window.supabase = { createClient: () => client };
+
+  dom.window.eval(appJs);
+  await settle();
+  openBookmarks(dom);
+  await settle();
+
+  assert.equal(db.bookmarks.size, 2, 'the cloud row was written locally');
+  const text = dom.window.document.getElementById('bookmarksModalList').textContent;
+  assert.ok(text.includes('Dune'), 'the local bookmark renders');
+  assert.ok(text.includes('Ubik'), 'the adopted bookmark renders');
+  assert.ok(text.includes('cloud quote'), 'the quoted sentence came along, as the modal says it does');
+});
+
+test('the modal renders local rows before it asks the account for more', () => {
+  const start = appJs.indexOf('async function showBookmarksModal');
+  const end = appJs.indexOf("navBookmarks.addEventListener");
+  assert.ok(start > -1 && end > start, 'showBookmarksModal is discoverable');
+  const body = appJs.slice(start, end);
+
+  assert.ok(
+    body.indexOf("bookmarksModal.style.display = 'flex'") < body.indexOf('syncBookmarksFromCloud()'),
+    'the pull starts only after the list is on screen'
+  );
+  assert.ok(body.includes('skipCloudSync'), 'the re-render after a sync cannot start another pull');
+});
+
+test('deleting a bookmark removes its cloud row without waiting for the network', async () => {
+  const dom = setupTestDom();
+  const db = fakeBookDB([], [{
+    id: 1, bookTitle: 'Dune', page: 2, sentenceIdx: 0, snippet: 'local quote', createdAt: Date.now()
+  }]);
+  dom.window.indexedDB = { open: () => db.open() };
+  dom.window.confirm = () => true;
+
+  const { client, state } = bookmarkSupabase({ deleteHangs: true });
+  dom.window.supabase = { createClient: () => client };
+
+  dom.window.eval(appJs);
+  await settle();
+  openBookmarks(dom);
+  await settle();
+
+  const del = dom.window.document.querySelector('#bookmarksModalList .shelf-delete-btn');
+  assert.ok(del, 'the bookmark row has a delete control');
+  del.dispatchEvent(new dom.window.Event('click', { bubbles: true }));
+  await settle();
+
+  assert.equal(db.bookmarks.size, 0, 'the local delete did not wait on the hanging cloud delete');
+  assert.deepEqual(JSON.parse(JSON.stringify(state.deletes)), [{
+    user_id: 'user-1',
+    book_title: 'Dune',
+    page: 2,
+    sentence_idx: 0
+  }]);
+});
+
+test('bookmark sync stays quiet when signed out', async () => {
+  const dom = setupTestDom();
+  const db = fakeBookDB([], [{
+    id: 1, bookTitle: 'Dune', page: 2, sentenceIdx: 0, snippet: 'local quote', createdAt: Date.now()
+  }]);
+  dom.window.indexedDB = { open: () => db.open() };
+
+  const { client, state } = bookmarkSupabase({ userId: null });
+  dom.window.supabase = { createClient: () => client };
+
+  dom.window.eval(appJs);
+  await settle();
+  openBookmarks(dom);
+  await settle();
+
+  assert.equal(state.upserts.length, 0, 'nothing is pushed without an account');
+  assert.equal(db.bookmarks.size, 1, 'and the local bookmark is untouched');
+});
+
+test('the bookmarks modal states that the quoted sentence syncs', () => {
+  assert.ok(
+    html.includes('Bookmarks sync with your account, including the quoted sentence.'),
+    'the copy that makes the snippet leaving the device explicit'
   );
 });
 

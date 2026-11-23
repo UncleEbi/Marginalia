@@ -542,6 +542,166 @@ async function flushPendingProgress() {
 }
 
 // ==============================
+// BOOKMARK SYNC
+// ==============================
+// Bookmarks used to be device-only, so signing in on a second phone brought reading positions and
+// nothing to jump to. Unlike progress there is no queue here: bookmarks are few and the upsert is
+// idempotent, so every trigger pushes the whole local set and pulls first. Deletion propagates from
+// the device that deletes; a bookmark deleted elsewhere can come back from another device's copy.
+// The snippet — the quoted sentence — is sent too, which the bookmarks modal states outright.
+
+// Pure: one user_bookmarks row as the shape the local store uses. Null for anything unreadable.
+function bookmarkFromCloudRow(row) {
+  if (!row || typeof row.book_title !== 'string') return null;
+  const createdAt = Date.parse(row.created_at);
+  return {
+    bookTitle: row.book_title,
+    page: Math.max(0, Math.floor(Number(row.page) || 0)),
+    sentenceIdx: Math.max(0, Math.floor(Number(row.sentence_idx) || 0)),
+    snippet: String(row.snippet == null ? '' : row.snippet),
+    createdAt: Number.isFinite(createdAt) ? createdAt : Date.now()
+  };
+}
+
+function bookmarksFromCloudRows(rows) {
+  const marks = [];
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const mark = bookmarkFromCloudRow(row);
+    if (mark) marks.push(mark);
+  }
+  return marks;
+}
+
+// Pure: which pulled bookmarks this device does not have. Identity is the coordinates, the same key
+// the table is unique on, so a snippet that differs from the local copy cannot create a duplicate.
+function selectMissingBookmarks(local, incoming) {
+  const seen = new Set();
+  for (const mark of Array.isArray(local) ? local : []) {
+    if (mark && typeof mark.bookTitle === 'string') {
+      seen.add([mark.bookTitle, Number(mark.page) || 0, Number(mark.sentenceIdx) || 0].join('\u0000'));
+    }
+  }
+  const missing = [];
+  for (const mark of Array.isArray(incoming) ? incoming : []) {
+    if (!mark || typeof mark.bookTitle !== 'string') continue;
+    const key = [mark.bookTitle, Number(mark.page) || 0, Number(mark.sentenceIdx) || 0].join('\u0000');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    missing.push(mark);
+  }
+  return missing;
+}
+
+// Pure: the whole local set as cloud rows. Pushing the set rather than a diff keeps this free of
+// queue bookkeeping; the unique index makes a repeat upsert a no-op.
+function selectBookmarksToPush(bookmarks) {
+  const rows = [];
+  for (const mark of Array.isArray(bookmarks) ? bookmarks : []) {
+    if (!mark || typeof mark.bookTitle !== 'string') continue;
+    rows.push({
+      book_title: mark.bookTitle,
+      page: Math.max(0, Math.floor(Number(mark.page) || 0)),
+      sentence_idx: Math.max(0, Math.floor(Number(mark.sentenceIdx) || 0)),
+      snippet: String(mark.snippet == null ? '' : mark.snippet),
+      created_at: new Date(Number(mark.createdAt) || Date.now()).toISOString()
+    });
+  }
+  return rows;
+}
+
+async function pullCloudBookmarks(client, userId) {
+  if (!client || !userId) return [];
+  try {
+    const { data, error } = await client
+      .from('user_bookmarks')
+      .select('book_title, page, sentence_idx, snippet, created_at')
+      .eq('user_id', userId);
+    if (error) {
+      console.warn('Bookmark pull failed:', error.message || error);
+      return [];
+    }
+    return Array.isArray(data) ? data : [];
+  } catch (err) {
+    console.warn('Bookmark pull failed:', err);
+    return [];
+  }
+}
+
+async function pushBookmarksToCloud(client, userId, rows) {
+  if (!client || !userId || !Array.isArray(rows) || rows.length === 0) return false;
+  try {
+    const { error } = await client
+      .from('user_bookmarks')
+      .upsert(rows.map((row) => ({ ...row, user_id: userId })), {
+        onConflict: 'user_id,book_title,page,sentence_idx'
+      });
+    if (error) {
+      console.warn('Bookmark push failed:', error.message || error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('Bookmark push failed:', err);
+    return false;
+  }
+}
+
+async function deleteCloudBookmark(client, userId, mark) {
+  if (!client || !userId || !mark || typeof mark.bookTitle !== 'string') return false;
+  try {
+    const { error } = await client.from('user_bookmarks').delete().match({
+      user_id: userId,
+      book_title: mark.bookTitle,
+      page: Math.max(0, Math.floor(Number(mark.page) || 0)),
+      sentence_idx: Math.max(0, Math.floor(Number(mark.sentenceIdx) || 0))
+    });
+    if (error) {
+      console.warn('Bookmark delete failed:', error.message || error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+// Looks up who is signed in before deleting, so the modal never has to await auth itself.
+async function removeCloudBookmarkForLocal(mark) {
+  if (!supabaseClient || !mark) return false;
+  try {
+    const user = await getSignedInUser();
+    if (!user || !user.id) return false;
+    return await deleteCloudBookmark(supabaseClient, user.id, mark);
+  } catch (err) {
+    return false;
+  }
+}
+
+// Pull first, adopt anything this device is missing, then push the whole local set. Never throws:
+// a missing table, a dead network or a signed-out session all mean "try again later".
+async function syncBookmarksFromCloud() {
+  if (!supabaseClient) return { added: 0, pushed: 0 };
+  try {
+    const user = await getSignedInUser();
+    if (!user || !user.id) return { added: 0, pushed: 0 };
+
+    const incoming = bookmarksFromCloudRows(await pullCloudBookmarks(supabaseClient, user.id));
+    const local = await getBookmarksFromDB();
+    const missing = selectMissingBookmarks(local, incoming);
+    if (missing.length) await writeRecords("bookmarks", missing);
+
+    // Push what the shelf holds after the adopt, so one device's new bookmarks reach the account on
+    // the same pass that brought the other device's in.
+    const rows = selectBookmarksToPush(await getBookmarksFromDB());
+    const pushed = rows.length > 0 && await pushBookmarksToCloud(supabaseClient, user.id, rows);
+    return { added: missing.length, pushed: pushed ? rows.length : 0 };
+  } catch (err) {
+    console.warn('Bookmark sync skipped:', err);
+    return { added: 0, pushed: 0 };
+  }
+}
+
+// ==============================
 // DURABLE STORAGE + BACKUP
 // ==============================
 // The shelf is the only copy of the reader's library: IndexedDB can be evicted under disk pressure,
@@ -1711,10 +1871,12 @@ addBookmarkBtn.addEventListener('click', async () => {
   const activeItem = bookPages[currentPage]?.[currentSentenceIdx];
   const snippet = typeof activeItem === 'string' ? activeItem : (activeItem?.caption || "Diagram");
   await saveBookmarkToDB(currentDocName, currentPage, currentSentenceIdx, snippet);
+  // Fire-and-forget: the bookmark is already saved locally, and the account catches up when it can.
+  syncBookmarksFromCloud();
   alert(`Bookmark saved: Page ${currentPage + 1}`);
 });
 
-async function showBookmarksModal() {
+async function showBookmarksModal(options = {}) {
   const marks = await getBookmarksFromDB();
   bookmarksModalList.innerHTML = '';
 
@@ -1740,8 +1902,11 @@ async function showBookmarksModal() {
         e.stopPropagation(); // don't also "jump" to the bookmark
         if (confirm(`Delete this bookmark?\n${m.bookTitle} — Page ${m.page + 1}`)) {
           const done = await deleteBookmarkFromDB(m.id);
+          // The local delete is already done: the cloud row follows in the background so the list
+          // refresh never waits on auth or the network.
+          if (done) removeCloudBookmarkForLocal(m);
           if (!done) showToast('Could not delete the bookmark. Please try again.');
-          showBookmarksModal(); // refresh the list
+          showBookmarksModal({ skipCloudSync: true }); // refresh the list
         }
       });
 
@@ -1760,6 +1925,16 @@ async function showBookmarksModal() {
     });
   }
   bookmarksModal.style.display = 'flex';
+
+  if (!options.skipCloudSync) {
+    // Same shape as the shelf: render local rows instantly, then reconcile in the background and
+    // re-render only when the account actually added something.
+    syncBookmarksFromCloud().then((result) => {
+      if (result.added > 0 && bookmarksModal.style.display !== 'none') {
+        showBookmarksModal({ skipCloudSync: true });
+      }
+    });
+  }
 }
 
 navBookmarks.addEventListener('click', () => {
@@ -2489,8 +2664,9 @@ async function submitAuth(action) {
     localStorage.setItem('marginalia_auth_token', session.access_token);
     if (session.user) localStorage.setItem('marginalia_auth_user', JSON.stringify(session.user));
 
-    // Signing in is the moment another device's reading positions become relevant.
+    // Signing in is the moment another device's reading positions and bookmarks become relevant.
     restoreProgressFromCloud();
+    syncBookmarksFromCloud();
 
     showAuthAlert(action === 'signup' ? 'Account created & signed in!' : 'Success! Signed in.', 'success');
     resetCaptchaChallenge();
@@ -4905,20 +5081,21 @@ updateSleepTimerUI();
 refreshProPriceLabels();
 confirmCheckoutReturn();
 
-// The queue's retry triggers: the device coming back online, and the page becoming visible again
-// (a phone that slept through a reconnect never fires 'online'). Debounced so switching tabs does
-// not hammer the API.
-let pendingFlushTimer = null;
-function schedulePendingFlush(delay = 0) {
-  if (pendingFlushTimer) return;
-  pendingFlushTimer = setTimeout(() => {
-    pendingFlushTimer = null;
+// Background sync triggers: the device coming back online, and the page becoming visible again (a
+// phone that slept through a reconnect never fires 'online'). Debounced so switching tabs does not
+// hammer the API. Both reading positions and bookmarks catch up here.
+let backgroundSyncTimer = null;
+function scheduleBackgroundSync(delay = 0) {
+  if (backgroundSyncTimer) return;
+  backgroundSyncTimer = setTimeout(() => {
+    backgroundSyncTimer = null;
     flushPendingProgress();
+    syncBookmarksFromCloud();
   }, delay);
 }
-window.addEventListener('online', () => schedulePendingFlush());
+window.addEventListener('online', () => scheduleBackgroundSync());
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) schedulePendingFlush(5000);
+  if (!document.hidden) scheduleBackgroundSync(5000);
 });
 
 // Pull the account's reading positions once the local shelf is readable. Deliberately not awaited:
@@ -4926,6 +5103,7 @@ document.addEventListener('visibilitychange', () => {
 // after the pull so a position written offline last session reaches the cloud on this launch.
 initIndexedDB().then(() => {
   restoreProgressFromCloud().then(() => { flushPendingProgress(); });
+  syncBookmarksFromCloud();
 });
 
 // --- RETURN FROM PAYSTACK ---
