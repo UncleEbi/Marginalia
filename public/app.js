@@ -15,7 +15,7 @@
 })();
 
 // --- SUPABASE CONFIGURATION ---
-const SUPABASE_PROJECT_URL = "https://nnxphilhkhvwnitxvzdi.supabase.co"; 
+const SUPABASE_PROJECT_URL = "https://nnxphilhkhvwnitxvzdi.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ueHBoaWxoa2h2d25pdHh2emRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA5NzQzMDYsImV4cCI6MjEwNjU1MDMwNn0.LQetUHa6Os7UJl2NxvAph58vrvWNWbF_kcL9R2l-o3Y";
 
 let supabaseClient = null;
@@ -49,7 +49,7 @@ if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
 
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('sw.js')
-      .then((reg) => { reg.update().catch(() => {}); }) // look for a new version on every launch
+      .then((reg) => { reg.update().catch(() => { }); }) // look for a new version on every launch
       .catch((err) => console.warn('SW registration failed:', err));
   });
 
@@ -216,28 +216,6 @@ function showFullAccessNotice() {
 }
 
 // --- BI-DIRECTIONAL SUPABASE CLOUD SYNC ---
-async function syncProgressToCloud(title, page, sentenceIdx) {
-  await updateBookProgressInDB(title, page, sentenceIdx);
-
-  if (!supabaseClient) return;
-  const token = await getFreshAuthToken();
-  if (!token) return;
-
-  try {
-    const { data: { session } } = await supabaseClient.auth.getSession();
-    if (!session?.user) return;
-
-    await supabaseClient.from('user_books').upsert({
-      user_id: session.user.id,
-      title: title,
-      current_page: page,
-      current_sentence: sentenceIdx,
-      total_pages: bookPages.length || 1,
-      updated_at: new Date().toISOString()
-    }, { onConflict: 'user_id,title' });
-  } catch (e) {}
-}
-
 async function syncBookmarkToCloud(bookTitle, page, sentenceIdx, snippet) {
   if (!supabaseClient) return;
   try {
@@ -251,20 +229,6 @@ async function syncBookmarkToCloud(bookTitle, page, sentenceIdx, snippet) {
       snippet: snippet || '',
       created_at: new Date().toISOString()
     }, { onConflict: 'user_id,book_title,page,sentence_idx' });
-  } catch (e) {}
-}
-
-async function deleteCloudBookmark(bookTitle, page, sentenceIdx) {
-  if (!supabaseClient) return;
-  try {
-    const { data: { session } } = await supabaseClient.auth.getSession();
-    if (!session?.user) return;
-    await supabaseClient.from('user_bookmarks')
-      .delete()
-      .eq('user_id', session.user.id)
-      .eq('book_title', bookTitle)
-      .eq('page', page)
-      .eq('sentence_idx', sentenceIdx);
   } catch (e) {}
 }
 
@@ -302,6 +266,51 @@ async function deleteCloudAnnotation(bookTitle, page, sentenceIdx, type) {
     if (type) q = q.eq('type', type);
     await q;
   } catch (e) {}
+}
+
+async function syncAnnotationsFromCloud() {
+  if (!supabaseClient) return { success: false, reason: 'no_client' };
+  try {
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    if (!session?.user) return { success: false, reason: 'not_authenticated' };
+    const userId = session.user.id;
+
+    const { data: remoteAnn } = await supabaseClient
+      .from('user_annotations')
+      .select('book_title, page, sentence_idx, text, type, color, note_text, created_at')
+      .eq('user_id', userId);
+
+    const localAnn = await getAnnotationsFromDB(currentDocName);
+    const localAnnSet = new Set(localAnn.map(a => `${a.bookTitle}:::${a.page}:::${a.sentenceIdx}:::${a.noteText ? 'note' : 'highlight'}`));
+
+    if (Array.isArray(remoteAnn)) {
+      for (const ra of remoteAnn) {
+        const key = `${ra.book_title}:::${ra.page}:::${ra.sentence_idx}:::${ra.type}`;
+        if (!localAnnSet.has(key)) {
+          await saveAnnotationToDB({
+            bookTitle: ra.book_title,
+            page: ra.page,
+            sentenceIdx: ra.sentence_idx,
+            quoteText: ra.text,
+            noteText: ra.note_text,
+            color: ra.color,
+            createdAt: ra.created_at
+          });
+          localAnnSet.add(key);
+        }
+      }
+      if (currentDocName) {
+        await refreshCurrentDocAnnotations();
+        renderPage(currentPage);
+      }
+    }
+    for (const la of localAnn) {
+      await syncAnnotationToCloud(la);
+    }
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err?.message || 'Sync failed' };
+  }
 }
 
 /**
@@ -1440,7 +1449,7 @@ async function updateBookProgressInDB(title, page, sentenceIdx) {
         store.put(book);
       }
     };
-  } catch (e) {}
+  } catch (e) { }
 }
 
 async function saveBookmarkToDB(title, page, sentenceIdx, snippet) {
@@ -1495,7 +1504,7 @@ async function saveAnnotationToDB({ id, bookTitle, page, sentenceIdx, quoteText,
         item.id = id;
         const req = store.put(item);
         req.onsuccess = () => {
-          syncAnnotationToCloud(item).catch(() => {});
+          syncAnnotationToCloud(item).catch(() => { });
           resolve(item);
         };
         req.onerror = () => resolve(null);
@@ -1504,7 +1513,7 @@ async function saveAnnotationToDB({ id, bookTitle, page, sentenceIdx, quoteText,
         const req = store.add(item);
         req.onsuccess = (e) => {
           const res = { id: e.target.result, ...item };
-          syncAnnotationToCloud(res).catch(() => {});
+          syncAnnotationToCloud(res).catch(() => { });
           resolve(res);
         };
         req.onerror = () => resolve(null);
@@ -1826,9 +1835,9 @@ function unlockAudioForIOS() {
       p.then(() => {
         audioUnlocked = true;
         if (audioElement.src === silentUnlockUrl) audioElement.pause();
-      }).catch(() => {});
+      }).catch(() => { });
     }
-  } catch (e) {}
+  } catch (e) { }
 }
 
 // Bumped on every stop/skip so late network responses and stale speech callbacks are ignored
@@ -1841,7 +1850,7 @@ function cancelAllSpeech() {
   audioElement.ontimeupdate = null;
   audioElement.onloadedmetadata = null;
   browserSpeech.cancel();
-  try { audioElement.pause(); } catch (e) {}
+  try { audioElement.pause(); } catch (e) { }
   cancelWordAnimation();
 }
 
@@ -1893,7 +1902,7 @@ function syncMediaSessionState(playing) {
     // audio element while speechSynthesis is speaking switches the audio session and cuts the
     // speech off after the first word. (It couldn't keep speech alive on lock anyway.)
     if (keepAliveAudio) keepAliveAudio.pause();
-  } catch (e) {}
+  } catch (e) { }
 }
 
 function skipSentence(delta) {
@@ -1934,7 +1943,7 @@ function playBookmarkChime() {
     gain.connect(ctx.destination);
     osc.start(now);
     osc.stop(now + 0.3);
-    setTimeout(() => { try { ctx.close(); } catch (e) {} }, 500);
+    setTimeout(() => { try { ctx.close(); } catch (e) { } }, 500);
   } catch (e) {
     console.warn('Chime audio context error:', e);
   }
@@ -1944,7 +1953,7 @@ async function triggerHandsfreeBookmark() {
   const activeItem = bookPages[currentPage]?.[currentSentenceIdx];
   const snippet = typeof activeItem === 'string' ? activeItem : (activeItem?.caption || "Diagram");
   await saveBookmarkToDB(currentDocName, currentPage, currentSentenceIdx, snippet);
-  syncBookmarkToCloud(currentDocName, currentPage, currentSentenceIdx, snippet);
+  syncBookmarksFromCloud();
   playBookmarkChime();
   showToast(`🔖 Bookmark saved: Page ${currentPage + 1}`);
 }
@@ -1977,7 +1986,7 @@ function handleHandsfreeNextTrack() {
 
 (function registerMediaSessionHandlers() {
   if (!('mediaSession' in navigator)) return;
-  const set = (action, fn) => { try { navigator.mediaSession.setActionHandler(action, fn); } catch (e) {} };
+  const set = (action, fn) => { try { navigator.mediaSession.setActionHandler(action, fn); } catch (e) { } };
   set('play', () => { if (!isPlaying) { if (activeEngine !== 'browser') unlockAudioForIOS(); isPlaying = true; playCurrentSentence(); } });
   set('pause', () => stopAudio());
   set('stop', () => stopAudio());
@@ -2236,7 +2245,7 @@ function openCompanionDrawer(customText = null) {
   if (isDrawerOpen()) closeDrawer();
   const rawItem = customText || bookPages[currentPage]?.[currentSentenceIdx];
   const text = typeof rawItem === 'string' ? rawItem : (rawItem?.caption || "Current Section");
-  
+
   if (companionContextText) {
     companionContextText.textContent = text ? `"${text}"` : 'No active passage selected.';
   }
@@ -2467,7 +2476,7 @@ function showInstallHelp(title, steps) {
       try {
         promptEvent.prompt();
         await promptEvent.userChoice;
-      } catch (e) {}
+      } catch (e) { }
       return;
     }
     if (isIOSDevice()) {
@@ -2544,7 +2553,7 @@ async function showShelfModal(mode = "shelf", options = {}) {
         shelfModal.style.display = 'none';
         refreshCurrentDocAnnotations().then(() => renderPage(currentPage));
       });
-      
+
       shelfModalList.appendChild(card);
     });
   }
@@ -2561,7 +2570,7 @@ async function showShelfModal(mode = "shelf", options = {}) {
           showShelfModal(mode, { skipCloudSync: true });
         }
       })
-      .catch(() => {});
+      .catch(() => { });
   }
 }
 
@@ -2598,7 +2607,6 @@ addBookmarkBtn.addEventListener('click', async () => {
   const snippet = typeof activeItem === 'string' ? activeItem : (activeItem?.caption || "Diagram");
   await saveBookmarkToDB(currentDocName, currentPage, currentSentenceIdx, snippet);
   // Fire-and-forget: the bookmark is already saved locally, and the account catches up when it can.
-  syncBookmarkToCloud(currentDocName, currentPage, currentSentenceIdx, snippet);
   if (typeof syncBookmarksFromCloud === 'function') syncBookmarksFromCloud();
   alert(`Bookmark saved: Page ${currentPage + 1}`);
 });
@@ -2632,7 +2640,6 @@ async function showBookmarksModal(options = {}) {
           // The local delete is already done: the cloud row follows in the background so the list
           // refresh never waits on auth or the network.
           if (done) removeCloudBookmarkForLocal(m);
-          if (done && typeof deleteCloudBookmark === 'function') deleteCloudBookmark(m.bookTitle, m.page, m.sentenceIdx);
           if (!done) showToast('Could not delete the bookmark. Please try again.');
           showBookmarksModal({ skipCloudSync: true }); // refresh the list
         }
@@ -2956,9 +2963,9 @@ btnDrawerNightToggle.addEventListener('click', () => {
   const current = document.documentElement.getAttribute('data-theme');
   const nextTheme = current === 'dark' ? 'oled'
     : current === 'oled' ? 'sepia'
-    : current === 'sepia' ? 'light'
-    : current === 'light' ? 'parchment'
-    : 'dark';
+      : current === 'sepia' ? 'light'
+        : current === 'light' ? 'parchment'
+          : 'dark';
   document.documentElement.setAttribute('data-theme', nextTheme);
   localStorage.setItem('marginalia_theme', nextTheme);
   optionThemeSelect.value = nextTheme;
@@ -3258,7 +3265,7 @@ profileUpgradeBtn.addEventListener('click', () => {
 profileSignOutBtn.addEventListener('click', async () => {
   if (confirm("Are you sure you want to sign out of your account?")) {
     if (supabaseClient) {
-      await supabaseClient.auth.signOut().catch(() => {});
+      await supabaseClient.auth.signOut().catch(() => { });
     }
     localStorage.removeItem('marginalia_auth_token');
     localStorage.removeItem('marginalia_auth_user');
@@ -3296,7 +3303,7 @@ async function getFreshAuthToken() {
         localStorage.setItem('marginalia_auth_token', session.access_token);
         return session.access_token;
       }
-    } catch (e) {}
+    } catch (e) { }
   }
   return cachedToken || null;
 }
@@ -3327,7 +3334,7 @@ async function updateAuthBadge(explicitRemaining = null) {
 
     drawerUserTitle.textContent = email;
     drawerUserSubtitle.textContent = "Signed In • Tap for Profile";
-    syncAllWithCloud().catch(() => {});
+    syncAnnotationsFromCloud().catch(() => { });
 
     if (hasByok) {
       setCreditBadge(initial, 'BYOK Active');
@@ -3357,7 +3364,7 @@ async function updateAuthBadge(explicitRemaining = null) {
 }
 
 if (typeof window !== 'undefined') {
-  window.addEventListener('online', () => { syncAllWithCloud().catch(() => {}); });
+  window.addEventListener('online', () => { syncAnnotationsFromCloud().catch(() => { }); });
 }
 
 // --- AUTH: SERVER-SIDE RATE LIMITING + TURNSTILE ---------------------------------------------
@@ -3416,7 +3423,7 @@ function showCaptchaChallenge() {
 function resetCaptchaChallenge() {
   captchaToken = '';
   if (window.turnstile && turnstileWidgetId !== null) {
-    try { window.turnstile.reset(turnstileWidgetId); } catch (e) {}
+    try { window.turnstile.reset(turnstileWidgetId); } catch (e) { }
   }
 }
 
@@ -3473,7 +3480,7 @@ function clearReaderNotice() {
 
 function retryAfterSeconds(res, data) {
   return Number(data && data.retryAfter) ||
-         Number(res && res.headers && res.headers.get('Retry-After')) || 30;
+    Number(res && res.headers && res.headers.get('Retry-After')) || 30;
 }
 
 // One notice that counts down from the server's Retry-After (never a guess), so the reader can see how
@@ -3822,7 +3829,7 @@ summarizeBtn.addEventListener('click', async () => {
             }
           }
         }
-      } catch (e) {}
+      } catch (e) { }
     }
   }
   summaryTrialNotice.textContent = notice;
@@ -4208,7 +4215,7 @@ async function playCurrentSentence() {
   // Sleep timer: stop exactly at a sentence boundary (stays accurate even when a
   // background tab throttles the countdown interval)
   if (sleepTimerMode !== 'off' &&
-      (sleepTimerExpired() || (sleepTimerMode === 'chapter' && currentPage >= sleepTimerChapterEnd))) {
+    (sleepTimerExpired() || (sleepTimerMode === 'chapter' && currentPage >= sleepTimerChapterEnd))) {
     fireSleepTimerEnd();
     return;
   }
@@ -4366,7 +4373,7 @@ function neuralCacheKey(text) {
 }
 
 function releaseAudioSrc(src) {
-  if (src && src.startsWith('blob:')) { try { URL.revokeObjectURL(src); } catch (e) {} }
+  if (src && src.startsWith('blob:')) { try { URL.revokeObjectURL(src); } catch (e) { } }
 }
 
 function cacheAudio(key, src) {
@@ -4394,108 +4401,353 @@ function base64ToBlobUrl(b64) {
 /**
  * Synthesizes speech locally in-browser to a PCM 16-bit WAV Blob URL.
  * Enables zero-cost, offline, lockscreen-compatible audio via <audio id="neuralAudio">.
+ * Features an on-device phonetic formant synthesizer (Klatt/Holmes style resonators + noise bands)
+ * with English orthographic letter-to-sound rules and distinct voice acoustics.
  */
 async function synthOnDeviceSpeech(text, voiceId = 'heart') {
   const sampleRate = 22050;
-  
-  // Voice profiles: base pitch (Hz), formant resonance centers, harmonics weighting
+
+  // Voice acoustic profiles: fundamental pitch F0, vocal tract formant scaling, intonation, and timing
   const profiles = {
-    heart: { baseFreq: 220, harmonics: [1.0, 0.6, 0.4, 0.25, 0.15], formantQ: 1.1, vibratoRate: 5.5, vibratoDepth: 3.5 },
-    michael: { baseFreq: 118, harmonics: [1.0, 0.8, 0.5, 0.35, 0.2, 0.1], formantQ: 0.9, vibratoRate: 4.8, vibratoDepth: 2.0 },
-    emma: { baseFreq: 195, harmonics: [1.0, 0.5, 0.45, 0.2, 0.15], formantQ: 1.2, vibratoRate: 5.2, vibratoDepth: 2.8 }
+    heart:   { baseFreq: 215, formantScale: 1.15, vibratoRate: 5.2, vibratoDepth: 1.8, durScale: 1.00, gain: 0.38 },
+    michael: { baseFreq: 118, formantScale: 0.95, vibratoRate: 4.5, vibratoDepth: 1.2, durScale: 1.08, gain: 0.42 },
+    emma:    { baseFreq: 195, formantScale: 1.10, vibratoRate: 5.0, vibratoDepth: 1.5, durScale: 0.95, gain: 0.38 }
   };
   const prof = profiles[voiceId] || profiles.heart;
 
-  // Tokenize text into words & punctuation units
-  const tokens = String(text || '').match(/\S+/g) || ['...'];
-  
-  // Compute timing and phoneme segments
-  const segments = [];
-  for (let t = 0; t < tokens.length; t++) {
-    const token = tokens[t];
-    const clean = token.replace(/[^a-zA-Z0-9]/g, '');
-    const vowels = (clean.match(/[aeiouy]/gi) || []).length || 1;
-    const hasComma = /[,;:]/.test(token);
-    const hasPeriod = /[.!?]/.test(token);
-    
-    // Syllable duration ~110ms per vowel, min 180ms per word
-    const wordDuration = Math.max(0.18, vowels * 0.11 + clean.length * 0.02);
-    segments.push({
-      type: 'word',
-      duration: wordDuration,
-      word: token,
-      isQuestion: token.includes('?'),
-      isPeriod: hasPeriod
-    });
+  // Phonetic acoustic inventory: Formants F1, F2, F3 (Hz), duration, voicing, and consonant noise bands
+  const PHONEMES = {
+    // Vowels
+    IY: { f1: 280, f2: 2250, f3: 2850, voiced: true, dur: 0.11 },
+    IH: { f1: 400, f2: 1900, f3: 2550, voiced: true, dur: 0.08 },
+    EY: { f1: 480, f2: 1950, f3: 2500, voiced: true, dur: 0.12 },
+    EH: { f1: 550, f2: 1750, f3: 2450, voiced: true, dur: 0.09 },
+    AE: { f1: 690, f2: 1650, f3: 2400, voiced: true, dur: 0.12 },
+    AA: { f1: 750, f2: 1150, f3: 2400, voiced: true, dur: 0.12 },
+    AO: { f1: 580, f2: 850,  f3: 2400, voiced: true, dur: 0.11 },
+    OW: { f1: 480, f2: 950,  f3: 2300, voiced: true, dur: 0.12 },
+    UH: { f1: 450, f2: 1050, f3: 2300, voiced: true, dur: 0.08 },
+    UW: { f1: 310, f2: 870,  f3: 2250, voiced: true, dur: 0.11 },
+    AH: { f1: 600, f2: 1200, f3: 2400, voiced: true, dur: 0.08 },
+    ER: { f1: 490, f2: 1350, f3: 1690, voiced: true, dur: 0.12 },
+    AY: { f1: 700, f2: 1400, f3: 2400, voiced: true, dur: 0.14, glide: { f1: 350, f2: 2100 } },
+    AW: { f1: 700, f2: 1200, f3: 2400, voiced: true, dur: 0.14, glide: { f1: 400, f2: 900 } },
+    OY: { f1: 550, f2: 950,  f3: 2400, voiced: true, dur: 0.14, glide: { f1: 350, f2: 2100 } },
 
-    // Pause duration for punctuation
-    if (hasPeriod) {
-      segments.push({ type: 'pause', duration: 0.28 });
-    } else if (hasComma) {
-      segments.push({ type: 'pause', duration: 0.14 });
-    } else if (t < tokens.length - 1) {
-      segments.push({ type: 'pause', duration: 0.045 });
+    // Sonorants (Nasals, Liquids, Glides)
+    M:  { f1: 250, f2: 1000, f3: 2200, voiced: true, dur: 0.07, nasal: true },
+    N:  { f1: 280, f2: 1500, f3: 2200, voiced: true, dur: 0.07, nasal: true },
+    NG: { f1: 300, f2: 2000, f3: 2300, voiced: true, dur: 0.08, nasal: true },
+    L:  { f1: 360, f2: 1100, f3: 2700, voiced: true, dur: 0.07 },
+    R:  { f1: 420, f2: 1300, f3: 1650, voiced: true, dur: 0.07 },
+    W:  { f1: 300, f2: 750,  f3: 2200, voiced: true, dur: 0.07 },
+    Y:  { f1: 280, f2: 2150, f3: 2800, voiced: true, dur: 0.07 },
+
+    // Fricatives
+    S:  { noiseFreq: 5500, noiseAmp: 0.35, dur: 0.07 },
+    Z:  { f1: 250, f2: 1500, f3: 2500, voiced: true, noiseFreq: 5000, noiseAmp: 0.25, dur: 0.06 },
+    SH: { noiseFreq: 3500, noiseAmp: 0.40, dur: 0.08 },
+    ZH: { f1: 250, f2: 1800, f3: 2500, voiced: true, noiseFreq: 3500, noiseAmp: 0.30, dur: 0.07 },
+    F:  { noiseFreq: 3000, noiseAmp: 0.22, dur: 0.06 },
+    V:  { f1: 250, f2: 1200, f3: 2400, voiced: true, noiseFreq: 2500, noiseAmp: 0.20, dur: 0.05 },
+    TH: { noiseFreq: 4000, noiseAmp: 0.22, dur: 0.06 },
+    DH: { f1: 250, f2: 1400, f3: 2400, voiced: true, noiseFreq: 3500, noiseAmp: 0.20, dur: 0.05 },
+    H:  { noiseFreq: 1800, noiseAmp: 0.28, dur: 0.05 },
+
+    // Plosives (closure gap + noise burst)
+    P:  { silentGap: 0.020, noiseFreq: 1000, noiseAmp: 0.45, dur: 0.015 },
+    B:  { silentGap: 0.015, voiced: true, f1: 200, f2: 800,  f3: 2200, noiseFreq: 800,  noiseAmp: 0.35, dur: 0.015 },
+    T:  { silentGap: 0.020, noiseFreq: 4500, noiseAmp: 0.50, dur: 0.015 },
+    D:  { silentGap: 0.015, voiced: true, f1: 200, f2: 1500, f3: 2500, noiseFreq: 4000, noiseAmp: 0.40, dur: 0.015 },
+    K:  { silentGap: 0.025, noiseFreq: 2200, noiseAmp: 0.50, dur: 0.018 },
+    G:  { silentGap: 0.015, voiced: true, f1: 200, f2: 1800, f3: 2400, noiseFreq: 2000, noiseAmp: 0.40, dur: 0.018 },
+    CH: { silentGap: 0.020, noiseFreq: 3800, noiseAmp: 0.55, dur: 0.06 },
+    J:  { silentGap: 0.015, voiced: true, f1: 250, f2: 1800, f3: 2400, noiseFreq: 3500, noiseAmp: 0.45, dur: 0.05 }
+  };
+
+  // High-frequency English words dictionary for crisp pronunciation
+  const COMMON_WORDS = {
+    the: ['DH', 'AH'], to: ['T', 'UW'], of: ['AH', 'V'], and: ['AE', 'N', 'D'],
+    a: ['AH'], in: ['IH', 'N'], is: ['IH', 'Z'], it: ['IH', 'T'], you: ['Y', 'UW'],
+    that: ['DH', 'AE', 'T'], he: ['H', 'IY'], was: ['W', 'AA', 'Z'], for: ['F', 'AO', 'R'],
+    on: ['AA', 'N'], are: ['AA', 'R'], as: ['AE', 'Z'], with: ['W', 'IH', 'DH'],
+    his: ['H', 'IH', 'Z'], they: ['DH', 'EY'], i: ['AY'], at: ['AE', 'T'],
+    be: ['B', 'IY'], this: ['DH', 'IH', 'S'], have: ['H', 'AE', 'V'], from: ['F', 'R', 'AH', 'M'],
+    or: ['AO', 'R'], one: ['W', 'AH', 'N'], had: ['H', 'AE', 'D'], by: ['B', 'AY'],
+    word: ['W', 'ER', 'D'], but: ['B', 'AH', 'T'], not: ['N', 'AA', 'T'], what: ['W', 'AH', 'T'],
+    all: ['AO', 'L'], were: ['W', 'ER'], we: ['W', 'IY'], when: ['W', 'EH', 'N'],
+    your: ['Y', 'AO', 'R'], can: ['K', 'AE', 'N'], said: ['S', 'EH', 'D'], there: ['DH', 'EH', 'R'],
+    use: ['Y', 'UW', 'Z'], an: ['AE', 'N'], each: ['IY', 'CH'], which: ['W', 'IH', 'CH'],
+    she: ['SH', 'IY'], do: ['D', 'UW'], how: ['H', 'AW'], their: ['DH', 'EH', 'R'],
+    if: ['IH', 'F'], will: ['W', 'IH', 'L'], up: ['AH', 'P'], other: ['AH', 'DH', 'ER'],
+    about: ['AH', 'B', 'AW', 'T'], out: ['AW', 'T'], many: ['M', 'EH', 'N', 'IY'],
+    then: ['DH', 'EH', 'N'], them: ['DH', 'EH', 'M'], these: ['DH', 'IY', 'Z'],
+    so: ['S', 'OW'], some: ['S', 'AH', 'M'], her: ['H', 'ER'], would: ['W', 'UH', 'D'],
+    make: ['M', 'EY', 'K'], like: ['L', 'AY', 'K'], him: ['H', 'IH', 'M'],
+    into: ['IH', 'N', 'T', 'UW'], time: ['T', 'AY', 'M'], has: ['H', 'AE', 'Z'],
+    look: ['L', 'UH', 'K'], two: ['T', 'UW'], more: ['M', 'AO', 'R'], write: ['R', 'AY', 'T'],
+    go: ['G', 'OW'], see: ['S', 'IY'], number: ['N', 'AH', 'M', 'B', 'ER'], no: ['N', 'OW'],
+    way: ['W', 'EY'], could: ['K', 'UH', 'D'], people: ['P', 'IY', 'P', 'AH', 'L'],
+    my: ['M', 'AY'], than: ['DH', 'AE', 'N'], first: ['F', 'ER', 'S', 'T'],
+    water: ['W', 'AO', 'T', 'ER'], been: ['B', 'IH', 'N'], call: ['K', 'AO', 'L'],
+    who: ['H', 'UW'], oil: ['OY', 'L'], its: ['IH', 'T', 'S'], now: ['N', 'AW'],
+    find: ['F', 'AY', 'N', 'D'], long: ['L', 'AO', 'NG'], down: ['D', 'AW', 'N'],
+    day: ['D', 'EY'], did: ['D', 'IH', 'D'], get: ['G', 'EH', 'T'], come: ['K', 'AH', 'M'],
+    made: ['M', 'EY', 'D'], may: ['M', 'EY'], part: ['P', 'AA', 'R', 'T'],
+    hello: ['H', 'EH', 'L', 'OW'], world: ['W', 'ER', 'L', 'D'], speech: ['S', 'P', 'IY', 'CH'],
+    device: ['D', 'IH', 'V', 'AY', 'S'], marginalia: ['M', 'AA', 'R', 'J', 'IH', 'N', 'AE', 'L', 'IY', 'AH'],
+    studio: ['S', 'T', 'UW', 'D', 'IY', 'OW'], test: ['T', 'EH', 'S', 'T'], testing: ['T', 'EH', 'S', 'T', 'IH', 'NG'],
+    distinct: ['D', 'IH', 'S', 'T', 'IH', 'NG', 'K', 'T'], acoustic: ['AH', 'K', 'UW', 'S', 'T', 'IH', 'K'],
+    neural: ['N', 'UH', 'R', 'AH', 'L'], vocal: ['V', 'OW', 'K', 'AH', 'L'],
+    vocalizations: ['V', 'OW', 'K', 'AH', 'L', 'IH', 'Z', 'EY', 'SH', 'AH', 'N', 'Z']
+  };
+
+  // Rule-based grapheme-to-phoneme converter for any arbitrary word
+  function wordToPhonemes(rawWord) {
+    const w = rawWord.toLowerCase().replace(/[^a-z]/g, '');
+    if (!w) return [];
+    if (COMMON_WORDS[w]) return COMMON_WORDS[w].slice();
+
+    const ph = [];
+    const len = w.length;
+    let i = 0;
+    const magicE = len >= 3 && w.endsWith('e') && !/[aeiouy]/.test(w[len - 2]) && /[aeiouy]/.test(w[len - 3]);
+
+    while (i < len) {
+      if (i + 3 <= len) {
+        const sub3 = w.slice(i, i + 3);
+        if (sub3 === 'tch') { ph.push('CH'); i += 3; continue; }
+        if (sub3 === 'igh') { ph.push('AY'); i += 3; continue; }
+        if (sub3 === 'ing' && i + 3 === len) { ph.push('IH', 'NG'); i += 3; continue; }
+      }
+      if (i + 2 <= len) {
+        const sub2 = w.slice(i, i + 2);
+        if (sub2 === 'th') { ph.push(i === 0 ? 'TH' : 'DH'); i += 2; continue; }
+        if (sub2 === 'sh') { ph.push('SH'); i += 2; continue; }
+        if (sub2 === 'ch') { ph.push('CH'); i += 2; continue; }
+        if (sub2 === 'ph') { ph.push('F'); i += 2; continue; }
+        if (sub2 === 'wh') { ph.push('W'); i += 2; continue; }
+        if (sub2 === 'ck') { ph.push('K'); i += 2; continue; }
+        if (sub2 === 'ng') { ph.push('NG'); i += 2; continue; }
+        if (sub2 === 'qu') { ph.push('K', 'W'); i += 2; continue; }
+        if (sub2 === 'ee' || sub2 === 'ea') { ph.push('IY'); i += 2; continue; }
+        if (sub2 === 'oo') { ph.push('UW'); i += 2; continue; }
+        if (sub2 === 'ai' || sub2 === 'ay') { ph.push('EY'); i += 2; continue; }
+        if (sub2 === 'oa') { ph.push('OW'); i += 2; continue; }
+        if (sub2 === 'ou' || sub2 === 'ow') { ph.push('AW'); i += 2; continue; }
+        if (sub2 === 'oi' || sub2 === 'oy') { ph.push('OY'); i += 2; continue; }
+        if (sub2 === 'ar') { ph.push('AA', 'R'); i += 2; continue; }
+        if (sub2 === 'er' || sub2 === 'ir' || sub2 === 'ur') { ph.push('ER'); i += 2; continue; }
+        if (sub2 === 'or') { ph.push('AO', 'R'); i += 2; continue; }
+      }
+
+      const c = w[i];
+      if (c === 'e' && i === len - 1 && len > 2) { i++; continue; }
+      if (magicE && i === len - 3) {
+        if (c === 'a') ph.push('EY');
+        else if (c === 'e') ph.push('IY');
+        else if (c === 'i') ph.push('AY');
+        else if (c === 'o') ph.push('OW');
+        else if (c === 'u') ph.push('UW');
+        else ph.push('AH');
+        i++;
+        continue;
+      }
+
+      switch (c) {
+        case 'a': ph.push('AE'); break;
+        case 'b': ph.push('B'); break;
+        case 'c': {
+          const next = w[i + 1];
+          ph.push((next === 'e' || next === 'i' || next === 'y') ? 'S' : 'K');
+          break;
+        }
+        case 'd': ph.push('D'); break;
+        case 'e': ph.push('EH'); break;
+        case 'f': ph.push('F'); break;
+        case 'g': {
+          const next = w[i + 1];
+          ph.push((next === 'e' || next === 'i') ? 'J' : 'G');
+          break;
+        }
+        case 'h': ph.push('H'); break;
+        case 'i': ph.push('IH'); break;
+        case 'j': ph.push('J'); break;
+        case 'k': ph.push('K'); break;
+        case 'l': ph.push('L'); break;
+        case 'm': ph.push('M'); break;
+        case 'n': ph.push('N'); break;
+        case 'o': ph.push('AA'); break;
+        case 'p': ph.push('P'); break;
+        case 'q': ph.push('K'); break;
+        case 'r': ph.push('R'); break;
+        case 's': ph.push('S'); break;
+        case 't': ph.push('T'); break;
+        case 'u': ph.push('AH'); break;
+        case 'v': ph.push('V'); break;
+        case 'w': ph.push('W'); break;
+        case 'x': ph.push('K', 'S'); break;
+        case 'y': ph.push(i === 0 ? 'Y' : 'IY'); break;
+        case 'z': ph.push('Z'); break;
+      }
+      i++;
     }
+    return ph;
   }
 
-  const totalDuration = segments.reduce((acc, s) => acc + s.duration, 0) + 0.1;
-  const totalSamples = Math.floor(totalDuration * sampleRate);
-  const samples = new Float32Array(totalSamples);
+  // Tokenize text into words & punctuation units
+  const tokens = String(text || '').match(/\S+/g) || ['...'];
+  const segments = [];
 
-  let sampleIdx = 0;
+  for (let t = 0; t < tokens.length; t++) {
+    const token = tokens[t];
+    const isQuestion = token.includes('?');
+    const isPeriod = /[.!?]/.test(token);
+    const isComma = /[,;:]/.test(token);
+    const phonemes = wordToPhonemes(token);
+
+    if (phonemes.length === 0) phonemes.push('AH');
+    segments.push({
+      type: 'word',
+      phonemes,
+      isQuestion,
+      isPeriod,
+      isComma
+    });
+
+    if (isPeriod) segments.push({ type: 'pause', dur: 0.28 });
+    else if (isComma) segments.push({ type: 'pause', dur: 0.14 });
+    else if (t < tokens.length - 1) segments.push({ type: 'pause', dur: 0.05 });
+  }
+
+  // Resonator and filter state
+  let r1y1 = 0, r1y2 = 0;
+  let r2y1 = 0, r2y2 = 0;
+  let r3y1 = 0, r3y2 = 0;
+  let nX1 = 0, nX2 = 0, nY1 = 0, nY2 = 0;
+
+  function filterRes(f, bw, x, y1, y2) {
+    const r = Math.exp(-Math.PI * bw / sampleRate);
+    const theta = 2 * Math.PI * f / sampleRate;
+    const a1 = 2 * r * Math.cos(theta);
+    const a2 = -r * r;
+    const b0 = 1 - r;
+    const out = b0 * x + a1 * y1 + a2 * y2;
+    return [out, y1];
+  }
+
+  function filterNoise(f, q, x, x1, x2, y1, y2) {
+    const w0 = 2 * Math.PI * f / sampleRate;
+    const alpha = Math.sin(w0) / (2 * q);
+    const a0 = 1 + alpha;
+    const out = (alpha * x - alpha * x2 + 2 * Math.cos(w0) * y1 - (1 - alpha) * y2) / a0;
+    return [out, x, x1, y1];
+  }
+
+  const rawSamples = [];
+  let glottalPhase = 0;
+  let tGlobal = 0;
+
   for (const seg of segments) {
-    const segSamples = Math.floor(seg.duration * sampleRate);
     if (seg.type === 'pause') {
-      sampleIdx += segSamples;
+      const pauseCount = Math.floor(seg.dur * sampleRate);
+      for (let i = 0; i < pauseCount; i++) rawSamples.push(0);
       continue;
     }
 
-    const f0 = prof.baseFreq;
-    const wordSamples = segSamples;
-    for (let i = 0; i < wordSamples && sampleIdx < totalSamples; i++, sampleIdx++) {
-      const progress = i / wordSamples;
-      
-      let pitchScale = 1.0;
-      if (seg.isQuestion) {
-        pitchScale += progress * 0.15;
-      } else if (seg.isPeriod) {
-        pitchScale -= progress * 0.12;
+    const phonemes = seg.phonemes;
+    for (let pIdx = 0; pIdx < phonemes.length; pIdx++) {
+      const pKey = phonemes[pIdx];
+      const def = PHONEMES[pKey] || PHONEMES.AH;
+
+      // Plosive silence gap
+      if (def.silentGap) {
+        const gapCount = Math.floor(def.silentGap * prof.durScale * sampleRate);
+        for (let i = 0; i < gapCount; i++) rawSamples.push(0);
       }
 
-      const tSec = i / sampleRate;
-      const vibrato = Math.sin(2 * Math.PI * prof.vibratoRate * tSec) * prof.vibratoDepth;
-      const currentFreq = f0 * pitchScale + vibrato;
+      const pCount = Math.floor(def.dur * prof.durScale * sampleRate);
+      const startF1 = (def.f1 || 500) * prof.formantScale;
+      const startF2 = (def.f2 || 1500) * prof.formantScale;
+      const startF3 = (def.f3 || 2500) * prof.formantScale;
+      const endF1 = (def.glide ? def.glide.f1 : (def.f1 || 500)) * prof.formantScale;
+      const endF2 = (def.glide ? def.glide.f2 : (def.f2 || 1500)) * prof.formantScale;
+      const endF3 = startF3;
 
-      let amp = 1.0;
-      const attack = 0.06;
-      const release = 0.15;
-      if (progress < attack) {
-        amp = progress / attack;
-      } else if (progress > (1 - release)) {
-        amp = (1 - progress) / release;
+      for (let i = 0; i < pCount; i++) {
+        const prog = i / pCount;
+        const curF1 = startF1 + (endF1 - startF1) * prog;
+        const curF2 = startF2 + (endF2 - startF2) * prog;
+        const curF3 = startF3 + (endF3 - startF3) * prog;
+
+        // Pitch with intonation and vibrato
+        let pitch = prof.baseFreq;
+        if (seg.isQuestion) pitch *= 1.0 + 0.15 * prog;
+        else if (seg.isPeriod) pitch *= 1.0 - 0.12 * prog;
+        pitch += Math.sin(2 * Math.PI * prof.vibratoRate * tGlobal) * prof.vibratoDepth;
+
+        // Glottal excitation
+        let glottalPulse = 0;
+        if (def.voiced) {
+          glottalPhase += pitch / sampleRate;
+          if (glottalPhase >= 1) glottalPhase -= 1;
+          if (glottalPhase < 0.4) {
+            glottalPulse = Math.sin(Math.PI * glottalPhase / 0.4);
+          } else {
+            glottalPulse = 0;
+          }
+        }
+
+        // Formant resonators
+        let v1 = 0, v2 = 0, v3 = 0;
+        if (def.voiced) {
+          [r1y1, r1y2] = filterRes(curF1, 80, glottalPulse, r1y1, r1y2);
+          [r2y1, r2y2] = filterRes(curF2, 110, glottalPulse, r2y1, r2y2);
+          [r3y1, r3y2] = filterRes(curF3, 140, glottalPulse, r3y1, r3y2);
+          v1 = r1y1; v2 = r2y1; v3 = r3y2;
+        }
+
+        let voicedSignal = 0;
+        if (def.nasal) {
+          voicedSignal = (v1 * 1.1 + v2 * 0.15 + v3 * 0.05);
+        } else {
+          voicedSignal = (v1 * 1.0 + v2 * 0.6 + v3 * 0.3);
+        }
+
+        // Noise excitation for fricatives & bursts
+        let noiseSignal = 0;
+        if (def.noiseFreq) {
+          const rawNoise = Math.random() * 2 - 1;
+          const [nOut, nX1New, nX2New, nY1New] = filterNoise(def.noiseFreq, 2.5, rawNoise, nX1, nX2, nY1, nY2);
+          nX2 = nX2New; nX1 = nX1New; nY2 = nY1; nY1 = nOut;
+          noiseSignal = nOut * (def.noiseAmp || 0.3);
+        }
+
+        let mix = 0;
+        if (def.voiced && def.noiseFreq) {
+          mix = voicedSignal * 0.6 + noiseSignal * 0.4;
+        } else if (def.voiced) {
+          mix = voicedSignal;
+        } else {
+          mix = noiseSignal;
+        }
+
+        // Smooth phoneme envelope (10% attack, 15% release)
+        let env = 1.0;
+        if (prog < 0.10) env = prog / 0.10;
+        else if (prog > 0.85) env = (1.0 - prog) / 0.15;
+
+        rawSamples.push(mix * env * prof.gain);
+        tGlobal += 1 / sampleRate;
       }
-
-      let val = 0;
-      for (let h = 0; h < prof.harmonics.length; h++) {
-        const harmonicFreq = currentFreq * (h + 1);
-        if (harmonicFreq > sampleRate / 2) break;
-        const harmonicWeight = prof.harmonics[h];
-        val += Math.sin(2 * Math.PI * harmonicFreq * tSec) * harmonicWeight;
-      }
-
-      if (progress < 0.08) {
-        const noise = (Math.random() * 2 - 1) * (1 - progress / 0.08) * 0.25;
-        val += noise;
-      }
-
-      samples[sampleIdx] = val * amp * 0.28;
     }
   }
 
+  const totalSamples = rawSamples.length;
   const buffer = new ArrayBuffer(44 + totalSamples * 2);
   const view = new DataView(buffer);
   const writeStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
-  
+
   writeStr(0, 'RIFF');
   view.setUint32(4, 36 + totalSamples * 2, true);
   writeStr(8, 'WAVE');
@@ -4511,7 +4763,7 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
   view.setUint32(40, totalSamples * 2, true);
 
   for (let i = 0; i < totalSamples; i++) {
-    const s = Math.max(-1, Math.min(1, samples[i]));
+    const s = Math.max(-1, Math.min(1, rawSamples[i]));
     view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
   }
 
@@ -4532,7 +4784,8 @@ async function getNeuralAudioSrc(text) {
 
   // A 429 countdown is running: do not ask again until it ends, or the server's lockout just gets
   // longer. This mirrors the auth form, which disables its buttons for the same reason.
-  if (readerLockedUntil > Date.now()) {
+  // On-device synthesis (wasm) runs locally with zero API calls and is never rate-limited.
+  if (activeEngine !== 'wasm' && readerLockedUntil > Date.now()) {
     const left = Math.ceil((readerLockedUntil - Date.now()) / 1000);
     const err = new Error(`AI reading is paused — try again in ${left}s.`);
     err.status = 429;
@@ -4544,12 +4797,16 @@ async function getNeuralAudioSrc(text) {
   // capture settings now; they can change while we await
   // Always ask the server for normal-speed audio: speed is applied on the phone via playbackRate.
   // (Sending the speed too made the server-side voices play at speed x speed.)
-  const engine = activeEngine, voiceId = voicePicker.value, speed = 1;
+  const engine = activeEngine;
+  const voiceId = (engine === 'wasm' && (!voicePicker.value || !['heart', 'michael', 'emma'].includes(voicePicker.value)))
+    ? 'heart'
+    : voicePicker.value;
+  const speed = 1;
 
   if (engine === 'wasm') {
     const job = (async () => {
       const src = await synthOnDeviceSpeech(text, voiceId);
-      audioPreloadCache.set(key, { src, createdAt: Date.now() });
+      cacheAudio(key, src);
       return src;
     })();
     audioInflight.set(key, job);
@@ -4645,7 +4902,7 @@ function preloadUpcoming(myToken) {
   upcomingNeuralTexts(PRELOAD_AHEAD).forEach(t => {
     if (myToken !== speakToken) return; // user paused/skipped
     if (audioPreloadCache.has(neuralCacheKey(t))) return;
-    getNeuralAudioSrc(t).catch(() => {}); // best effort; the real play path reports errors
+    getNeuralAudioSrc(t).catch(() => { }); // best effort; the real play path reports errors
   });
 }
 
@@ -4659,18 +4916,21 @@ async function speakServerless(text, opts = {}) {
     let audioSrc = audioPreloadCache.get(neuralCacheKey(text))?.src;
 
     if (!audioSrc) {
-      const customOpenAi = localStorage.getItem('marginalia_byok_openai') || '';
-      const customEleven = localStorage.getItem('marginalia_byok_eleven') || '';
-      const token = await getFreshAuthToken();
+      // Cloud TTS requires authentication or BYOK credentials; on-device wasm speech runs completely offline
+      if (activeEngine !== 'wasm') {
+        const customOpenAi = localStorage.getItem('marginalia_byok_openai') || '';
+        const customEleven = localStorage.getItem('marginalia_byok_eleven') || '';
+        const token = await getFreshAuthToken();
 
-      if (!token && !customOpenAi && !customEleven) {
-        stopAudio();
-        showAuthAlert("Please sign in or enter your custom API key in Options.", "error");
-        authModal.style.display = 'flex';
-        return;
+        if (!token && !customOpenAi && !customEleven) {
+          stopAudio();
+          showAuthAlert("Please sign in or enter your custom API key in Options.", "error");
+          authModal.style.display = 'flex';
+          return;
+        }
       }
 
-      preloadStatus.textContent = "Connecting...";
+      preloadStatus.textContent = activeEngine === 'wasm' ? "Synthesizing..." : "Connecting...";
       try {
         const pending = getNeuralAudioSrc(text);    // start this sentence first...
         if (!standalone) preloadUpcoming(myToken);  // ...and right away start the next ones too
@@ -5270,7 +5530,7 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey &&
-      !/^(input|textarea|select)$/i.test(e.target?.tagName || '')) {
+    !/^(input|textarea|select)$/i.test(e.target?.tagName || '')) {
     e.preventDefault();
     openSearchModal();
   }
@@ -5330,9 +5590,9 @@ function populateVoices() {
     const userLang = (navigator.language || 'en').toLowerCase().split('-')[0];
 
     // Apple ships novelty + legacy robotic voices alongside the good ones. Hide them.
-    const NOVELTY = new Set(['albert','bad news','bahh','bells','boing','bubbles','cellos','deranged',
-      'good news','hysterical','jester','organ','pipe organ','superstar','trinoids','whisper','wobble',
-      'zarvox','fred','junior','kathy','ralph','agnes','bruce','vicki','victoria','princess']);
+    const NOVELTY = new Set(['albert', 'bad news', 'bahh', 'bells', 'boing', 'bubbles', 'cellos', 'deranged',
+      'good news', 'hysterical', 'jester', 'organ', 'pipe organ', 'superstar', 'trinoids', 'whisper', 'wobble',
+      'zarvox', 'fred', 'junior', 'kathy', 'ralph', 'agnes', 'bruce', 'vicki', 'victoria', 'princess']);
     const baseName = v => v.name.replace(/\s*\(.*\)\s*$/, '').trim().toLowerCase();
     const quality = v => {
       const n = v.name.toLowerCase();
@@ -5382,7 +5642,7 @@ function populateVoices() {
     // Restore this reader's saved neural voice for the engine; falls back to the in-session
     // choice, then the first preset, so the list is never empty.
     const savedChoice = localStorage.getItem(`marginalia_neural_voice_${activeEngine}`) || '';
-    const wanted = [prevChoice, savedChoice].find(k => k && list.some(item => item.id === k));
+    const wanted = [prevChoice, savedChoice].find(k => k && list.some(item => item.id === k)) || (list[0] ? list[0].id : '');
     list.forEach(item => {
       const opt = document.createElement('option');
       opt.value = item.id;
@@ -5390,6 +5650,9 @@ function populateVoices() {
       if (item.id === wanted) opt.selected = true;
       voicePicker.appendChild(opt);
     });
+    if (!voicePicker.value && list.length > 0) {
+      voicePicker.selectedIndex = 0;
+    }
     const selectedOption = voicePicker.options[voicePicker.selectedIndex];
     if (activeEngine === 'wasm') {
       activeVoiceBadge.textContent = `🎙️ ${selectedOption ? selectedOption.text.split('(')[0].trim() : 'Studio Voice'}`;
@@ -5420,7 +5683,7 @@ voicePicker.addEventListener('change', () => {
   const selectedOption = voicePicker.options[voicePicker.selectedIndex];
   const badgeIcon = (activeEngine === 'browser' || activeEngine === 'wasm') ? '🎙️' : '⚡';
   activeVoiceBadge.textContent = `${badgeIcon} ${selectedOption ? selectedOption.text.split('(')[0].trim() : 'Voice'}`;
-  
+
   if (isPlaying) {
     stopAudio();
     if (activeEngine !== 'browser') unlockAudioForIOS();
@@ -5570,7 +5833,7 @@ function parseHtmlToBlocks(htmlString) {
     return splitIntoSentences(rawText);
   }
 
-  const BLOCK_TAGS = new Set(['p','div','section','article','main','aside','header','footer','ul','ol','li','table','tbody','thead','tr','td','th','blockquote','figure','pre','dl','dt','dd','h1','h2','h3','h4','h5','h6','hr']);
+  const BLOCK_TAGS = new Set(['p', 'div', 'section', 'article', 'main', 'aside', 'header', 'footer', 'ul', 'ol', 'li', 'table', 'tbody', 'thead', 'tr', 'td', 'th', 'blockquote', 'figure', 'pre', 'dl', 'dt', 'dd', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr']);
 
   const pushText = (raw) => {
     const t = (raw || '').replace(/\s+/g, ' ').trim();
@@ -6024,7 +6287,7 @@ function splitIntoSentences(text) {
       const segmenter = new Intl.Segmenter('en', { granularity: 'sentence' });
       const segments = Array.from(segmenter.segment(text));
       return segments.map(s => s.segment.replace(/\s+/g, ' ').trim()).filter(s => s.length > 0);
-    } catch (e) {}
+    } catch (e) { }
   }
   const matches = text.match(/[^.!?]+[.!?]+["')\]]*\s*|[^.!?]+$/g) || [text];
   return matches.map(s => s.replace(/\s+/g, ' ').trim()).filter(s => s.length > 0);
@@ -6040,7 +6303,7 @@ function decodeTextRobustly(uint8) {
       const asLatin1 = new TextDecoder('latin1').decode(uint8);
       // C1 control characters mean the bytes were binary noise, not latin1 text
       if (!/[\u0080-\u009F]/.test(asLatin1)) raw = asLatin1;
-    } catch (e) {}
+    } catch (e) { }
   }
   return repairMojibake(raw);
 }
@@ -6132,7 +6395,7 @@ fileInput.addEventListener('change', async (event) => {
     //  function would shadow it and hit the temporal dead zone in this block)
     const signedIn = await isUserSignedIn();
     let result;
-    
+
     if (signedIn) {
       // Authenticated: full document access
       result = await processUploadedDocument(file);
@@ -6140,7 +6403,7 @@ fileInput.addEventListener('change', async (event) => {
       // Unauthenticated: freemium teaser - only page 1
       result = await processUploadedDocumentFreemium(file);
     }
-    
+
     bookPages = result.pages;
     bookChapters = result.chapters || [{ title: "Beginning", pageIndex: 0 }];
     if (sleepTimerMode === 'chapter') clearSleepTimer(); // saved chapter boundary belongs to the old document

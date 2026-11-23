@@ -166,3 +166,27 @@ test('handleHandsfreeNextTrack detects rapid double-tap (<650ms) to trigger book
   assert.equal(globalThis.currentSentenceIdx, 5, 'Position must revert to original bookmarked sentence');
   assert.equal(globalThis.currentPage, 2, 'Page must be maintained at original page');
 });
+
+test('speakServerless and getNeuralAudioSrc bypass auth, BYOK keys, and 429 lockout for wasm engine', () => {
+  const appSrc = readFileSync(fileURLToPath(new URL('../public/app.js', import.meta.url)), 'utf8');
+
+  // Verify speakServerless exempts wasm from the auth gate
+  assert.ok(
+    appSrc.includes("if (activeEngine !== 'wasm') {") &&
+    appSrc.includes("preloadStatus.textContent = activeEngine === 'wasm' ? \"Synthesizing...\" : \"Connecting...\";"),
+    'speakServerless must not demand cloud tokens or BYOK keys when activeEngine is wasm'
+  );
+
+  // Verify getNeuralAudioSrc exempts wasm from cloud 429 lockout
+  assert.ok(
+    appSrc.includes("if (activeEngine !== 'wasm' && readerLockedUntil > Date.now())"),
+    'getNeuralAudioSrc must not throttle wasm speech when cloud endpoints are rate limited'
+  );
+
+  // Verify wasm voice fallback defaults safely to heart
+  assert.ok(
+    appSrc.includes("['heart', 'michael', 'emma'].includes(voicePicker.value)") &&
+    appSrc.includes("? 'heart'"),
+    'getNeuralAudioSrc must safely default to heart if voicePicker holds a stale cloud voice id'
+  );
+});
