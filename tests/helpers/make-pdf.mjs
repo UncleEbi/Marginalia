@@ -12,6 +12,10 @@ const FONT_SIZE = 12;
 const LINE_CHARS = 78;
 
 function contentStream(text) {
+  if (text && typeof text === 'object' && typeof text.rawOps === 'string') {
+    const ops = text.rawOps;
+    return `<< /Length ${ops.length} >>\nstream\n${ops}\nendstream`;
+  }
   const escape = (s) => String(s).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
   const lines = String(text)
     .split('\n')

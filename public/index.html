@@ -168,6 +168,8 @@
 
         <button id="summarizeBtn" class="btn-header btn-summarize" title="AI summary" aria-label="AI summary">✨<span class="btn-label"> Summary</span></button>
 
+        <button id="openCompanionBtn" class="btn-header btn-companion" title="AI Reading Companion" aria-label="AI Reading Companion">💡<span class="btn-label"> Companion</span></button>
+
         <div id="creditBadge" class="credit-badge" title="Account & Quota Status">
           <span id="creditDisplay">Sign In</span>
         </div>
@@ -210,6 +212,16 @@
       <div class="drawer-nav-item" id="navBookmarks">
         <span style="font-size:1.2rem;">🔖</span>
         <span>Bookmarks</span>
+      </div>
+
+      <div class="drawer-nav-item" id="navAnnotations">
+        <span style="font-size:1.2rem;">📝</span>
+        <span>Margin Notes & Highlights</span>
+      </div>
+
+      <div class="drawer-nav-item" id="navStudyKit">
+        <span style="font-size:1.2rem;">🎓</span>
+        <span>Export Study Kit</span>
       </div>
 
       <div class="drawer-nav-item" id="navUploadFile">
@@ -260,6 +272,46 @@
     </div>
   </aside>
 
+  <!-- AI READING COMPANION DRAWER (RIGHT) -->
+  <div id="companionOverlay" class="drawer-overlay"></div>
+  <aside id="companionDrawer" class="companion-drawer" aria-label="AI Reading Companion">
+    <div class="companion-header">
+      <div class="companion-header-info">
+        <div class="companion-header-title">💡 Reading Companion</div>
+        <div class="companion-header-sub" id="companionHeaderSub">Active sentence context</div>
+      </div>
+      <button id="closeCompanionBtn" class="companion-close-btn" title="Close Companion">✕</button>
+    </div>
+
+    <div class="companion-body">
+      <!-- Currently Selected / Active Sentence Card -->
+      <div class="companion-context-card">
+        <div class="companion-context-label">CURRENT PASSAGE</div>
+        <div class="companion-context-text" id="companionContextText">No active passage selected.</div>
+      </div>
+
+      <!-- Quick Action Prompt Chips -->
+      <div class="companion-chips">
+        <button class="companion-chip" id="chipSimplify" data-action="simplify">📝 Explain Simply</button>
+        <button class="companion-chip" id="chipSocratic" data-action="socratic">🤔 Socratic Questions</button>
+        <button class="companion-chip" id="chipTerms" data-action="explain_terms">📖 Key Terms</button>
+      </div>
+
+      <!-- Response Stream / Conversation Area -->
+      <div class="companion-responses" id="companionResponses">
+        <div class="companion-welcome">
+          Ask questions, simplify dense paragraphs, or test your comprehension without losing your place in the text.
+        </div>
+      </div>
+    </div>
+
+    <!-- Input bar at bottom of companion drawer -->
+    <div class="companion-input-bar">
+      <input type="text" id="companionInput" class="companion-input" placeholder="Ask about this passage..." />
+      <button id="companionSendBtn" class="companion-send-btn" title="Send question">Ask</button>
+    </div>
+  </aside>
+
   <main>
     <!-- Floating voice pill: tapping it opens the Settings modal, where the voice engine,
          voice picker and auto-page options now live (no more drawer pushing the text down). -->
@@ -287,6 +339,9 @@
       <div id="selectionPopover" class="selection-popover">
         <button class="btn-popover-action" id="btnSelectionSpeak">🗣️ Speak</button>
         <button class="btn-popover-action" id="btnSelectionDefine">📖 Define</button>
+        <button class="btn-popover-action" id="btnSelectionHighlight">🎨 Highlight</button>
+        <button class="btn-popover-action" id="btnSelectionNote">📝 Note</button>
+        <button class="btn-popover-action" id="btnSelectionCompanion">💡 Ask AI</button>
         <button class="btn-popover-action" id="btnSelectionCopy">📋 Copy</button>
       </div>
     </div>
@@ -458,6 +513,67 @@
     </div>
   </div>
 
+  <!-- NOTE MODAL (Margin Notes) -->
+  <div id="noteModal" class="modal-overlay">
+    <div class="modal-card" style="max-width:420px;">
+      <div class="modal-header-bar">
+        <div class="modal-title">📝 Add Margin Note</div>
+        <button class="bookmark-ribbon-btn" data-close="noteModal" style="font-size:1.1rem;">✕</button>
+      </div>
+      <blockquote id="noteModalQuote" style="font-size:0.83rem; font-style:italic; border-left:3px solid var(--accent); padding-left:0.6rem; margin:0.5rem 0; color:var(--text-muted); max-height:80px; overflow-y:auto; word-break:break-word;"></blockquote>
+      <textarea id="noteModalText" rows="3" placeholder="Write your reflection, question, or marginal note..." style="width:100%; padding:0.5rem; border-radius:6px; border:1px solid var(--border); background:var(--bg-main); color:var(--text-main); font-size:14px; font-family:inherit; resize:vertical; margin-top:0.3rem;"></textarea>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:0.75rem;">
+        <div style="display:flex; gap:0.5rem; align-items:center;" id="noteColorPicker">
+          <span style="font-size:0.75rem; color:var(--text-muted);">Color:</span>
+          <button type="button" class="color-dot-btn active" data-color="amber" style="background:#f59e0b; width:22px; height:22px; border-radius:50%; border:2px solid var(--text-main); cursor:pointer;" title="Amber"></button>
+          <button type="button" class="color-dot-btn" data-color="mint" style="background:#10b981; width:22px; height:22px; border-radius:50%; border:2px solid transparent; cursor:pointer;" title="Mint"></button>
+          <button type="button" class="color-dot-btn" data-color="rose" style="background:#f43f5e; width:22px; height:22px; border-radius:50%; border:2px solid transparent; cursor:pointer;" title="Rose"></button>
+        </div>
+        <button id="saveNoteBtn" style="padding:0.4rem 0.95rem; border-radius:6px; background:var(--accent); color:#fff; border:none; font-weight:600; cursor:pointer;">Save Note</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ANNOTATIONS MODAL -->
+  <div id="annotationsModal" class="modal-overlay">
+    <div class="modal-card">
+      <div class="modal-header-bar">
+        <div class="modal-title">📝 Margin Notes & Highlights</div>
+        <button class="bookmark-ribbon-btn" data-close="annotationsModal" style="font-size:1.1rem;">✕</button>
+      </div>
+      <div id="annotationsModalList" class="modal-scrollable-list"></div>
+      <div class="modal-footer-row" style="display:flex; justify-content:space-between; align-items:center; margin-top:0.5rem;">
+        <span id="annotationsCountSummary" style="font-size:0.8rem; color:var(--text-muted);"></span>
+        <button data-close="annotationsModal" style="padding:0.4rem 0.8rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); cursor:pointer;">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- STUDY KIT EXPORT MODAL -->
+  <div id="studyKitModal" class="modal-overlay">
+    <div class="modal-card" style="max-width:540px;">
+      <div class="modal-header-bar">
+        <div class="modal-title">🎓 Export Study Kit</div>
+        <button class="bookmark-ribbon-btn" data-close="studyKitModal" style="font-size:1.1rem;">✕</button>
+      </div>
+      <p style="font-size:0.82rem; color:var(--text-muted); margin-bottom:0.75rem;">
+        Consolidate your notes, highlights, and vocabulary into study formats for Notion, Obsidian, and Anki.
+      </p>
+      <div style="display:flex; gap:0.5rem; margin-bottom:0.75rem;">
+        <button id="tabStudyKitMarkdown" class="nav-tab-btn active" type="button">Markdown / Obsidian</button>
+        <button id="tabStudyKitAnki" class="nav-tab-btn" type="button">Anki Flashcards</button>
+      </div>
+      <textarea id="studyKitPreview" readonly style="width:100%; height:180px; padding:0.5rem; font-family:monospace; font-size:12px; border-radius:6px; border:1px solid var(--border); background:var(--bg-main); color:var(--text-main); resize:none;"></textarea>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:0.75rem;">
+        <span id="studyKitCountSummary" style="font-size:0.78rem; color:var(--text-muted);"></span>
+        <div style="display:flex; gap:0.5rem;">
+          <button id="btnStudyKitCopy" type="button" style="padding:0.4rem 0.85rem; border-radius:6px; border:1px solid var(--border); background:var(--bg-main); color:var(--text-main); cursor:pointer;">📋 Copy</button>
+          <button id="btnStudyKitDownload" type="button" style="padding:0.4rem 0.85rem; border-radius:6px; background:var(--accent); color:#fff; border:none; font-weight:600; cursor:pointer;">⬇️ Download</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- SLEEP TIMER MODAL -->
   <div id="sleepTimerModal" class="modal-overlay">
     <div class="modal-card">
@@ -522,6 +638,7 @@
           <label style="font-size:0.85rem; color:var(--text-muted);">Voice Engine</label>
           <div class="engine-tabs-group">
             <button class="engine-tab active" data-engine="browser">Browser Native</button>
+            <button class="engine-tab" data-engine="wasm">Studio (On-Device)</button>
             <button class="engine-tab" data-engine="elevenlabs">ElevenLabs</button>
             <button class="engine-tab" data-engine="openai">OpenAI Audio</button>
           </div>
@@ -577,6 +694,22 @@
             <option value="word">Word Karaoke (Synchronized)</option>
             <option value="sentence">Sentence Only (Smooth Focus)</option>
             <option value="none">Off (No Highlights)</option>
+          </select>
+        </div>
+
+        <div>
+          <label style="font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:0.35rem;">Bionic Reading (Speed Fixation)</label>
+          <select id="bionicModeSelect" style="width:100%; padding:0.45rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:16px;">
+            <option value="off" selected>Off (Standard text)</option>
+            <option value="on">On (Bionic fixation guidance)</option>
+          </select>
+        </div>
+
+        <div>
+          <label style="font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:0.35rem;">Pacing Focus Ruler</label>
+          <select id="pacingRulerSelect" style="width:100%; padding:0.45rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:16px;">
+            <option value="off" selected>Off (Full page visible)</option>
+            <option value="active">Active Sentence Spotlight</option>
           </select>
         </div>
 

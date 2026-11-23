@@ -40,6 +40,192 @@ function resolveLib() {
   throw new Error(LIB_REQUIRED);
 }
 
+function groupIntoLines(items, tolerance = 3.5) {
+  if (!items || items.length === 0) return [];
+  const sorted = [...items].sort((a, b) => b.y - a.y);
+  const lines = [];
+  for (const item of sorted) {
+    let line = lines.find((l) => Math.abs(l.y - item.y) <= tolerance);
+    if (!line) {
+      line = { y: item.y, items: [] };
+      lines.push(line);
+    }
+    line.items.push(item);
+  }
+  lines.sort((a, b) => b.y - a.y);
+  for (const line of lines) {
+    line.items.sort((a, b) => a.x - b.x);
+  }
+  return lines;
+}
+
+function renderLines(lines) {
+  if (!lines || lines.length === 0) return '';
+  const lineTexts = [];
+  for (const line of lines) {
+    let lineStr = '';
+    for (let i = 0; i < line.items.length; i++) {
+      const item = line.items[i];
+      if (i === 0) {
+        lineStr += item.str;
+      } else {
+        const prev = line.items[i - 1];
+        if (lineStr.endsWith(' ') || item.str.startsWith(' ')) {
+          lineStr += item.str;
+        } else {
+          const gap = item.x - prev.right;
+          if (gap > 1.5 || prev.width === 0) {
+            lineStr += ' ' + item.str;
+          } else {
+            lineStr += item.str;
+          }
+        }
+      }
+    }
+    lineStr = lineStr.trim();
+    if (lineStr) lineTexts.push(lineStr);
+  }
+
+  let fullText = '';
+  for (let i = 0; i < lineTexts.length; i++) {
+    const cur = lineTexts[i];
+    if (i === 0) {
+      fullText = cur;
+    } else {
+      const prev = lineTexts[i - 1];
+      if (/(\b[a-zA-Z]+)-$/.test(prev) && /^[a-z]/.test(cur)) {
+        fullText = fullText.slice(0, -1) + cur;
+      } else {
+        fullText += ' ' + cur;
+      }
+    }
+  }
+  return fullText.replace(/\s+/g, ' ').trim();
+}
+
+export function processPageItems(rawItems, viewport, options = {}) {
+  const { layoutAware = true, removeHeaders = true } = options;
+  if (!rawItems || rawItems.length === 0) return '';
+
+  if (!layoutAware) {
+    return rawItems
+      .map((item) => (typeof item?.str === 'string' ? item.str : ''))
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  const pageWidth = viewport && viewport.width ? viewport.width : 612;
+  const pageHeight = viewport && viewport.height ? viewport.height : 792;
+  const yTopCutoff = pageHeight * 0.94;
+  const yBottomCutoff = pageHeight * 0.06;
+
+  const validItems = [];
+  for (const item of rawItems) {
+    if (!item || typeof item.str !== 'string') continue;
+    const str = item.str;
+    if (!str.trim()) continue;
+    const tx = Array.isArray(item.transform) ? item.transform[4] : 0;
+    const ty = Array.isArray(item.transform) ? item.transform[5] : 0;
+    const width = Number(item.width) || (str.length * 6);
+    const height = Number(item.height) || (Array.isArray(item.transform) ? Math.abs(item.transform[3]) : 10);
+    validItems.push({
+      str,
+      x: tx,
+      y: ty,
+      width,
+      height,
+      right: tx + width
+    });
+  }
+
+  if (validItems.length === 0) return '';
+
+  // Header and footer pruning
+  let bodyItems = validItems;
+  if (removeHeaders) {
+    bodyItems = validItems.filter((item) => {
+      if (item.y >= yTopCutoff) {
+        if (/^\s*(page\s+)?(\d+|[ivxlcdm]+)(\s+of\s+\d+)?\s*$/i.test(item.str)) return false;
+        if (item.str.length < 120 && item.y > pageHeight * 0.955) return false;
+      }
+      if (item.y <= yBottomCutoff) {
+        if (/^\s*(page\s+)?(-?\s*\d+\s*-?|[ivxlcdm]+)(\s+of\s+\d+)?\s*$/i.test(item.str)) return false;
+        if (/(©|\(c\)|copyright|doi:|issn|rights reserved)/i.test(item.str)) return false;
+        if (item.str.length < 100 && item.y < pageHeight * 0.045) return false;
+      }
+      return true;
+    });
+    if (bodyItems.length === 0) bodyItems = validItems;
+  }
+
+  if (bodyItems.length < 6) {
+    return renderLines(groupIntoLines(bodyItems));
+  }
+
+  const minX = Math.min(...bodyItems.map((it) => it.x));
+  const maxX = Math.max(...bodyItems.map((it) => it.right));
+  const contentWidth = maxX - minX;
+  const midX = minX + contentWidth / 2;
+
+  const leftCol = [];
+  const rightCol = [];
+  const spanning = [];
+
+  for (const item of bodyItems) {
+    if (item.width > contentWidth * 0.65 || (item.x < midX - 25 && item.right > midX + 25)) {
+      spanning.push(item);
+    } else if ((item.x + item.right) / 2 < midX) {
+      leftCol.push(item);
+    } else {
+      rightCol.push(item);
+    }
+  }
+
+  const isTwoColumn = leftCol.length >= 3 && rightCol.length >= 3 && (leftCol.length + rightCol.length) > spanning.length;
+
+  if (!isTwoColumn) {
+    return renderLines(groupIntoLines(bodyItems));
+  }
+
+  const colTopY = Math.max(
+    Math.max(...leftCol.map((i) => i.y)),
+    Math.max(...rightCol.map((i) => i.y))
+  );
+  const colBottomY = Math.min(
+    Math.min(...leftCol.map((i) => i.y)),
+    Math.min(...rightCol.map((i) => i.y))
+  );
+
+  const topSpanning = spanning.filter((i) => i.y >= colTopY - 10);
+  const bottomSpanning = spanning.filter((i) => i.y <= colBottomY + 10);
+  const midSpanning = spanning.filter((i) => i.y < colTopY - 10 && i.y > colBottomY + 10);
+
+  const sections = [];
+  if (topSpanning.length) sections.push(renderLines(groupIntoLines(topSpanning)));
+
+  if (midSpanning.length === 0) {
+    sections.push(renderLines(groupIntoLines(leftCol)));
+    sections.push(renderLines(groupIntoLines(rightCol)));
+  } else {
+    const midY = midSpanning[0].y;
+    const leftAbove = leftCol.filter((i) => i.y >= midY);
+    const rightAbove = rightCol.filter((i) => i.y >= midY);
+    const leftBelow = leftCol.filter((i) => i.y < midY);
+    const rightBelow = rightCol.filter((i) => i.y < midY);
+
+    if (leftAbove.length) sections.push(renderLines(groupIntoLines(leftAbove)));
+    if (rightAbove.length) sections.push(renderLines(groupIntoLines(rightAbove)));
+    sections.push(renderLines(groupIntoLines(midSpanning)));
+    if (leftBelow.length) sections.push(renderLines(groupIntoLines(leftBelow)));
+    if (rightBelow.length) sections.push(renderLines(groupIntoLines(rightBelow)));
+  }
+
+  if (bottomSpanning.length) sections.push(renderLines(groupIntoLines(bottomSpanning)));
+
+  return sections.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+}
+
 export async function extractPdfTexts(libOrData, dataOrOptions, maybeOptions) {
   let lib, data, options;
 
@@ -57,19 +243,22 @@ export async function extractPdfTexts(libOrData, dataOrOptions, maybeOptions) {
     options = dataOrOptions || {};
   }
 
+  const {
+    layoutAware = true,
+    removeHeaders = true,
+    ...getDocumentOptions
+  } = options;
+
   const safeData = clonePdfData(data);
-  const doc = await lib.getDocument({ data: safeData, ...options }).promise;
+  const doc = await lib.getDocument({ data: safeData, ...getDocumentOptions }).promise;
   const pages = [];
 
   try {
     for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
       const page = await doc.getPage(pageNumber);
+      const viewport = page.getViewport ? page.getViewport({ scale: 1 }) : { width: 612, height: 792 };
       const content = await page.getTextContent();
-      const text = content.items
-        .map((item) => (typeof item.str === 'string' ? item.str : ''))
-        .join(' ')
-        .replace(/\s+/g, ' ')
-        .trim();
+      const text = processPageItems(content.items, viewport, { layoutAware, removeHeaders });
       if (text) pages.push({ pageNumber, text });
     }
   } finally {

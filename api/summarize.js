@@ -111,7 +111,9 @@ export default async function handler(req, res) {
     });
   }
 
-  const mode = body.mode === 'key_takeaways' ? 'key_takeaways' : 'chapter';
+  const validModes = ['chapter', 'key_takeaways', 'simplify', 'socratic', 'explain_terms', 'ask'];
+  const mode = validModes.includes(body.mode) ? body.mode : 'chapter';
+  const question = typeof body.question === 'string' ? body.question.trim().slice(0, 500) : '';
   const customOpenAiKey = req.headers['x-custom-openai-key'];
   const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
 
@@ -243,10 +245,23 @@ export default async function handler(req, res) {
     }
 
     const model = (process.env.OPENAI_SUMMARY_MODEL || 'gpt-4o-mini').trim();
-    const systemPrompt = "You are an executive reading companion. Summarize the text clearly and naturally so it flows smoothly when read aloud via text-to-speech narration. Avoid markdown bullet symbols, asterisks, or raw symbols that sound clunky when read by audio engines.";
-    const userPrompt = mode === 'key_takeaways'
-      ? `Extract the essential key takeaways and high-level themes of this document into 3 to 5 concise, narratable paragraphs:\n\n${text.slice(0, 45000)}`
-      : `Summarize this section into a focused, natural narrative summary in 2 to 3 paragraphs:\n\n${text.slice(0, 25000)}`;
+    let systemPrompt = "You are an executive reading companion. Provide clear, insightful explanations and analysis to deepen the reader's comprehension.";
+    let userPrompt;
+    if (mode === 'key_takeaways') {
+      systemPrompt += " Avoid markdown bullet symbols that sound clunky when read by audio engines.";
+      userPrompt = `Extract the essential key takeaways and high-level themes of this document into 3 to 5 concise paragraphs:\n\n${text.slice(0, 45000)}`;
+    } else if (mode === 'simplify') {
+      userPrompt = `Explain and simplify this passage in plain, clear language. Break down complex reasoning or dense terminology so anyone can understand it intuitively:\n\n${text.slice(0, 25000)}`;
+    } else if (mode === 'socratic') {
+      userPrompt = `Provide 2 to 3 thought-provoking Socratic comprehension questions and short reflection prompts based on this passage to help the reader test and deepen their understanding:\n\n${text.slice(0, 25000)}`;
+    } else if (mode === 'explain_terms') {
+      userPrompt = `Identify the key terms, technical concepts, or central ideas in this passage and explain each clearly:\n\n${text.slice(0, 25000)}`;
+    } else if (mode === 'ask') {
+      userPrompt = `Answer this question about the passage concisely and accurately based on the text provided:\n\nQuestion: ${question || 'Explain this passage in context.'}\n\nPassage:\n${text.slice(0, 25000)}`;
+    } else {
+      systemPrompt += " Summarize clearly and naturally so it flows smoothly when read aloud via text-to-speech narration. Avoid markdown bullet symbols, asterisks, or raw symbols that sound clunky when read by audio engines.";
+      userPrompt = `Summarize this section into a focused, natural narrative summary in 2 to 3 paragraphs:\n\n${text.slice(0, 25000)}`;
+    }
 
     const aiRes = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',

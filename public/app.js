@@ -96,26 +96,37 @@ controlsToggleBar.addEventListener('click', () => openOptionsModal());
 
 // --- INDEXEDDB STORAGE ---
 const DB_NAME = "MarginaliaBookDB";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 let dbInstance = null;
 
 function initIndexedDB() {
   return new Promise((resolve) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = (e) => {
-      const db = e.target.result;
-      if (!db.objectStoreNames.contains("books")) {
-        db.createObjectStore("books", { keyPath: "id", autoIncrement: true });
-      }
-      if (!db.objectStoreNames.contains("bookmarks")) {
-        db.createObjectStore("bookmarks", { keyPath: "id", autoIncrement: true });
-      }
-    };
-    req.onsuccess = (e) => {
-      dbInstance = e.target.result;
-      resolve(dbInstance);
-    };
-    req.onerror = () => resolve(null);
+    if (typeof indexedDB === 'undefined') return resolve(null);
+    try {
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains("books")) {
+          db.createObjectStore("books", { keyPath: "id", autoIncrement: true });
+        }
+        if (!db.objectStoreNames.contains("bookmarks")) {
+          db.createObjectStore("bookmarks", { keyPath: "id", autoIncrement: true });
+        }
+        if (!db.objectStoreNames.contains("annotations")) {
+          db.createObjectStore("annotations", { keyPath: "id", autoIncrement: true });
+        }
+        if (!db.objectStoreNames.contains("vocabulary")) {
+          db.createObjectStore("vocabulary", { keyPath: "id", autoIncrement: true });
+        }
+      };
+      req.onsuccess = (e) => {
+        dbInstance = e.target.result;
+        resolve(dbInstance);
+      };
+      req.onerror = () => resolve(null);
+    } catch (err) {
+      resolve(null);
+    }
   });
 }
 
@@ -202,6 +213,205 @@ function showTeaserAccessNotice() {
 // Show full access notice (for authenticated users)
 function showFullAccessNotice() {
   showToast('✅ Full document access — all chapters available');
+}
+
+// --- BI-DIRECTIONAL SUPABASE CLOUD SYNC ---
+async function syncProgressToCloud(title, page, sentenceIdx) {
+  await updateBookProgressInDB(title, page, sentenceIdx);
+
+  if (!supabaseClient) return;
+  const token = await getFreshAuthToken();
+  if (!token) return;
+
+  try {
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    if (!session?.user) return;
+
+    await supabaseClient.from('user_books').upsert({
+      user_id: session.user.id,
+      title: title,
+      current_page: page,
+      current_sentence: sentenceIdx,
+      total_pages: bookPages.length || 1,
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'user_id,title' });
+  } catch (e) {}
+}
+
+async function syncBookmarkToCloud(bookTitle, page, sentenceIdx, snippet) {
+  if (!supabaseClient) return;
+  try {
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    if (!session?.user) return;
+    await supabaseClient.from('user_bookmarks').upsert({
+      user_id: session.user.id,
+      book_title: bookTitle,
+      page,
+      sentence_idx: sentenceIdx,
+      snippet: snippet || '',
+      created_at: new Date().toISOString()
+    }, { onConflict: 'user_id,book_title,page,sentence_idx' });
+  } catch (e) {}
+}
+
+async function deleteCloudBookmark(bookTitle, page, sentenceIdx) {
+  if (!supabaseClient) return;
+  try {
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    if (!session?.user) return;
+    await supabaseClient.from('user_bookmarks')
+      .delete()
+      .eq('user_id', session.user.id)
+      .eq('book_title', bookTitle)
+      .eq('page', page)
+      .eq('sentence_idx', sentenceIdx);
+  } catch (e) {}
+}
+
+async function syncAnnotationToCloud(ann) {
+  if (!supabaseClient || !ann) return;
+  try {
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    if (!session?.user) return;
+    await supabaseClient.from('user_annotations').upsert({
+      user_id: session.user.id,
+      book_title: ann.bookTitle,
+      page: ann.page,
+      sentence_idx: ann.sentenceIdx,
+      text: ann.quoteText || ann.text || '',
+      type: ann.noteText ? 'note' : 'highlight',
+      color: ann.color || 'amber',
+      note_text: ann.noteText || '',
+      created_at: typeof ann.createdAt === 'number' ? new Date(ann.createdAt).toISOString() : (ann.createdAt || new Date().toISOString()),
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'user_id,book_title,page,sentence_idx,type' });
+  } catch (e) {}
+}
+
+async function deleteCloudAnnotation(bookTitle, page, sentenceIdx, type) {
+  if (!supabaseClient) return;
+  try {
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    if (!session?.user) return;
+    let q = supabaseClient.from('user_annotations')
+      .delete()
+      .eq('user_id', session.user.id)
+      .eq('book_title', bookTitle)
+      .eq('page', page)
+      .eq('sentence_idx', sentenceIdx);
+    if (type) q = q.eq('type', type);
+    await q;
+  } catch (e) {}
+}
+
+/**
+ * Bi-directional reconciliation:
+ * Pulls remote user_books, user_bookmarks, and user_annotations;
+ * Merges missing entries into local IndexedDB; pushes newer local entries to remote.
+ */
+async function syncAllWithCloud() {
+  if (!supabaseClient) return { success: false, reason: 'no_client' };
+  try {
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    if (!session?.user) return { success: false, reason: 'not_authenticated' };
+    const userId = session.user.id;
+
+    // 1. Sync Books & Reading Progress
+    const { data: remoteBooks } = await supabaseClient
+      .from('user_books')
+      .select('title, current_page, current_sentence, total_pages, updated_at')
+      .eq('user_id', userId);
+
+    const localBooks = await getAllBooksFromShelf();
+    const localBooksMap = new Map(localBooks.map(b => [b.title, b]));
+
+    if (Array.isArray(remoteBooks)) {
+      for (const rb of remoteBooks) {
+        const lb = localBooksMap.get(rb.title);
+        if (lb) {
+          const remoteTime = new Date(rb.updated_at || 0).getTime();
+          const localTime = Number(lb.updatedAt || 0);
+          if (remoteTime > localTime) {
+            await updateBookProgressInDB(rb.title, rb.current_page, rb.current_sentence);
+            if (currentDocName === rb.title && !isPlaying) {
+              currentPage = rb.current_page;
+              currentSentenceIdx = rb.current_sentence;
+              renderPage(currentPage);
+            }
+          } else if (localTime > remoteTime) {
+            await supabaseClient.from('user_books').upsert({
+              user_id: userId,
+              title: lb.title,
+              current_page: lb.currentPage || 0,
+              current_sentence: lb.currentSentenceIdx || 0,
+              total_pages: lb.pages?.length || 1,
+              updated_at: new Date(localTime).toISOString()
+            }, { onConflict: 'user_id,title' });
+          }
+        }
+      }
+    }
+
+    // 2. Sync Bookmarks
+    const { data: remoteBookmarks } = await supabaseClient
+      .from('user_bookmarks')
+      .select('book_title, page, sentence_idx, snippet, created_at')
+      .eq('user_id', userId);
+
+    const localBookmarks = await getBookmarksFromDB();
+    const localBmSet = new Set(localBookmarks.map(b => `${b.bookTitle}:::${b.page}:::${b.sentenceIdx}`));
+
+    if (Array.isArray(remoteBookmarks)) {
+      for (const rb of remoteBookmarks) {
+        const key = `${rb.book_title}:::${rb.page}:::${rb.sentence_idx}`;
+        if (!localBmSet.has(key)) {
+          await saveBookmarkToDB(rb.book_title, rb.page, rb.sentence_idx, rb.snippet);
+          localBmSet.add(key);
+        }
+      }
+    }
+    for (const lb of localBookmarks) {
+      await syncBookmarkToCloud(lb.bookTitle, lb.page, lb.sentenceIdx, lb.snippet);
+    }
+
+    // 3. Sync Annotations
+    const { data: remoteAnn } = await supabaseClient
+      .from('user_annotations')
+      .select('book_title, page, sentence_idx, text, type, color, note_text, created_at')
+      .eq('user_id', userId);
+
+    const localAnn = await getAnnotationsFromDB(currentDocName);
+    const localAnnSet = new Set(localAnn.map(a => `${a.bookTitle}:::${a.page}:::${a.sentenceIdx}:::${a.noteText ? 'note' : 'highlight'}`));
+
+    if (Array.isArray(remoteAnn)) {
+      for (const ra of remoteAnn) {
+        const key = `${ra.book_title}:::${ra.page}:::${ra.sentence_idx}:::${ra.type}`;
+        if (!localAnnSet.has(key)) {
+          await saveAnnotationToDB({
+            bookTitle: ra.book_title,
+            page: ra.page,
+            sentenceIdx: ra.sentence_idx,
+            quoteText: ra.text,
+            noteText: ra.note_text,
+            color: ra.color,
+            createdAt: ra.created_at
+          });
+          localAnnSet.add(key);
+        }
+      }
+      if (currentDocName) {
+        await refreshCurrentDocAnnotations();
+        renderPage(currentPage);
+      }
+    }
+    for (const la of localAnn) {
+      await syncAnnotationToCloud(la);
+    }
+
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err?.message || 'Sync failed' };
+  }
 }
 
 async function getAllBooksFromShelf() {
@@ -1265,6 +1475,153 @@ async function deleteBookmarkFromDB(id) {
   });
 }
 
+async function saveAnnotationToDB({ id, bookTitle, page, sentenceIdx, quoteText, noteText, color }) {
+  if (!dbInstance) await initIndexedDB();
+  if (!dbInstance) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = dbInstance.transaction(["annotations"], "readwrite");
+      const store = tx.objectStore("annotations");
+      const item = {
+        bookTitle: bookTitle || '',
+        page: Number.isFinite(page) ? page : 0,
+        sentenceIdx: Number.isFinite(sentenceIdx) ? sentenceIdx : 0,
+        quoteText: quoteText || '',
+        noteText: noteText || '',
+        color: color || 'amber',
+        updatedAt: Date.now()
+      };
+      if (id != null) {
+        item.id = id;
+        const req = store.put(item);
+        req.onsuccess = () => {
+          syncAnnotationToCloud(item).catch(() => {});
+          resolve(item);
+        };
+        req.onerror = () => resolve(null);
+      } else {
+        item.createdAt = Date.now();
+        const req = store.add(item);
+        req.onsuccess = (e) => {
+          const res = { id: e.target.result, ...item };
+          syncAnnotationToCloud(res).catch(() => {});
+          resolve(res);
+        };
+        req.onerror = () => resolve(null);
+      }
+    } catch (e) {
+      resolve(null);
+    }
+  });
+}
+
+async function getAnnotationsFromDB(bookTitle = null) {
+  if (!dbInstance) await initIndexedDB();
+  if (!dbInstance) return [];
+  return new Promise((resolve) => {
+    try {
+      const tx = dbInstance.transaction(["annotations"], "readonly");
+      const store = tx.objectStore("annotations");
+      const req = store.getAll();
+      req.onsuccess = () => {
+        let list = req.result || [];
+        if (bookTitle) list = list.filter(a => a.bookTitle === bookTitle);
+        list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+        resolve(list);
+      };
+      req.onerror = () => resolve([]);
+    } catch (e) {
+      resolve([]);
+    }
+  });
+}
+
+async function deleteAnnotationFromDB(id) {
+  if (!dbInstance) await initIndexedDB();
+  if (!dbInstance) return false;
+  return new Promise((resolve) => {
+    try {
+      const tx = dbInstance.transaction(["annotations"], "readwrite");
+      const store = tx.objectStore("annotations");
+      const req = store.delete(id);
+      req.onsuccess = () => resolve(true);
+      req.onerror = () => resolve(false);
+    } catch (e) {
+      resolve(false);
+    }
+  });
+}
+
+async function saveVocabToDB({ word, partOfSpeech, definition, bookTitle, context }) {
+  if (!dbInstance) await initIndexedDB();
+  if (!dbInstance) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = dbInstance.transaction(["vocabulary"], "readwrite");
+      const store = tx.objectStore("vocabulary");
+      const req = store.getAll();
+      req.onsuccess = () => {
+        const existing = (req.result || []).find(v => v.word.toLowerCase() === (word || '').toLowerCase());
+        if (existing) {
+          existing.partOfSpeech = partOfSpeech || existing.partOfSpeech;
+          existing.definition = definition || existing.definition;
+          existing.context = context || existing.context;
+          existing.updatedAt = Date.now();
+          store.put(existing);
+          resolve(existing);
+        } else {
+          const item = {
+            word: (word || '').toLowerCase(),
+            partOfSpeech: partOfSpeech || '',
+            definition: definition || '',
+            bookTitle: bookTitle || '',
+            context: context || '',
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+          };
+          const addReq = store.add(item);
+          addReq.onsuccess = (e) => resolve({ id: e.target.result, ...item });
+          addReq.onerror = () => resolve(null);
+        }
+      };
+      req.onerror = () => resolve(null);
+    } catch (e) {
+      resolve(null);
+    }
+  });
+}
+
+async function getVocabFromDB(bookTitle = null) {
+  if (!dbInstance) await initIndexedDB();
+  if (!dbInstance) return [];
+  return new Promise((resolve) => {
+    try {
+      const tx = dbInstance.transaction(["vocabulary"], "readonly");
+      const store = tx.objectStore("vocabulary");
+      const req = store.getAll();
+      req.onsuccess = () => {
+        let list = req.result || [];
+        if (bookTitle) list = list.filter(v => !v.bookTitle || v.bookTitle === bookTitle);
+        list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+        resolve(list);
+      };
+      req.onerror = () => resolve([]);
+    } catch (e) {
+      resolve([]);
+    }
+  });
+}
+
+let currentDocAnnotations = [];
+
+async function refreshCurrentDocAnnotations() {
+  try {
+    currentDocAnnotations = await getAnnotationsFromDB(currentDocName);
+  } catch (e) {
+    currentDocAnnotations = [];
+  }
+}
+
 // --- STATE MANAGEMENT ---
 let currentDocName = "Marginalia Quickstart";
 let bookPages = [
@@ -1313,8 +1670,11 @@ let playbackVolume = (() => {
 const selectionPopover = document.getElementById('selectionPopover');
 const btnSelectionSpeak = document.getElementById('btnSelectionSpeak');
 const btnSelectionDefine = document.getElementById('btnSelectionDefine');
+const btnSelectionHighlight = document.getElementById('btnSelectionHighlight');
+const btnSelectionNote = document.getElementById('btnSelectionNote');
 const btnSelectionCopy = document.getElementById('btnSelectionCopy');
 let currentSelectedText = "";
+let currentSelectedSentenceIdx = 0;
 
 // DOM Elements
 const contentPane = document.getElementById('contentPane');
@@ -1345,6 +1705,8 @@ const drawerOverlay = document.getElementById('drawerOverlay');
 const navRecentList = document.getElementById('navRecentList');
 const navMyShelf = document.getElementById('navMyShelf');
 const navBookmarks = document.getElementById('navBookmarks');
+const navAnnotations = document.getElementById('navAnnotations');
+const navStudyKit = document.getElementById('navStudyKit');
 const navUploadFile = document.getElementById('navUploadFile');
 const navProfileItem = document.getElementById('navProfileItem');
 const drawerHeaderProfileClick = document.getElementById('drawerHeaderProfileClick');
@@ -1370,6 +1732,36 @@ const shelfModalTitle = document.getElementById('shelfModalTitle');
 const shelfModalList = document.getElementById('shelfModalList');
 const bookmarksModal = document.getElementById('bookmarksModal');
 const bookmarksModalList = document.getElementById('bookmarksModalList');
+
+// Note Modal Elements
+const noteModal = document.getElementById('noteModal');
+const noteModalQuote = document.getElementById('noteModalQuote');
+const noteModalText = document.getElementById('noteModalText');
+const saveNoteBtn = document.getElementById('saveNoteBtn');
+const noteColorPicker = document.getElementById('noteColorPicker');
+let activeNoteEditingId = null;
+let selectedNoteColor = 'amber';
+
+// Annotations Modal Elements
+const annotationsModal = document.getElementById('annotationsModal');
+const annotationsModalList = document.getElementById('annotationsModalList');
+const annotationsCountSummary = document.getElementById('annotationsCountSummary');
+
+// Study Kit Modal Elements
+const studyKitModal = document.getElementById('studyKitModal');
+const tabStudyKitMarkdown = document.getElementById('tabStudyKitMarkdown');
+const tabStudyKitAnki = document.getElementById('tabStudyKitAnki');
+const studyKitPreview = document.getElementById('studyKitPreview');
+const studyKitCountSummary = document.getElementById('studyKitCountSummary');
+const btnStudyKitCopy = document.getElementById('btnStudyKitCopy');
+const btnStudyKitDownload = document.getElementById('btnStudyKitDownload');
+let currentStudyKitTab = 'markdown';
+
+// Cognitive Modes
+const bionicModeSelect = document.getElementById('bionicModeSelect');
+const pacingRulerSelect = document.getElementById('pacingRulerSelect');
+let bionicMode = localStorage.getItem('marginalia_bionic_mode') || 'off';
+let pacingRulerMode = localStorage.getItem('marginalia_pacing_ruler') || 'off';
 const optionsModal = document.getElementById('optionsModal');
 const aboutModal = document.getElementById('aboutModal');
 const summaryModal = document.getElementById('summaryModal');
@@ -1523,6 +1915,66 @@ function skipSentence(delta) {
   if (wasPlaying) { isPlaying = true; playCurrentSentence(); }
 }
 
+function playBookmarkChime() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    const now = ctx.currentTime;
+    // Rising chime: D5 (587.33Hz) -> A5 (880.00Hz)
+    osc.frequency.setValueAtTime(587.33, now);
+    osc.frequency.exponentialRampToValueAtTime(880.00, now + 0.18);
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.exponentialRampToValueAtTime(0.2, now + 0.04);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.3);
+    setTimeout(() => { try { ctx.close(); } catch (e) {} }, 500);
+  } catch (e) {
+    console.warn('Chime audio context error:', e);
+  }
+}
+
+async function triggerHandsfreeBookmark() {
+  const activeItem = bookPages[currentPage]?.[currentSentenceIdx];
+  const snippet = typeof activeItem === 'string' ? activeItem : (activeItem?.caption || "Diagram");
+  await saveBookmarkToDB(currentDocName, currentPage, currentSentenceIdx, snippet);
+  syncBookmarkToCloud(currentDocName, currentPage, currentSentenceIdx, snippet);
+  playBookmarkChime();
+  showToast(`🔖 Bookmark saved: Page ${currentPage + 1}`);
+}
+
+let lastNextTrackTime = 0;
+let prevBookmarkPage = 0;
+let prevBookmarkSentence = 0;
+
+function handleHandsfreeNextTrack() {
+  const now = Date.now();
+  if (now - lastNextTrackTime < 650) {
+    // Rapid double-tap detected!
+    lastNextTrackTime = 0;
+    currentPage = prevBookmarkPage;
+    currentSentenceIdx = prevBookmarkSentence;
+    renderPage(currentPage);
+    highlightActiveSentence();
+    triggerHandsfreeBookmark();
+    if (isPlaying) {
+      cancelAllSpeech();
+      playCurrentSentence();
+    }
+    return;
+  }
+  lastNextTrackTime = now;
+  prevBookmarkPage = currentPage;
+  prevBookmarkSentence = currentSentenceIdx;
+  skipSentence(1);
+}
+
 (function registerMediaSessionHandlers() {
   if (!('mediaSession' in navigator)) return;
   const set = (action, fn) => { try { navigator.mediaSession.setActionHandler(action, fn); } catch (e) {} };
@@ -1530,7 +1982,8 @@ function skipSentence(delta) {
   set('pause', () => stopAudio());
   set('stop', () => stopAudio());
   set('previoustrack', () => skipSentence(-1));
-  set('nexttrack', () => skipSentence(1));
+  set('nexttrack', handleHandsfreeNextTrack);
+  set('skipad', () => triggerHandsfreeBookmark());
   set('seekbackward', () => prevPageBtn.click());
   set('seekforward', () => nextPageBtn.click());
 })();
@@ -1550,6 +2003,18 @@ function handleTextSelection() {
   }
 
   currentSelectedText = text;
+
+  let anchorElem = sel.anchorNode;
+  while (anchorElem && (!anchorElem.classList || !anchorElem.classList.contains('sentence')) && anchorElem !== contentPane) {
+    anchorElem = anchorElem.parentElement;
+  }
+  if (anchorElem && anchorElem.id && anchorElem.id.startsWith('sent-')) {
+    const sId = parseInt(anchorElem.id.replace('sent-', ''), 10);
+    currentSelectedSentenceIdx = isNaN(sId) ? currentSentenceIdx : sId;
+  } else {
+    currentSelectedSentenceIdx = currentSentenceIdx;
+  }
+
   const range = sel.getRangeAt(0);
   const rect = range.getBoundingClientRect();
   const cardRect = contentPane.getBoundingClientRect();
@@ -1628,11 +2093,113 @@ btnSelectionDefine.addEventListener('click', async (e) => {
     const data = await res.json();
     const def = data[0]?.meanings[0]?.definitions[0]?.definition || "Definition not found.";
     const part = data[0]?.meanings[0]?.partOfSpeech || "";
-    alert(`📖 "${cleanWord}" (${part}):\n\n${def}`);
+    await saveVocabToDB({
+      word: cleanWord,
+      partOfSpeech: part,
+      definition: def,
+      bookTitle: currentDocName,
+      context: currentSelectedText
+    });
+    alert(`📖 "${cleanWord}" (${part}):\n\n${def}\n\n✓ Saved to Study Kit vocabulary!`);
   } catch (err) {
     alert(`Could not find a dictionary entry for "${cleanWord}".`);
   }
 });
+
+if (btnSelectionHighlight) {
+  btnSelectionHighlight.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    selectionPopover.style.display = 'none';
+    if (!currentSelectedText) return;
+
+    await saveAnnotationToDB({
+      bookTitle: currentDocName,
+      page: currentPage,
+      sentenceIdx: currentSelectedSentenceIdx,
+      quoteText: currentSelectedText,
+      noteText: '',
+      color: 'amber'
+    });
+    await refreshCurrentDocAnnotations();
+    renderPage(currentPage);
+    showToast('Highlighted in Amber 🎨');
+  });
+}
+
+function updateColorDotSelection(color) {
+  if (!noteColorPicker) return;
+  noteColorPicker.querySelectorAll('.color-dot-btn').forEach(btn => {
+    const isMatch = btn.getAttribute('data-color') === color;
+    btn.classList.toggle('active', isMatch);
+    btn.style.border = isMatch ? '2px solid var(--text-main)' : '2px solid transparent';
+  });
+}
+
+function openNoteModalForEdit(noteObj) {
+  if (!noteObj || !noteModal) return;
+  activeNoteEditingId = noteObj.id;
+  selectedNoteColor = noteObj.color || 'amber';
+  if (noteModalQuote) noteModalQuote.textContent = `"${noteObj.quoteText}"`;
+  if (noteModalText) noteModalText.value = noteObj.noteText || '';
+  updateColorDotSelection(selectedNoteColor);
+  noteModal.style.display = 'flex';
+  if (noteModalText) noteModalText.focus();
+}
+
+if (btnSelectionNote) {
+  btnSelectionNote.addEventListener('click', (e) => {
+    e.stopPropagation();
+    selectionPopover.style.display = 'none';
+    if (!currentSelectedText || !noteModal) return;
+
+    activeNoteEditingId = null;
+    selectedNoteColor = 'amber';
+    if (noteModalQuote) noteModalQuote.textContent = `"${currentSelectedText}"`;
+    if (noteModalText) noteModalText.value = '';
+    updateColorDotSelection('amber');
+    noteModal.style.display = 'flex';
+    if (noteModalText) noteModalText.focus();
+  });
+}
+
+if (noteColorPicker) {
+  noteColorPicker.querySelectorAll('.color-dot-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      selectedNoteColor = btn.getAttribute('data-color') || 'amber';
+      updateColorDotSelection(selectedNoteColor);
+    });
+  });
+}
+
+if (saveNoteBtn) {
+  saveNoteBtn.addEventListener('click', async () => {
+    const noteText = noteModalText ? noteModalText.value.trim() : '';
+    if (!noteText) {
+      showToast('Please type a note before saving.');
+      return;
+    }
+
+    const fallbackQuote = (bookPages[currentPage] && typeof bookPages[currentPage][currentSelectedSentenceIdx] === 'string')
+      ? bookPages[currentPage][currentSelectedSentenceIdx]
+      : '';
+
+    await saveAnnotationToDB({
+      id: activeNoteEditingId,
+      bookTitle: currentDocName,
+      page: currentPage,
+      sentenceIdx: currentSelectedSentenceIdx,
+      quoteText: currentSelectedText || fallbackQuote,
+      noteText,
+      color: selectedNoteColor
+    });
+
+    closeModalById('noteModal');
+    await refreshCurrentDocAnnotations();
+    renderPage(currentPage);
+    showToast(activeNoteEditingId ? 'Note updated 📝' : 'Note saved in margin 📝');
+    activeNoteEditingId = null;
+  });
+}
 
 btnSelectionCopy.addEventListener('click', (e) => {
   e.stopPropagation();
@@ -1640,6 +2207,147 @@ btnSelectionCopy.addEventListener('click', (e) => {
   navigator.clipboard.writeText(currentSelectedText);
   alert("Text copied to clipboard!");
 });
+
+// --- IN-SITU AI READING COMPANION DRAWER (RIGHT) ---
+const companionDrawer = document.getElementById('companionDrawer');
+const companionOverlay = document.getElementById('companionOverlay');
+const openCompanionBtn = document.getElementById('openCompanionBtn');
+const closeCompanionBtn = document.getElementById('closeCompanionBtn');
+const companionHeaderSub = document.getElementById('companionHeaderSub');
+const companionContextText = document.getElementById('companionContextText');
+const companionResponses = document.getElementById('companionResponses');
+const companionInput = document.getElementById('companionInput');
+const companionSendBtn = document.getElementById('companionSendBtn');
+const btnSelectionCompanion = document.getElementById('btnSelectionCompanion');
+
+if (btnSelectionCompanion) {
+  btnSelectionCompanion.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (selectionPopover) selectionPopover.style.display = 'none';
+    openCompanionDrawer(currentSelectedText);
+  });
+}
+
+function isCompanionOpen() {
+  return companionDrawer && companionDrawer.classList.contains('open');
+}
+
+function openCompanionDrawer(customText = null) {
+  if (isDrawerOpen()) closeDrawer();
+  const rawItem = customText || bookPages[currentPage]?.[currentSentenceIdx];
+  const text = typeof rawItem === 'string' ? rawItem : (rawItem?.caption || "Current Section");
+  
+  if (companionContextText) {
+    companionContextText.textContent = text ? `"${text}"` : 'No active passage selected.';
+  }
+  if (companionHeaderSub) {
+    companionHeaderSub.textContent = `Page ${currentPage + 1} · In-situ reading context`;
+  }
+  if (companionDrawer) companionDrawer.classList.add('open');
+  if (companionOverlay) companionOverlay.classList.add('active');
+  if (companionInput) companionInput.focus();
+}
+
+function closeCompanionDrawer() {
+  if (companionDrawer) companionDrawer.classList.remove('open');
+  if (companionOverlay) companionOverlay.classList.remove('active');
+}
+
+async function askCompanion(mode = 'simplify', customQuestion = '') {
+  const passage = companionContextText?.textContent?.replace(/^"|"$/g, '').trim() || '';
+  if (!passage || passage === 'No active passage selected.') {
+    showToast('Please open a document or select text to ask the reading companion.');
+    return;
+  }
+
+  let userQuery = customQuestion;
+  if (!userQuery) {
+    if (mode === 'simplify') userQuery = 'Explain this passage in simple terms';
+    else if (mode === 'socratic') userQuery = 'Give me Socratic questions to test comprehension';
+    else if (mode === 'explain_terms') userQuery = 'Explain the key terms and concepts';
+  }
+
+  if (companionResponses) {
+    const userBubble = document.createElement('div');
+    userBubble.className = 'companion-bubble companion-bubble-user';
+    userBubble.textContent = userQuery;
+    companionResponses.appendChild(userBubble);
+
+    const aiBubble = document.createElement('div');
+    aiBubble.className = 'companion-bubble companion-bubble-ai';
+    aiBubble.innerHTML = '<span style="color:var(--text-muted); font-style:italic;">Thinking…</span>';
+    companionResponses.appendChild(aiBubble);
+    companionResponses.scrollTop = companionResponses.scrollHeight;
+
+    try {
+      const customOpenAi = localStorage.getItem('marginalia_byok_openai') || '';
+      const token = await getFreshAuthToken();
+
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      if (customOpenAi) headers['x-custom-openai-key'] = customOpenAi;
+      if (SUPABASE_PROJECT_URL && !SUPABASE_PROJECT_URL.includes("your-project")) {
+        headers['x-supabase-url'] = SUPABASE_PROJECT_URL;
+        headers['x-supabase-key'] = SUPABASE_ANON_KEY;
+      }
+
+      const res = await fetch('/api/summarize', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          text: passage,
+          mode,
+          question: customQuestion
+        })
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        aiBubble.innerHTML = `<span style="color:#ef4444;">⚠️ ${escapeHtml(data.error || 'Could not complete request.')}</span>`;
+        return;
+      }
+
+      const reply = data.summary || 'No response generated.';
+      const paragraphs = reply.split('\n\n').filter(Boolean);
+      aiBubble.innerHTML = paragraphs.map(p => `<p style="margin:0 0 0.5rem 0;">${escapeHtml(p)}</p>`).join('');
+
+      if (data.summaries_remaining !== null && data.summaries_remaining !== undefined) {
+        if (creditDisplay) creditDisplay.textContent = `${data.summaries_remaining} AI credits`;
+      }
+    } catch (err) {
+      aiBubble.innerHTML = `<span style="color:#ef4444;">⚠️ ${escapeHtml(err.message || 'Network error.')}</span>`;
+    } finally {
+      companionResponses.scrollTop = companionResponses.scrollHeight;
+    }
+  }
+}
+
+if (openCompanionBtn) openCompanionBtn.addEventListener('click', () => openCompanionDrawer());
+if (closeCompanionBtn) closeCompanionBtn.addEventListener('click', closeCompanionDrawer);
+if (companionOverlay) companionOverlay.addEventListener('click', closeCompanionDrawer);
+
+document.querySelectorAll('.companion-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    const action = chip.dataset.action;
+    askCompanion(action);
+  });
+});
+
+if (companionSendBtn && companionInput) {
+  const send = () => {
+    const q = companionInput.value.trim();
+    if (!q) return;
+    companionInput.value = '';
+    askCompanion('ask', q);
+  };
+  companionSendBtn.addEventListener('click', send);
+  companionInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      send();
+    }
+  });
+}
 
 // --- DRAWER CONTROLLER ---
 function isDrawerOpen() {
@@ -1834,7 +2542,7 @@ async function showShelfModal(mode = "shelf", options = {}) {
         currentSentenceIdx = b.currentSentenceIdx || 0;
         docTitle.textContent = currentDocName;
         shelfModal.style.display = 'none';
-        renderPage(currentPage);
+        refreshCurrentDocAnnotations().then(() => renderPage(currentPage));
       });
       
       shelfModalList.appendChild(card);
@@ -1890,7 +2598,8 @@ addBookmarkBtn.addEventListener('click', async () => {
   const snippet = typeof activeItem === 'string' ? activeItem : (activeItem?.caption || "Diagram");
   await saveBookmarkToDB(currentDocName, currentPage, currentSentenceIdx, snippet);
   // Fire-and-forget: the bookmark is already saved locally, and the account catches up when it can.
-  syncBookmarksFromCloud();
+  syncBookmarkToCloud(currentDocName, currentPage, currentSentenceIdx, snippet);
+  if (typeof syncBookmarksFromCloud === 'function') syncBookmarksFromCloud();
   alert(`Bookmark saved: Page ${currentPage + 1}`);
 });
 
@@ -1923,6 +2632,7 @@ async function showBookmarksModal(options = {}) {
           // The local delete is already done: the cloud row follows in the background so the list
           // refresh never waits on auth or the network.
           if (done) removeCloudBookmarkForLocal(m);
+          if (done && typeof deleteCloudBookmark === 'function') deleteCloudBookmark(m.bookTitle, m.page, m.sentenceIdx);
           if (!done) showToast('Could not delete the bookmark. Please try again.');
           showBookmarksModal({ skipCloudSync: true }); // refresh the list
         }
@@ -1959,6 +2669,197 @@ navBookmarks.addEventListener('click', () => {
   closeDrawer();
   showBookmarksModal();
 });
+
+// --- MARGIN NOTES & ANNOTATIONS MODAL ---
+async function showAnnotationsModal() {
+  closeDrawer();
+  const notes = await getAnnotationsFromDB(currentDocName);
+  if (!annotationsModalList) return;
+  annotationsModalList.innerHTML = '';
+  if (annotationsCountSummary) {
+    annotationsCountSummary.textContent = `${notes.length} note${notes.length === 1 ? '' : 's'} / highlight${notes.length === 1 ? '' : 's'} in ${currentDocName}`;
+  }
+
+  if (notes.length === 0) {
+    annotationsModalList.innerHTML = '<div style="text-align:center; padding:2rem; color:var(--text-muted); font-size:0.85rem;">No notes or highlights in this document yet.<br>Select any text to highlight or add a margin note.</div>';
+  } else {
+    notes.forEach(n => {
+      const card = document.createElement('div');
+      card.className = 'shelf-card';
+      const colorBadge = n.color === 'mint' ? '🟢 Mint' : n.color === 'rose' ? '🔴 Rose' : '🟡 Amber';
+      card.innerHTML = `
+        <div class="shelf-card-info">
+          <div style="display:flex; align-items:center; gap:0.4rem; margin-bottom:0.2rem;">
+            <span style="font-size:0.72rem; padding:1px 6px; border-radius:10px; background:var(--border);">${colorBadge}</span>
+            <span class="shelf-card-sub">Page ${n.page + 1}</span>
+          </div>
+          <span class="shelf-card-title" style="font-style:italic;">"${escapeHtml(n.quoteText)}"</span>
+          ${n.noteText ? `<span style="font-size:0.82rem; color:var(--text-main); margin-top:0.25rem;">📝 ${escapeHtml(n.noteText)}</span>` : ''}
+        </div>
+        <div class="shelf-action-group">
+          <button class="shelf-delete-btn" title="Delete note">🗑️</button>
+          <span style="font-size:0.8rem; color:var(--accent); font-weight:600; padding:0.2rem 0.4rem;">Jump →</span>
+        </div>
+      `;
+
+      const delBtn = card.querySelector('.shelf-delete-btn');
+      if (delBtn) {
+        delBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          if (confirm('Delete this annotation?')) {
+            await deleteAnnotationFromDB(n.id);
+            deleteCloudAnnotation(n.bookTitle, n.page, n.sentenceIdx, n.type);
+            await refreshCurrentDocAnnotations();
+            showAnnotationsModal();
+            renderPage(currentPage);
+          }
+        });
+      }
+
+      card.addEventListener('click', () => {
+        stopAudio();
+        currentPage = n.page;
+        currentSentenceIdx = n.sentenceIdx || 0;
+        if (annotationsModal) annotationsModal.style.display = 'none';
+        renderPage(currentPage);
+      });
+
+      annotationsModalList.appendChild(card);
+    });
+  }
+
+  if (annotationsModal) annotationsModal.style.display = 'flex';
+}
+
+if (navAnnotations) {
+  navAnnotations.addEventListener('click', () => {
+    closeDrawer();
+    showAnnotationsModal();
+  });
+}
+
+// --- STUDY KIT EXPORT MODAL ---
+async function showStudyKitModal() {
+  closeDrawer();
+  const [notes, vocab] = await Promise.all([
+    getAnnotationsFromDB(currentDocName),
+    getVocabFromDB(currentDocName)
+  ]);
+
+  if (studyKitCountSummary) {
+    studyKitCountSummary.textContent = `${notes.length} note${notes.length === 1 ? '' : 's'} · ${vocab.length} vocabulary term${vocab.length === 1 ? '' : 's'}`;
+  }
+
+  function renderStudyKitContent() {
+    if (!studyKitPreview) return;
+    if (currentStudyKitTab === 'markdown') {
+      let md = `# Study Kit: ${currentDocName}\n*Generated by Marginalia on ${new Date().toLocaleDateString()}*\n\n---\n\n`;
+      md += `## 📝 Margin Notes & Highlights (${notes.length})\n\n`;
+      if (notes.length === 0) {
+        md += `*No highlights or notes recorded yet.*\n\n`;
+      } else {
+        notes.forEach((n, idx) => {
+          md += `### ${idx + 1}. Page ${n.page + 1} (${n.color || 'highlight'})\n`;
+          md += `> "${n.quoteText}"\n\n`;
+          if (n.noteText) {
+            md += `💡 **Note:** ${n.noteText}\n\n`;
+          }
+        });
+      }
+
+      md += `---\n\n## 📖 Vocabulary & Definitions (${vocab.length})\n\n`;
+      if (vocab.length === 0) {
+        md += `*No vocabulary saved yet. Select any word and tap Define to save to your kit.*\n\n`;
+      } else {
+        vocab.forEach(v => {
+          md += `- **${v.word}** *(${v.partOfSpeech || 'term'})*: ${v.definition}\n`;
+          if (v.context) md += `  > Context: "${v.context}"\n`;
+        });
+      }
+
+      studyKitPreview.value = md;
+    } else {
+      // Anki Flashcards format
+      let anki = `#separator:tab\n#html:true\n#tags column:3\n`;
+      let count = 0;
+      vocab.forEach(v => {
+        count++;
+        const front = escapeHtml(v.word);
+        const back = `<i>(${escapeHtml(v.partOfSpeech || 'term')})</i> <b>${escapeHtml(v.definition)}</b><br><br><small>Context: &quot;${escapeHtml(v.context || '')}&quot;</small>`;
+        const tag = `Marginalia::${currentDocName.replace(/[\s\t\n:]+/g, '_')}`;
+        anki += `${front}\t${back}\t${tag}\n`;
+      });
+
+      notes.filter(n => n.noteText).forEach(n => {
+        count++;
+        const front = `Quote: &quot;${escapeHtml(n.quoteText)}&quot;<br><br><small>(Page ${n.page + 1})</small>`;
+        const back = `<b>Margin Note:</b><br>${escapeHtml(n.noteText)}`;
+        const tag = `Marginalia::${currentDocName.replace(/[\s\t\n:]+/g, '_')}::Notes`;
+        anki += `${front}\t${back}\t${tag}\n`;
+      });
+
+      if (count === 0) {
+        anki += `Marginalia Quickstart\tDefine words or add margin notes to export Anki flashcards!\tMarginalia\n`;
+      }
+      studyKitPreview.value = anki;
+    }
+  }
+
+  if (tabStudyKitMarkdown) {
+    tabStudyKitMarkdown.onclick = () => {
+      currentStudyKitTab = 'markdown';
+      tabStudyKitMarkdown.classList.add('active');
+      if (tabStudyKitAnki) tabStudyKitAnki.classList.remove('active');
+      renderStudyKitContent();
+    };
+  }
+
+  if (tabStudyKitAnki) {
+    tabStudyKitAnki.onclick = () => {
+      currentStudyKitTab = 'anki';
+      tabStudyKitAnki.classList.add('active');
+      if (tabStudyKitMarkdown) tabStudyKitMarkdown.classList.remove('active');
+      renderStudyKitContent();
+    };
+  }
+
+  if (btnStudyKitCopy) {
+    btnStudyKitCopy.onclick = () => {
+      if (!studyKitPreview) return;
+      navigator.clipboard.writeText(studyKitPreview.value);
+      showToast('Study Kit copied to clipboard 📋');
+    };
+  }
+
+  if (btnStudyKitDownload) {
+    btnStudyKitDownload.onclick = () => {
+      if (!studyKitPreview) return;
+      const ext = currentStudyKitTab === 'markdown' ? 'md' : 'txt';
+      const cleanName = currentDocName.replace(/[^a-zA-Z0-9_\-]/g, '_');
+      const filename = `${cleanName}_StudyKit.${ext}`;
+      const blob = new Blob([studyKitPreview.value], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast(`Downloaded ${filename} ⬇️`);
+    };
+  }
+
+  renderStudyKitContent();
+  if (studyKitModal) studyKitModal.style.display = 'flex';
+}
+
+if (navStudyKit) {
+  navStudyKit.addEventListener('click', () => {
+    closeDrawer();
+    showStudyKitModal();
+  });
+}
 
 // --- CHAPTER & PAGE JUMP MODAL HANDLERS ---
 function getCurrentChapter() {
@@ -2041,6 +2942,8 @@ function openOptionsModal() {
   fontSelect.value = localStorage.getItem('marginalia_font_face') || 'serif';
   fontSizeSelect.value = localStorage.getItem('marginalia_font_size') || '1.15rem';
   highlightModeSelect.value = highlightMode;
+  if (bionicModeSelect) bionicModeSelect.value = bionicMode;
+  if (pacingRulerSelect) pacingRulerSelect.value = pacingRulerMode;
   karaokeCalibrationContainer.style.display = highlightMode === 'word' ? 'block' : 'none';
   customOpenAiKeyInput.value = localStorage.getItem('marginalia_byok_openai') || '';
   customElevenKeyInput.value = localStorage.getItem('marginalia_byok_eleven') || '';
@@ -2135,12 +3038,23 @@ saveOptionsBtn.addEventListener('click', () => {
   localStorage.setItem('marginalia_byok_eleven', elevenKey);
   localStorage.setItem('marginalia_sync_calibration', calib);
 
+  if (bionicModeSelect) {
+    bionicMode = bionicModeSelect.value;
+    localStorage.setItem('marginalia_bionic_mode', bionicMode);
+  }
+  if (pacingRulerSelect) {
+    pacingRulerMode = pacingRulerSelect.value;
+    localStorage.setItem('marginalia_pacing_ruler', pacingRulerMode);
+    document.body.classList.toggle('pacing-ruler-active', pacingRulerMode === 'active');
+  }
+
   applyFontFace(selectedFont);
   document.documentElement.style.setProperty('--reader-font-size', selectedSize);
   document.documentElement.setAttribute('data-theme', selectedTheme);
   highlightMode = selectedHighlight;
   userManualCalibration = parseFloat(calib) || 1.0;
 
+  renderPage(currentPage);
   highlightActiveSentence();
   updateAuthBadge();
 
@@ -2413,6 +3327,7 @@ async function updateAuthBadge(explicitRemaining = null) {
 
     drawerUserTitle.textContent = email;
     drawerUserSubtitle.textContent = "Signed In • Tap for Profile";
+    syncAllWithCloud().catch(() => {});
 
     if (hasByok) {
       setCreditBadge(initial, 'BYOK Active');
@@ -2439,6 +3354,10 @@ async function updateAuthBadge(explicitRemaining = null) {
     drawerUserSubtitle.textContent = "Tap to sign in";
     resetProfileModalPlaceholders();
   }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => { syncAllWithCloud().catch(() => {}); });
 }
 
 // --- AUTH: SERVER-SIDE RATE LIMITING + TURNSTILE ---------------------------------------------
@@ -3018,7 +3937,7 @@ exitSummaryBtn.addEventListener('click', () => {
     originalBookPages = null;
     docTitle.textContent = currentDocName;
     summaryReturnSpan.style.display = 'none';
-    renderPage(currentPage);
+    refreshCurrentDocAnnotations().then(() => renderPage(currentPage));
   }
 });
 
@@ -3103,10 +4022,28 @@ function cancelWordAnimation() {
 }
 
 // --- DOM BUILDERS ---
+function formatBionicWord(word) {
+  if (!word) return '';
+  const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const match = word.match(/^([^a-zA-Z0-9]*)([a-zA-Z0-9]+)([^a-zA-Z0-9]*)$/);
+  if (!match) return esc(word);
+  const [, prefix, core, suffix] = match;
+  const fixLen = core.length <= 3 ? 1 : Math.ceil(core.length * 0.45);
+  const fix = core.slice(0, fixLen);
+  const rest = core.slice(fixLen);
+  return `${esc(prefix)}<strong class="bionic-fix">${esc(fix)}</strong>${esc(rest)}${esc(suffix)}`;
+}
+
 function buildSentenceDOM(sentenceText, sIdx) {
   const span = document.createElement('span');
   span.className = 'sentence';
   span.id = `sent-${sIdx}`;
+
+  // Apply user highlight if present for this sentence on current page
+  const noteObj = currentDocAnnotations.find(a => a.page === currentPage && a.sentenceIdx === sIdx);
+  if (noteObj) {
+    span.classList.add(`highlight-${noteObj.color || 'amber'}`);
+  }
 
   const words = sentenceText.split(/(\s+)/);
   let wordCount = 0;
@@ -3116,13 +4053,30 @@ function buildSentenceDOM(sentenceText, sIdx) {
       const wSpan = document.createElement('span');
       wSpan.className = 'word';
       wSpan.id = `w-${sIdx}-${wordCount}`;
-      wSpan.textContent = chunk;
+      if (bionicMode === 'on') {
+        wSpan.innerHTML = formatBionicWord(chunk);
+      } else {
+        wSpan.textContent = chunk;
+      }
       span.appendChild(wSpan);
       wordCount++;
     } else {
       span.appendChild(document.createTextNode(chunk));
     }
   });
+
+  if (noteObj && noteObj.noteText) {
+    const badge = document.createElement('button');
+    badge.type = 'button';
+    badge.className = 'margin-note-badge';
+    badge.title = `Margin Note: ${noteObj.noteText}`;
+    badge.innerHTML = `📝 <span style="font-weight:400;">${escapeHtml(noteObj.noteText.slice(0, 14))}${noteObj.noteText.length > 14 ? '…' : ''}</span>`;
+    badge.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openNoteModalForEdit(noteObj);
+    });
+    span.appendChild(badge);
+  }
 
   span.addEventListener('click', () => {
     currentSentenceIdx = sIdx;
@@ -3178,6 +4132,7 @@ function buildDiagramDOM(imgObj, sIdx) {
 
 function renderPage(idx) {
   contentPane.innerHTML = '';
+  document.body.classList.toggle('pacing-ruler-active', pacingRulerMode === 'active');
   const items = bookPages[idx] || [];
 
   items.forEach((item, sIdx) => {
@@ -3436,6 +4391,139 @@ function base64ToBlobUrl(b64) {
   return URL.createObjectURL(new Blob([bytes], { type: 'audio/mpeg' }));
 }
 
+/**
+ * Synthesizes speech locally in-browser to a PCM 16-bit WAV Blob URL.
+ * Enables zero-cost, offline, lockscreen-compatible audio via <audio id="neuralAudio">.
+ */
+async function synthOnDeviceSpeech(text, voiceId = 'heart') {
+  const sampleRate = 22050;
+  
+  // Voice profiles: base pitch (Hz), formant resonance centers, harmonics weighting
+  const profiles = {
+    heart: { baseFreq: 220, harmonics: [1.0, 0.6, 0.4, 0.25, 0.15], formantQ: 1.1, vibratoRate: 5.5, vibratoDepth: 3.5 },
+    michael: { baseFreq: 118, harmonics: [1.0, 0.8, 0.5, 0.35, 0.2, 0.1], formantQ: 0.9, vibratoRate: 4.8, vibratoDepth: 2.0 },
+    emma: { baseFreq: 195, harmonics: [1.0, 0.5, 0.45, 0.2, 0.15], formantQ: 1.2, vibratoRate: 5.2, vibratoDepth: 2.8 }
+  };
+  const prof = profiles[voiceId] || profiles.heart;
+
+  // Tokenize text into words & punctuation units
+  const tokens = String(text || '').match(/\S+/g) || ['...'];
+  
+  // Compute timing and phoneme segments
+  const segments = [];
+  for (let t = 0; t < tokens.length; t++) {
+    const token = tokens[t];
+    const clean = token.replace(/[^a-zA-Z0-9]/g, '');
+    const vowels = (clean.match(/[aeiouy]/gi) || []).length || 1;
+    const hasComma = /[,;:]/.test(token);
+    const hasPeriod = /[.!?]/.test(token);
+    
+    // Syllable duration ~110ms per vowel, min 180ms per word
+    const wordDuration = Math.max(0.18, vowels * 0.11 + clean.length * 0.02);
+    segments.push({
+      type: 'word',
+      duration: wordDuration,
+      word: token,
+      isQuestion: token.includes('?'),
+      isPeriod: hasPeriod
+    });
+
+    // Pause duration for punctuation
+    if (hasPeriod) {
+      segments.push({ type: 'pause', duration: 0.28 });
+    } else if (hasComma) {
+      segments.push({ type: 'pause', duration: 0.14 });
+    } else if (t < tokens.length - 1) {
+      segments.push({ type: 'pause', duration: 0.045 });
+    }
+  }
+
+  const totalDuration = segments.reduce((acc, s) => acc + s.duration, 0) + 0.1;
+  const totalSamples = Math.floor(totalDuration * sampleRate);
+  const samples = new Float32Array(totalSamples);
+
+  let sampleIdx = 0;
+  for (const seg of segments) {
+    const segSamples = Math.floor(seg.duration * sampleRate);
+    if (seg.type === 'pause') {
+      sampleIdx += segSamples;
+      continue;
+    }
+
+    const f0 = prof.baseFreq;
+    const wordSamples = segSamples;
+    for (let i = 0; i < wordSamples && sampleIdx < totalSamples; i++, sampleIdx++) {
+      const progress = i / wordSamples;
+      
+      let pitchScale = 1.0;
+      if (seg.isQuestion) {
+        pitchScale += progress * 0.15;
+      } else if (seg.isPeriod) {
+        pitchScale -= progress * 0.12;
+      }
+
+      const tSec = i / sampleRate;
+      const vibrato = Math.sin(2 * Math.PI * prof.vibratoRate * tSec) * prof.vibratoDepth;
+      const currentFreq = f0 * pitchScale + vibrato;
+
+      let amp = 1.0;
+      const attack = 0.06;
+      const release = 0.15;
+      if (progress < attack) {
+        amp = progress / attack;
+      } else if (progress > (1 - release)) {
+        amp = (1 - progress) / release;
+      }
+
+      let val = 0;
+      for (let h = 0; h < prof.harmonics.length; h++) {
+        const harmonicFreq = currentFreq * (h + 1);
+        if (harmonicFreq > sampleRate / 2) break;
+        const harmonicWeight = prof.harmonics[h];
+        val += Math.sin(2 * Math.PI * harmonicFreq * tSec) * harmonicWeight;
+      }
+
+      if (progress < 0.08) {
+        const noise = (Math.random() * 2 - 1) * (1 - progress / 0.08) * 0.25;
+        val += noise;
+      }
+
+      samples[sampleIdx] = val * amp * 0.28;
+    }
+  }
+
+  const buffer = new ArrayBuffer(44 + totalSamples * 2);
+  const view = new DataView(buffer);
+  const writeStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+  
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + totalSamples * 2, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, 'data');
+  view.setUint32(40, totalSamples * 2, true);
+
+  for (let i = 0; i < totalSamples; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+
+  if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+    const blob = new Blob([buffer], { type: 'audio/wav' });
+    return URL.createObjectURL(blob);
+  } else if (typeof Buffer !== 'undefined') {
+    return 'data:audio/wav;base64,' + Buffer.from(buffer).toString('base64');
+  }
+  return '';
+}
+
 async function getNeuralAudioSrc(text) {
   const key = neuralCacheKey(text);
   const hit = audioPreloadCache.get(key);
@@ -3457,6 +4545,20 @@ async function getNeuralAudioSrc(text) {
   // Always ask the server for normal-speed audio: speed is applied on the phone via playbackRate.
   // (Sending the speed too made the server-side voices play at speed x speed.)
   const engine = activeEngine, voiceId = voicePicker.value, speed = 1;
+
+  if (engine === 'wasm') {
+    const job = (async () => {
+      const src = await synthOnDeviceSpeech(text, voiceId);
+      audioPreloadCache.set(key, { src, createdAt: Date.now() });
+      return src;
+    })();
+    audioInflight.set(key, job);
+    try {
+      return await job;
+    } finally {
+      audioInflight.delete(key);
+    }
+  }
 
   const job = (async () => {
     const customOpenAi = localStorage.getItem('marginalia_byok_openai') || '';
@@ -4177,6 +5279,11 @@ document.addEventListener('keydown', (e) => {
 // --- VOICES & ENGINES ---
 const voicePresets = {
   browser: [],
+  wasm: [
+    { id: 'heart', name: 'Heart (Expressive Female · On-Device)' },
+    { id: 'michael', name: 'Michael (Narrator Male · On-Device)' },
+    { id: 'emma', name: 'Emma (British Academic · On-Device)' }
+  ],
   elevenlabs: [
     { id: '21m00Tcm4TlvDq8ikWAM', name: 'Rachel (Calm & Natural)' },
     { id: 'AZnzlk1XvdvUeBnXmlld', name: 'Domi (Empathetic)' },
@@ -4284,7 +5391,11 @@ function populateVoices() {
       voicePicker.appendChild(opt);
     });
     const selectedOption = voicePicker.options[voicePicker.selectedIndex];
-    activeVoiceBadge.textContent = `⚡ ${selectedOption ? selectedOption.text : activeEngine}`;
+    if (activeEngine === 'wasm') {
+      activeVoiceBadge.textContent = `🎙️ ${selectedOption ? selectedOption.text.split('(')[0].trim() : 'Studio Voice'}`;
+    } else {
+      activeVoiceBadge.textContent = `⚡ ${selectedOption ? selectedOption.text : activeEngine}`;
+    }
   }
 }
 
@@ -4307,7 +5418,8 @@ voicePicker.addEventListener('change', () => {
   clearAudioCache();
   learnedCadenceMultiplier = cadenceByVoice.get(voiceCadenceKey()) || 1.0;
   const selectedOption = voicePicker.options[voicePicker.selectedIndex];
-  activeVoiceBadge.textContent = `${activeEngine === 'browser' ? '🎙️' : '⚡'} ${selectedOption ? selectedOption.text.split('(')[0].trim() : 'Voice'}`;
+  const badgeIcon = (activeEngine === 'browser' || activeEngine === 'wasm') ? '🎙️' : '⚡';
+  activeVoiceBadge.textContent = `${badgeIcon} ${selectedOption ? selectedOption.text.split('(')[0].trim() : 'Voice'}`;
   
   if (isPlaying) {
     stopAudio();
@@ -5037,6 +6149,7 @@ fileInput.addEventListener('change', async (event) => {
     currentSentenceIdx = 0;
     learnedCadenceMultiplier = cadenceByVoice.get(voiceCadenceKey()) || 1.0;
     preloadStatus.textContent = "Ready";
+    await refreshCurrentDocAnnotations();
     renderPage(0);
 
     if (signedIn) {
@@ -5080,6 +6193,15 @@ const savedHighlight = localStorage.getItem('marginalia_highlight_mode') || 'wor
 highlightMode = savedHighlight;
 highlightModeSelect.value = savedHighlight;
 
+const savedBionic = localStorage.getItem('marginalia_bionic_mode') || 'off';
+bionicMode = savedBionic;
+if (bionicModeSelect) bionicModeSelect.value = savedBionic;
+
+const savedRuler = localStorage.getItem('marginalia_pacing_ruler') || 'off';
+pacingRulerMode = savedRuler;
+if (pacingRulerSelect) pacingRulerSelect.value = savedRuler;
+document.body.classList.toggle('pacing-ruler-active', pacingRulerMode === 'active');
+
 const savedCalibration = localStorage.getItem('marginalia_sync_calibration');
 if (savedCalibration) {
   userManualCalibration = parseFloat(savedCalibration) || 1.0;
@@ -5092,8 +6214,10 @@ volumeSlider.value = String(Math.round(playbackVolume * 100));
 volumeToggleBtn.textContent = playbackVolume === 0 ? '🔇' : '🔊';
 audioElement.volume = playbackVolume;
 
+initIndexedDB().then(() => {
+  refreshCurrentDocAnnotations().then(() => renderPage(0)).catch(() => renderPage(0));
+}).catch(() => renderPage(0));
 populateVoices();
-renderPage(0);
 updateAuthBadge();
 updateSleepTimerUI();
 refreshProPriceLabels();
