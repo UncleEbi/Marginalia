@@ -7,11 +7,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
-const guard = fileURLToPath(new URL('./setup/no-open-handles.mjs', import.meta.url));
+const guard = new URL('./setup/no-open-handles.mjs', import.meta.url).href;
 const fixture = fileURLToPath(new URL('./helpers/leaks-a-handle.fixture.mjs', import.meta.url));
-const guardUrl = pathToFileURL(guard).href;
 
 test('the guard recognises a test child process, so it arms itself', () => {
   // This file is already running inside a `node --test` child; that is exactly the signal the guard
@@ -30,7 +29,7 @@ test('the guard fails a leaking test file and names the leaking test', () => {
 
   const run = spawnSync(
     process.execPath,
-    ['--test', '--import', guardUrl, fixture],
+    ['--test', '--import', guard, fixture],
     { env, encoding: 'utf8', timeout: 15_000 }
   );
 

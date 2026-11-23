@@ -268,51 +268,6 @@ async function deleteCloudAnnotation(bookTitle, page, sentenceIdx, type) {
   } catch (e) {}
 }
 
-async function syncAnnotationsFromCloud() {
-  if (!supabaseClient) return { success: false, reason: 'no_client' };
-  try {
-    const { data: { session } } = await supabaseClient.auth.getSession();
-    if (!session?.user) return { success: false, reason: 'not_authenticated' };
-    const userId = session.user.id;
-
-    const { data: remoteAnn } = await supabaseClient
-      .from('user_annotations')
-      .select('book_title, page, sentence_idx, text, type, color, note_text, created_at')
-      .eq('user_id', userId);
-
-    const localAnn = await getAnnotationsFromDB(currentDocName);
-    const localAnnSet = new Set(localAnn.map(a => `${a.bookTitle}:::${a.page}:::${a.sentenceIdx}:::${a.noteText ? 'note' : 'highlight'}`));
-
-    if (Array.isArray(remoteAnn)) {
-      for (const ra of remoteAnn) {
-        const key = `${ra.book_title}:::${ra.page}:::${ra.sentence_idx}:::${ra.type}`;
-        if (!localAnnSet.has(key)) {
-          await saveAnnotationToDB({
-            bookTitle: ra.book_title,
-            page: ra.page,
-            sentenceIdx: ra.sentence_idx,
-            quoteText: ra.text,
-            noteText: ra.note_text,
-            color: ra.color,
-            createdAt: ra.created_at
-          });
-          localAnnSet.add(key);
-        }
-      }
-      if (currentDocName) {
-        await refreshCurrentDocAnnotations();
-        renderPage(currentPage);
-      }
-    }
-    for (const la of localAnn) {
-      await syncAnnotationToCloud(la);
-    }
-    return { success: true };
-  } catch (err) {
-    return { success: false, error: err?.message || 'Sync failed' };
-  }
-}
-
 /**
  * Bi-directional reconciliation:
  * Pulls remote user_books, user_bookmarks, and user_annotations;
@@ -3334,7 +3289,6 @@ async function updateAuthBadge(explicitRemaining = null) {
 
     drawerUserTitle.textContent = email;
     drawerUserSubtitle.textContent = "Signed In • Tap for Profile";
-    syncAnnotationsFromCloud().catch(() => { });
 
     if (hasByok) {
       setCreditBadge(initial, 'BYOK Active');
@@ -3361,10 +3315,6 @@ async function updateAuthBadge(explicitRemaining = null) {
     drawerUserSubtitle.textContent = "Tap to sign in";
     resetProfileModalPlaceholders();
   }
-}
-
-if (typeof window !== 'undefined') {
-  window.addEventListener('online', () => { syncAnnotationsFromCloud().catch(() => { }); });
 }
 
 // --- AUTH: SERVER-SIDE RATE LIMITING + TURNSTILE ---------------------------------------------
@@ -4401,8 +4351,7 @@ function base64ToBlobUrl(b64) {
 /**
  * Synthesizes speech locally in-browser to a PCM 16-bit WAV Blob URL.
  * Enables zero-cost, offline, lockscreen-compatible audio via <audio id="neuralAudio">.
- * Features an on-device phonetic formant synthesizer (Klatt/Holmes style resonators + noise bands)
- * with English orthographic letter-to-sound rules and distinct voice acoustics.
+ * Lightweight parametric formant synthesizer with letter-group acoustic modeling.
  */
 async function synthOnDeviceSpeech(text, voiceId = 'heart') {
   const sampleRate = 22050;
@@ -4415,184 +4364,31 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
   };
   const prof = profiles[voiceId] || profiles.heart;
 
-  // Phonetic acoustic inventory: Formants F1, F2, F3 (Hz), duration, voicing, and consonant noise bands
-  const PHONEMES = {
-    // Vowels
-    IY: { f1: 280, f2: 2250, f3: 2850, voiced: true, dur: 0.11 },
-    IH: { f1: 400, f2: 1900, f3: 2550, voiced: true, dur: 0.08 },
-    EY: { f1: 480, f2: 1950, f3: 2500, voiced: true, dur: 0.12 },
-    EH: { f1: 550, f2: 1750, f3: 2450, voiced: true, dur: 0.09 },
-    AE: { f1: 690, f2: 1650, f3: 2400, voiced: true, dur: 0.12 },
-    AA: { f1: 750, f2: 1150, f3: 2400, voiced: true, dur: 0.12 },
-    AO: { f1: 580, f2: 850,  f3: 2400, voiced: true, dur: 0.11 },
-    OW: { f1: 480, f2: 950,  f3: 2300, voiced: true, dur: 0.12 },
-    UH: { f1: 450, f2: 1050, f3: 2300, voiced: true, dur: 0.08 },
-    UW: { f1: 310, f2: 870,  f3: 2250, voiced: true, dur: 0.11 },
-    AH: { f1: 600, f2: 1200, f3: 2400, voiced: true, dur: 0.08 },
-    ER: { f1: 490, f2: 1350, f3: 1690, voiced: true, dur: 0.12 },
-    AY: { f1: 700, f2: 1400, f3: 2400, voiced: true, dur: 0.14, glide: { f1: 350, f2: 2100 } },
-    AW: { f1: 700, f2: 1200, f3: 2400, voiced: true, dur: 0.14, glide: { f1: 400, f2: 900 } },
-    OY: { f1: 550, f2: 950,  f3: 2400, voiced: true, dur: 0.14, glide: { f1: 350, f2: 2100 } },
+  function charToAcoustic(ch, nextCh = '') {
+    const pair = ch + nextCh;
+    if (/^(th|sh|ch|ph)/.test(pair)) return { type: 'fricative', freq: 3200, dur: 0.08, skip: 2 };
+    if (/^(ee|ea)/.test(pair)) return { type: 'vowel', f1: 280, f2: 2250, dur: 0.12, skip: 2 };
+    if (/^(oo|ou)/.test(pair)) return { type: 'vowel', f1: 320, f2: 900,  dur: 0.12, skip: 2 };
+    if (/^(ai|ay)/.test(pair)) return { type: 'vowel', f1: 480, f2: 1950, dur: 0.12, skip: 2 };
+    if (/^(ar|er|or|ur|ir)/.test(pair)) return { type: 'vowel', f1: 490, f2: 1350, dur: 0.12, skip: 2 };
 
-    // Sonorants (Nasals, Liquids, Glides)
-    M:  { f1: 250, f2: 1000, f3: 2200, voiced: true, dur: 0.07, nasal: true },
-    N:  { f1: 280, f2: 1500, f3: 2200, voiced: true, dur: 0.07, nasal: true },
-    NG: { f1: 300, f2: 2000, f3: 2300, voiced: true, dur: 0.08, nasal: true },
-    L:  { f1: 360, f2: 1100, f3: 2700, voiced: true, dur: 0.07 },
-    R:  { f1: 420, f2: 1300, f3: 1650, voiced: true, dur: 0.07 },
-    W:  { f1: 300, f2: 750,  f3: 2200, voiced: true, dur: 0.07 },
-    Y:  { f1: 280, f2: 2150, f3: 2800, voiced: true, dur: 0.07 },
-
-    // Fricatives
-    S:  { noiseFreq: 5500, noiseAmp: 0.35, dur: 0.07 },
-    Z:  { f1: 250, f2: 1500, f3: 2500, voiced: true, noiseFreq: 5000, noiseAmp: 0.25, dur: 0.06 },
-    SH: { noiseFreq: 3500, noiseAmp: 0.40, dur: 0.08 },
-    ZH: { f1: 250, f2: 1800, f3: 2500, voiced: true, noiseFreq: 3500, noiseAmp: 0.30, dur: 0.07 },
-    F:  { noiseFreq: 3000, noiseAmp: 0.22, dur: 0.06 },
-    V:  { f1: 250, f2: 1200, f3: 2400, voiced: true, noiseFreq: 2500, noiseAmp: 0.20, dur: 0.05 },
-    TH: { noiseFreq: 4000, noiseAmp: 0.22, dur: 0.06 },
-    DH: { f1: 250, f2: 1400, f3: 2400, voiced: true, noiseFreq: 3500, noiseAmp: 0.20, dur: 0.05 },
-    H:  { noiseFreq: 1800, noiseAmp: 0.28, dur: 0.05 },
-
-    // Plosives (closure gap + noise burst)
-    P:  { silentGap: 0.020, noiseFreq: 1000, noiseAmp: 0.45, dur: 0.015 },
-    B:  { silentGap: 0.015, voiced: true, f1: 200, f2: 800,  f3: 2200, noiseFreq: 800,  noiseAmp: 0.35, dur: 0.015 },
-    T:  { silentGap: 0.020, noiseFreq: 4500, noiseAmp: 0.50, dur: 0.015 },
-    D:  { silentGap: 0.015, voiced: true, f1: 200, f2: 1500, f3: 2500, noiseFreq: 4000, noiseAmp: 0.40, dur: 0.015 },
-    K:  { silentGap: 0.025, noiseFreq: 2200, noiseAmp: 0.50, dur: 0.018 },
-    G:  { silentGap: 0.015, voiced: true, f1: 200, f2: 1800, f3: 2400, noiseFreq: 2000, noiseAmp: 0.40, dur: 0.018 },
-    CH: { silentGap: 0.020, noiseFreq: 3800, noiseAmp: 0.55, dur: 0.06 },
-    J:  { silentGap: 0.015, voiced: true, f1: 250, f2: 1800, f3: 2400, noiseFreq: 3500, noiseAmp: 0.45, dur: 0.05 }
-  };
-
-  // High-frequency English words dictionary for crisp pronunciation
-  const COMMON_WORDS = {
-    the: ['DH', 'AH'], to: ['T', 'UW'], of: ['AH', 'V'], and: ['AE', 'N', 'D'],
-    a: ['AH'], in: ['IH', 'N'], is: ['IH', 'Z'], it: ['IH', 'T'], you: ['Y', 'UW'],
-    that: ['DH', 'AE', 'T'], he: ['H', 'IY'], was: ['W', 'AA', 'Z'], for: ['F', 'AO', 'R'],
-    on: ['AA', 'N'], are: ['AA', 'R'], as: ['AE', 'Z'], with: ['W', 'IH', 'DH'],
-    his: ['H', 'IH', 'Z'], they: ['DH', 'EY'], i: ['AY'], at: ['AE', 'T'],
-    be: ['B', 'IY'], this: ['DH', 'IH', 'S'], have: ['H', 'AE', 'V'], from: ['F', 'R', 'AH', 'M'],
-    or: ['AO', 'R'], one: ['W', 'AH', 'N'], had: ['H', 'AE', 'D'], by: ['B', 'AY'],
-    word: ['W', 'ER', 'D'], but: ['B', 'AH', 'T'], not: ['N', 'AA', 'T'], what: ['W', 'AH', 'T'],
-    all: ['AO', 'L'], were: ['W', 'ER'], we: ['W', 'IY'], when: ['W', 'EH', 'N'],
-    your: ['Y', 'AO', 'R'], can: ['K', 'AE', 'N'], said: ['S', 'EH', 'D'], there: ['DH', 'EH', 'R'],
-    use: ['Y', 'UW', 'Z'], an: ['AE', 'N'], each: ['IY', 'CH'], which: ['W', 'IH', 'CH'],
-    she: ['SH', 'IY'], do: ['D', 'UW'], how: ['H', 'AW'], their: ['DH', 'EH', 'R'],
-    if: ['IH', 'F'], will: ['W', 'IH', 'L'], up: ['AH', 'P'], other: ['AH', 'DH', 'ER'],
-    about: ['AH', 'B', 'AW', 'T'], out: ['AW', 'T'], many: ['M', 'EH', 'N', 'IY'],
-    then: ['DH', 'EH', 'N'], them: ['DH', 'EH', 'M'], these: ['DH', 'IY', 'Z'],
-    so: ['S', 'OW'], some: ['S', 'AH', 'M'], her: ['H', 'ER'], would: ['W', 'UH', 'D'],
-    make: ['M', 'EY', 'K'], like: ['L', 'AY', 'K'], him: ['H', 'IH', 'M'],
-    into: ['IH', 'N', 'T', 'UW'], time: ['T', 'AY', 'M'], has: ['H', 'AE', 'Z'],
-    look: ['L', 'UH', 'K'], two: ['T', 'UW'], more: ['M', 'AO', 'R'], write: ['R', 'AY', 'T'],
-    go: ['G', 'OW'], see: ['S', 'IY'], number: ['N', 'AH', 'M', 'B', 'ER'], no: ['N', 'OW'],
-    way: ['W', 'EY'], could: ['K', 'UH', 'D'], people: ['P', 'IY', 'P', 'AH', 'L'],
-    my: ['M', 'AY'], than: ['DH', 'AE', 'N'], first: ['F', 'ER', 'S', 'T'],
-    water: ['W', 'AO', 'T', 'ER'], been: ['B', 'IH', 'N'], call: ['K', 'AO', 'L'],
-    who: ['H', 'UW'], oil: ['OY', 'L'], its: ['IH', 'T', 'S'], now: ['N', 'AW'],
-    find: ['F', 'AY', 'N', 'D'], long: ['L', 'AO', 'NG'], down: ['D', 'AW', 'N'],
-    day: ['D', 'EY'], did: ['D', 'IH', 'D'], get: ['G', 'EH', 'T'], come: ['K', 'AH', 'M'],
-    made: ['M', 'EY', 'D'], may: ['M', 'EY'], part: ['P', 'AA', 'R', 'T'],
-    hello: ['H', 'EH', 'L', 'OW'], world: ['W', 'ER', 'L', 'D'], speech: ['S', 'P', 'IY', 'CH'],
-    device: ['D', 'IH', 'V', 'AY', 'S'], marginalia: ['M', 'AA', 'R', 'J', 'IH', 'N', 'AE', 'L', 'IY', 'AH'],
-    studio: ['S', 'T', 'UW', 'D', 'IY', 'OW'], test: ['T', 'EH', 'S', 'T'], testing: ['T', 'EH', 'S', 'T', 'IH', 'NG'],
-    distinct: ['D', 'IH', 'S', 'T', 'IH', 'NG', 'K', 'T'], acoustic: ['AH', 'K', 'UW', 'S', 'T', 'IH', 'K'],
-    neural: ['N', 'UH', 'R', 'AH', 'L'], vocal: ['V', 'OW', 'K', 'AH', 'L'],
-    vocalizations: ['V', 'OW', 'K', 'AH', 'L', 'IH', 'Z', 'EY', 'SH', 'AH', 'N', 'Z']
-  };
-
-  // Rule-based grapheme-to-phoneme converter for any arbitrary word
-  function wordToPhonemes(rawWord) {
-    const w = rawWord.toLowerCase().replace(/[^a-z]/g, '');
-    if (!w) return [];
-    if (COMMON_WORDS[w]) return COMMON_WORDS[w].slice();
-
-    const ph = [];
-    const len = w.length;
-    let i = 0;
-    const magicE = len >= 3 && w.endsWith('e') && !/[aeiouy]/.test(w[len - 2]) && /[aeiouy]/.test(w[len - 3]);
-
-    while (i < len) {
-      if (i + 3 <= len) {
-        const sub3 = w.slice(i, i + 3);
-        if (sub3 === 'tch') { ph.push('CH'); i += 3; continue; }
-        if (sub3 === 'igh') { ph.push('AY'); i += 3; continue; }
-        if (sub3 === 'ing' && i + 3 === len) { ph.push('IH', 'NG'); i += 3; continue; }
-      }
-      if (i + 2 <= len) {
-        const sub2 = w.slice(i, i + 2);
-        if (sub2 === 'th') { ph.push(i === 0 ? 'TH' : 'DH'); i += 2; continue; }
-        if (sub2 === 'sh') { ph.push('SH'); i += 2; continue; }
-        if (sub2 === 'ch') { ph.push('CH'); i += 2; continue; }
-        if (sub2 === 'ph') { ph.push('F'); i += 2; continue; }
-        if (sub2 === 'wh') { ph.push('W'); i += 2; continue; }
-        if (sub2 === 'ck') { ph.push('K'); i += 2; continue; }
-        if (sub2 === 'ng') { ph.push('NG'); i += 2; continue; }
-        if (sub2 === 'qu') { ph.push('K', 'W'); i += 2; continue; }
-        if (sub2 === 'ee' || sub2 === 'ea') { ph.push('IY'); i += 2; continue; }
-        if (sub2 === 'oo') { ph.push('UW'); i += 2; continue; }
-        if (sub2 === 'ai' || sub2 === 'ay') { ph.push('EY'); i += 2; continue; }
-        if (sub2 === 'oa') { ph.push('OW'); i += 2; continue; }
-        if (sub2 === 'ou' || sub2 === 'ow') { ph.push('AW'); i += 2; continue; }
-        if (sub2 === 'oi' || sub2 === 'oy') { ph.push('OY'); i += 2; continue; }
-        if (sub2 === 'ar') { ph.push('AA', 'R'); i += 2; continue; }
-        if (sub2 === 'er' || sub2 === 'ir' || sub2 === 'ur') { ph.push('ER'); i += 2; continue; }
-        if (sub2 === 'or') { ph.push('AO', 'R'); i += 2; continue; }
-      }
-
-      const c = w[i];
-      if (c === 'e' && i === len - 1 && len > 2) { i++; continue; }
-      if (magicE && i === len - 3) {
-        if (c === 'a') ph.push('EY');
-        else if (c === 'e') ph.push('IY');
-        else if (c === 'i') ph.push('AY');
-        else if (c === 'o') ph.push('OW');
-        else if (c === 'u') ph.push('UW');
-        else ph.push('AH');
-        i++;
-        continue;
-      }
-
-      switch (c) {
-        case 'a': ph.push('AE'); break;
-        case 'b': ph.push('B'); break;
-        case 'c': {
-          const next = w[i + 1];
-          ph.push((next === 'e' || next === 'i' || next === 'y') ? 'S' : 'K');
-          break;
-        }
-        case 'd': ph.push('D'); break;
-        case 'e': ph.push('EH'); break;
-        case 'f': ph.push('F'); break;
-        case 'g': {
-          const next = w[i + 1];
-          ph.push((next === 'e' || next === 'i') ? 'J' : 'G');
-          break;
-        }
-        case 'h': ph.push('H'); break;
-        case 'i': ph.push('IH'); break;
-        case 'j': ph.push('J'); break;
-        case 'k': ph.push('K'); break;
-        case 'l': ph.push('L'); break;
-        case 'm': ph.push('M'); break;
-        case 'n': ph.push('N'); break;
-        case 'o': ph.push('AA'); break;
-        case 'p': ph.push('P'); break;
-        case 'q': ph.push('K'); break;
-        case 'r': ph.push('R'); break;
-        case 's': ph.push('S'); break;
-        case 't': ph.push('T'); break;
-        case 'u': ph.push('AH'); break;
-        case 'v': ph.push('V'); break;
-        case 'w': ph.push('W'); break;
-        case 'x': ph.push('K', 'S'); break;
-        case 'y': ph.push(i === 0 ? 'Y' : 'IY'); break;
-        case 'z': ph.push('Z'); break;
-      }
-      i++;
+    switch (ch) {
+      case 'a': return { type: 'vowel', f1: 700, f2: 1400, dur: 0.11, skip: 1 };
+      case 'e': return { type: 'vowel', f1: 530, f2: 1800, dur: 0.09, skip: 1 };
+      case 'i': return { type: 'vowel', f1: 350, f2: 2100, dur: 0.09, skip: 1 };
+      case 'o': return { type: 'vowel', f1: 480, f2: 950,  dur: 0.11, skip: 1 };
+      case 'u': return { type: 'vowel', f1: 350, f2: 900,  dur: 0.09, skip: 1 };
+      case 'y': return { type: 'vowel', f1: 320, f2: 2000, dur: 0.09, skip: 1 };
+      case 's': case 'z': case 'x': return { type: 'fricative', freq: 5500, dur: 0.07, skip: 1 };
+      case 'f': case 'v': return { type: 'fricative', freq: 3000, dur: 0.06, skip: 1 };
+      case 'h': return { type: 'fricative', freq: 1800, dur: 0.05, skip: 1 };
+      case 'p': case 'b': return { type: 'plosive', freq: 1000, gap: 0.02, dur: 0.015, skip: 1 };
+      case 't': case 'd': return { type: 'plosive', freq: 4500, gap: 0.02, dur: 0.015, skip: 1 };
+      case 'k': case 'g': case 'q': return { type: 'plosive', freq: 2200, gap: 0.02, dur: 0.018, skip: 1 };
+      case 'm': case 'n': return { type: 'nasal', f1: 260, f2: 1200, dur: 0.07, skip: 1 };
+      case 'l': case 'r': case 'w': return { type: 'liquid', f1: 380, f2: 1200, dur: 0.07, skip: 1 };
+      default: return { type: 'vowel', f1: 500, f2: 1500, dur: 0.07, skip: 1 };
     }
-    return ph;
   }
 
   // Tokenize text into words & punctuation units
@@ -4604,49 +4400,49 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
     const isQuestion = token.includes('?');
     const isPeriod = /[.!?]/.test(token);
     const isComma = /[,;:]/.test(token);
-    const phonemes = wordToPhonemes(token);
+    const clean = token.toLowerCase().replace(/[^a-z]/g, '');
 
-    if (phonemes.length === 0) phonemes.push('AH');
-    segments.push({
-      type: 'word',
-      phonemes,
-      isQuestion,
-      isPeriod,
-      isComma
-    });
+    const units = [];
+    for (let i = 0; i < clean.length;) {
+      const u = charToAcoustic(clean[i], clean[i + 1] || '');
+      units.push(u);
+      i += u.skip || 1;
+    }
+    if (units.length === 0) units.push({ type: 'vowel', f1: 500, f2: 1500, dur: 0.09 });
 
+    segments.push({ type: 'word', units, isQuestion, isPeriod });
     if (isPeriod) segments.push({ type: 'pause', dur: 0.28 });
     else if (isComma) segments.push({ type: 'pause', dur: 0.14 });
     else if (t < tokens.length - 1) segments.push({ type: 'pause', dur: 0.05 });
   }
 
-  // Resonator and filter state
-  let r1y1 = 0, r1y2 = 0;
-  let r2y1 = 0, r2y2 = 0;
-  let r3y1 = 0, r3y2 = 0;
-  let nX1 = 0, nX2 = 0, nY1 = 0, nY2 = 0;
-
-  function filterRes(f, bw, x, y1, y2) {
+  function filterRes(f, bw, x, state) {
     const r = Math.exp(-Math.PI * bw / sampleRate);
     const theta = 2 * Math.PI * f / sampleRate;
     const a1 = 2 * r * Math.cos(theta);
     const a2 = -r * r;
     const b0 = 1 - r;
-    const out = b0 * x + a1 * y1 + a2 * y2;
-    return [out, y1];
+    const out = b0 * x + a1 * state[0] + a2 * state[1];
+    state[1] = state[0];
+    state[0] = out;
+    return out;
   }
 
-  function filterNoise(f, q, x, x1, x2, y1, y2) {
+  let nX1 = 0, nX2 = 0, nY1 = 0, nY2 = 0;
+  function filterNoise(f, x) {
     const w0 = 2 * Math.PI * f / sampleRate;
-    const alpha = Math.sin(w0) / (2 * q);
+    const alpha = Math.sin(w0) / 4;
     const a0 = 1 + alpha;
-    const out = (alpha * x - alpha * x2 + 2 * Math.cos(w0) * y1 - (1 - alpha) * y2) / a0;
-    return [out, x, x1, y1];
+    const out = (alpha * (x - nX2) + 2 * Math.cos(w0) * nY1 - (1 - alpha) * nY2) / a0;
+    nX2 = nX1; nX1 = x; nY2 = nY1; nY1 = out;
+    return out;
   }
 
   const rawSamples = [];
   let glottalPhase = 0;
   let tGlobal = 0;
+  const res1 = [0, 0];
+  const res2 = [0, 0];
 
   for (const seg of segments) {
     if (seg.type === 'pause') {
@@ -4655,30 +4451,18 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
       continue;
     }
 
-    const phonemes = seg.phonemes;
-    for (let pIdx = 0; pIdx < phonemes.length; pIdx++) {
-      const pKey = phonemes[pIdx];
-      const def = PHONEMES[pKey] || PHONEMES.AH;
-
-      // Plosive silence gap
-      if (def.silentGap) {
-        const gapCount = Math.floor(def.silentGap * prof.durScale * sampleRate);
+    for (const u of seg.units) {
+      if (u.gap) {
+        const gapCount = Math.floor(u.gap * prof.durScale * sampleRate);
         for (let i = 0; i < gapCount; i++) rawSamples.push(0);
       }
 
-      const pCount = Math.floor(def.dur * prof.durScale * sampleRate);
-      const startF1 = (def.f1 || 500) * prof.formantScale;
-      const startF2 = (def.f2 || 1500) * prof.formantScale;
-      const startF3 = (def.f3 || 2500) * prof.formantScale;
-      const endF1 = (def.glide ? def.glide.f1 : (def.f1 || 500)) * prof.formantScale;
-      const endF2 = (def.glide ? def.glide.f2 : (def.f2 || 1500)) * prof.formantScale;
-      const endF3 = startF3;
+      const pCount = Math.floor(u.dur * prof.durScale * sampleRate);
+      const curF1 = (u.f1 || 500) * prof.formantScale;
+      const curF2 = (u.f2 || 1500) * prof.formantScale;
 
       for (let i = 0; i < pCount; i++) {
         const prog = i / pCount;
-        const curF1 = startF1 + (endF1 - startF1) * prog;
-        const curF2 = startF2 + (endF2 - startF2) * prog;
-        const curF3 = startF3 + (endF3 - startF3) * prog;
 
         // Pitch with intonation and vibrato
         let pitch = prof.baseFreq;
@@ -4687,57 +4471,30 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
         pitch += Math.sin(2 * Math.PI * prof.vibratoRate * tGlobal) * prof.vibratoDepth;
 
         // Glottal excitation
-        let glottalPulse = 0;
-        if (def.voiced) {
-          glottalPhase += pitch / sampleRate;
-          if (glottalPhase >= 1) glottalPhase -= 1;
-          if (glottalPhase < 0.4) {
-            glottalPulse = Math.sin(Math.PI * glottalPhase / 0.4);
-          } else {
-            glottalPulse = 0;
-          }
-        }
+        glottalPhase += pitch / sampleRate;
+        if (glottalPhase >= 1) glottalPhase -= 1;
+        const glottalPulse = glottalPhase < 0.4 ? Math.sin(Math.PI * glottalPhase / 0.4) : 0;
 
-        // Formant resonators
-        let v1 = 0, v2 = 0, v3 = 0;
-        if (def.voiced) {
-          [r1y1, r1y2] = filterRes(curF1, 80, glottalPulse, r1y1, r1y2);
-          [r2y1, r2y2] = filterRes(curF2, 110, glottalPulse, r2y1, r2y2);
-          [r3y1, r3y2] = filterRes(curF3, 140, glottalPulse, r3y1, r3y2);
-          v1 = r1y1; v2 = r2y1; v3 = r3y2;
-        }
-
-        let voicedSignal = 0;
-        if (def.nasal) {
-          voicedSignal = (v1 * 1.1 + v2 * 0.15 + v3 * 0.05);
+        let sampleVal = 0;
+        if (u.type === 'vowel' || u.type === 'liquid') {
+          const v1 = filterRes(curF1, 80, glottalPulse, res1);
+          const v2 = filterRes(curF2, 110, glottalPulse, res2);
+          sampleVal = v1 * 1.0 + v2 * 0.5;
+        } else if (u.type === 'nasal') {
+          const v1 = filterRes(curF1, 60, glottalPulse, res1);
+          const v2 = filterRes(curF2, 150, glottalPulse, res2);
+          sampleVal = v1 * 1.2 + v2 * 0.15;
         } else {
-          voicedSignal = (v1 * 1.0 + v2 * 0.6 + v3 * 0.3);
-        }
-
-        // Noise excitation for fricatives & bursts
-        let noiseSignal = 0;
-        if (def.noiseFreq) {
           const rawNoise = Math.random() * 2 - 1;
-          const [nOut, nX1New, nX2New, nY1New] = filterNoise(def.noiseFreq, 2.5, rawNoise, nX1, nX2, nY1, nY2);
-          nX2 = nX2New; nX1 = nX1New; nY2 = nY1; nY1 = nOut;
-          noiseSignal = nOut * (def.noiseAmp || 0.3);
+          const filtered = filterNoise(u.freq || 3500, rawNoise);
+          sampleVal = filtered * 0.45;
         }
 
-        let mix = 0;
-        if (def.voiced && def.noiseFreq) {
-          mix = voicedSignal * 0.6 + noiseSignal * 0.4;
-        } else if (def.voiced) {
-          mix = voicedSignal;
-        } else {
-          mix = noiseSignal;
-        }
-
-        // Smooth phoneme envelope (10% attack, 15% release)
         let env = 1.0;
-        if (prog < 0.10) env = prog / 0.10;
+        if (prog < 0.12) env = prog / 0.12;
         else if (prog > 0.85) env = (1.0 - prog) / 0.15;
 
-        rawSamples.push(mix * env * prof.gain);
+        rawSamples.push(sampleVal * env * prof.gain);
         tGlobal += 1 / sampleRate;
       }
     }
