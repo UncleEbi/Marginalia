@@ -204,34 +204,6 @@ function showFullAccessNotice() {
   showToast('✅ Full document access — all chapters available');
 }
 
-// Sync progress to cloud when logged in, fallback to local storage
-async function syncProgressToCloud(title, page, sentenceIdx) {
-  // Always update local IndexedDB first. That write marks the row as owed to the cloud, so a push
-  // that never lands — offline, expired token, a tab the phone froze — is retried by
-  // flushPendingProgress instead of being lost.
-  await updateBookProgressInDB(title, page, sentenceIdx);
-
-  if (!supabaseClient) return;
-  const token = await getFreshAuthToken();
-  if (!token) return;
-
-  const { data: { session } } = await supabaseClient.auth.getSession();
-  if (!session?.user) return;
-
-  const row = {
-    title: title,
-    current_page: page,
-    current_sentence: sentenceIdx,
-    updated_at: new Date().toISOString()
-  };
-  try {
-    // Same push path as the queue, so the server's timestamp comes back here too.
-    const push = await pushLocalProgressToCloud(supabaseClient, session.user.id, [row]);
-    // Only a confirmed upsert settles the debt. Any error leaves the flag for the next flush.
-    if (push.ok) await clearPendingProgress([row], push.stamped);
-  } catch (e) {}
-}
-
 async function getAllBooksFromShelf() {
   if (!dbInstance) await initIndexedDB();
   if (!dbInstance) return [];
@@ -287,7 +259,16 @@ function mergeCloudProgress(localBooks, cloudRows, now = Date.now()) {
     const localUpdatedAt = Number(book.updatedAt) || 0;
     const cloudUpdatedAt = row ? Date.parse(row.updated_at) : NaN;
 
-    if (row && Number.isFinite(cloudUpdatedAt) && cloudUpdatedAt > localUpdatedAt) {
+    // A page turn this device has not pushed yet is the reader's most recent action here, and its
+    // timestamp came from a clock that cannot be compared with the server's. When the cloud still
+    // holds the stamp this device last saw for the book, that row predates the save, so the save
+    // wins without consulting clocks — otherwise a phone running slow would roll it back. A cloud
+    // row written after that stamp is genuinely newer, and the timestamp comparison below decides.
+    const unpushedSave = Boolean(book.pendingSync);
+    const lastCloudStamp = Number(book.lastCloudStamp) || 0;
+    const cloudPredatesOurSave = lastCloudStamp > 0 && Number.isFinite(cloudUpdatedAt) && cloudUpdatedAt <= lastCloudStamp;
+
+    if (row && Number.isFinite(cloudUpdatedAt) && cloudUpdatedAt > localUpdatedAt && !(unpushedSave && cloudPredatesOurSave)) {
       adopt.push({
         title: book.title,
         currentPage: Math.max(0, Math.floor(Number(row.current_page) || 0)),
@@ -405,6 +386,8 @@ async function applyCloudProgressToDB(records) {
           // Keep the cloud timestamp. Stamping "now" would make this device look newer on every
           // launch and overwrite the other device's real progress.
           book.updatedAt = record.updatedAt;
+          // Remember what the cloud holds, so a later local save can prove it is newer.
+          book.lastCloudStamp = record.updatedAt;
           // The account's position supersedes whatever this device still owed for the book.
           book.pendingSync = false;
           store.put(book);
@@ -510,11 +493,24 @@ async function clearPendingProgress(rows, stamped = []) {
         const titles = new Set(settlePendingRows(rows, books));
         let changed = 0;
         for (const book of books) {
-          if (!titles.has(book.title) || !book.pendingSync) continue;
-          book.pendingSync = false;
-          // Only a settled row takes the server's clock. A save that landed while this push was in
-          // flight keeps its own newer timestamp until its own push is confirmed.
-          if (serverTimes.has(book.title)) book.updatedAt = serverTimes.get(book.title);
+          let touched = false;
+          // Record the stamp the cloud now holds for this book even when the push settled nothing:
+          // that value is what later proves a cloud row predates a newer local save.
+          if (serverTimes.has(book.title)) {
+            const at = serverTimes.get(book.title);
+            if (at !== book.lastCloudStamp) {
+              book.lastCloudStamp = at;
+              touched = true;
+            }
+          }
+          if (titles.has(book.title) && book.pendingSync) {
+            book.pendingSync = false;
+            // Only a settled row takes the server's clock. A save that landed while this push was
+            // in flight keeps its own newer timestamp until its own push is confirmed.
+            if (serverTimes.has(book.title)) book.updatedAt = serverTimes.get(book.title);
+            touched = true;
+          }
+          if (!touched) continue;
           store.put(book);
           changed += 1;
         }

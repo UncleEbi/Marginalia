@@ -83,6 +83,43 @@ test('a book only in the cloud is not materialised locally', () => {
   assert.deepEqual(upload, []);
 });
 
+test('a page turn the account has not seen yet is not rolled back by its own older row', () => {
+  // The device clock runs behind the server, so the fresh save looks older than the row this device
+  // synced earlier. The stamp the cloud holds proves that row predates the save.
+  const { adopt, upload } = mergeCloudProgress(
+    [localBook('Dune', {
+      currentPage: 5,
+      updatedAt: T1 - 5 * 60000,
+      pendingSync: true,
+      lastCloudStamp: T1
+    })],
+    [cloudRow('Dune', { current_page: 2, updated_at: iso(T1) })]
+  );
+
+  assert.deepEqual(adopt, [], 'the slow clock must not hand the page back');
+  assert.equal(upload.length, 1);
+  assert.equal(upload[0].current_page, 5, 'the fresh position is what gets pushed');
+});
+
+test('a cloud row written after our last contact still wins over an unpushed save', () => {
+  const { adopt, upload } = mergeCloudProgress(
+    [localBook('Dune', { pendingSync: true, updatedAt: T1, lastCloudStamp: T1 - 60000 })],
+    [cloudRow('Dune', { current_page: 9, updated_at: iso(T2) })]
+  );
+
+  assert.equal(upload.length, 0, 'another device genuinely read further');
+  assert.equal(adopt[0].currentPage, 9);
+});
+
+test('an unpushed save with no prior contact falls back to timestamps', () => {
+  const { adopt } = mergeCloudProgress(
+    [localBook('Dune', { pendingSync: true, updatedAt: T1 })],
+    [cloudRow('Dune', { updated_at: iso(T2) })]
+  );
+
+  assert.equal(adopt.length, 1, 'nothing proves the cloud row is stale, so it still wins');
+});
+
 test('a cloud row with an unreadable timestamp loses to the device', () => {
   const { adopt, upload } = mergeCloudProgress(
     [localBook('Dune')],
