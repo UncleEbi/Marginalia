@@ -256,6 +256,401 @@ async function deleteBookFromShelf(bookId) {
 }
 
 // ==============================
+// TWO-WAY PROGRESS SYNC
+// ==============================
+// user_books keeps the reader's place only: user_id, title, current_page, current_sentence and
+// updated_at. Syncing therefore reunites your position in a book on every device that already has
+// the file; the book text itself never leaves the device. Every cloud failure here is silent by
+// design: reading has to keep working when the network or the session does not.
+
+// Pure: per book title, decides whether this device or the account holds the newer position.
+// `adopt` is what to write locally, `upload` is what to push. A title that exists only in the cloud
+// is ignored on purpose: without its pages it cannot be opened, and the shelf reads pages.length.
+function mergeCloudProgress(localBooks, cloudRows, now = Date.now()) {
+  const local = Array.isArray(localBooks) ? localBooks : [];
+  const cloud = Array.isArray(cloudRows) ? cloudRows : [];
+  const cloudByTitle = new Map();
+  for (const row of cloud) {
+    if (row && typeof row.title === 'string') cloudByTitle.set(row.title, row);
+  }
+
+  const adopt = [];
+  const upload = [];
+  for (const book of local) {
+    if (!book || typeof book.title !== 'string') continue;
+    const row = cloudByTitle.get(book.title);
+    const localUpdatedAt = Number(book.updatedAt) || 0;
+    const cloudUpdatedAt = row ? Date.parse(row.updated_at) : NaN;
+
+    if (row && Number.isFinite(cloudUpdatedAt) && cloudUpdatedAt > localUpdatedAt) {
+      adopt.push({
+        title: book.title,
+        currentPage: Math.max(0, Math.floor(Number(row.current_page) || 0)),
+        currentSentenceIdx: Math.max(0, Math.floor(Number(row.current_sentence) || 0)),
+        updatedAt: cloudUpdatedAt
+      });
+      continue;
+    }
+
+    // No cloud row, an unreadable timestamp, or a tie: this device is authoritative. Its own
+    // updatedAt travels with the row, so a push never claims to be newer than it really is.
+    upload.push({
+      title: book.title,
+      current_page: Math.max(0, Math.floor(Number(book.currentPage) || 0)),
+      current_sentence: Math.max(0, Math.floor(Number(book.currentSentenceIdx) || 0)),
+      updated_at: new Date(localUpdatedAt || now).toISOString()
+    });
+  }
+  return { adopt, upload };
+}
+
+async function pullCloudProgress(client, userId) {
+  if (!client || !userId) return [];
+  try {
+    const { data, error } = await client
+      .from('user_books')
+      .select('title, current_page, current_sentence, updated_at')
+      .eq('user_id', userId);
+    if (error) {
+      console.warn('Progress pull failed:', error.message || error);
+      return [];
+    }
+    return Array.isArray(data) ? data : [];
+  } catch (err) {
+    console.warn('Progress pull failed:', err);
+    return [];
+  }
+}
+
+async function pushLocalProgressToCloud(client, userId, rows) {
+  if (!client || !userId || !Array.isArray(rows) || rows.length === 0) return false;
+  try {
+    const { error } = await client
+      .from('user_books')
+      .upsert(rows.map((row) => ({ ...row, user_id: userId })), { onConflict: 'user_id,title' });
+    if (error) {
+      console.warn('Progress push failed:', error.message || error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('Progress push failed:', err);
+    return false;
+  }
+}
+
+// Removing a book is a local action, but its cloud row has to follow it: otherwise the row outlives
+// the file and the next pull treats the deleted book as "read on another device".
+async function deleteCloudProgress(client, userId, title) {
+  if (!client || !userId || !title) return false;
+  try {
+    const { error } = await client
+      .from('user_books')
+      .delete()
+      .eq('user_id', userId)
+      .eq('title', title);
+    if (error) {
+      console.warn('Progress delete failed:', error.message || error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+// Looks up who is signed in before deleting, so callers never have to await auth themselves.
+async function removeCloudProgressForBook(title) {
+  if (!supabaseClient || !title) return false;
+  try {
+    const user = await getSignedInUser();
+    if (!user || !user.id) return false;
+    return await deleteCloudProgress(supabaseClient, user.id, title);
+  } catch (err) {
+    return false;
+  }
+}
+
+// Applies every adopted position in one transaction and resolves how many books moved.
+async function applyCloudProgressToDB(records) {
+  if (!Array.isArray(records) || records.length === 0) return 0;
+  if (!dbInstance) await initIndexedDB();
+  if (!dbInstance) return 0;
+  const byTitle = new Map();
+  for (const record of records) {
+    if (record && typeof record.title === 'string') byTitle.set(record.title, record);
+  }
+  return new Promise((resolve) => {
+    try {
+      const tx = dbInstance.transaction(["books"], "readwrite");
+      const store = tx.objectStore("books");
+      const req = store.getAll();
+      req.onsuccess = () => {
+        let applied = 0;
+        for (const book of req.result || []) {
+          const record = byTitle.get(book.title);
+          if (!record) continue;
+          book.currentPage = record.currentPage;
+          book.currentSentenceIdx = record.currentSentenceIdx;
+          // Keep the cloud timestamp. Stamping "now" would make this device look newer on every
+          // launch and overwrite the other device's real progress.
+          book.updatedAt = record.updatedAt;
+          store.put(book);
+          applied += 1;
+        }
+        resolve(applied);
+      };
+      req.onerror = () => resolve(0);
+    } catch (err) {
+      resolve(0);
+    }
+  });
+}
+
+async function restoreProgressFromCloud() {
+  if (!supabaseClient) return { adopted: 0, uploaded: 0 };
+  try {
+    const user = await getSignedInUser();
+    if (!user || !user.id) return { adopted: 0, uploaded: 0 };
+    const localBooks = await getAllBooksFromShelf();
+    if (!localBooks.length) return { adopted: 0, uploaded: 0 };
+
+    const rows = await pullCloudProgress(supabaseClient, user.id);
+    const { adopt, upload } = mergeCloudProgress(localBooks, rows);
+
+    const adopted = await applyCloudProgressToDB(adopt);
+    const pushed = upload.length > 0 && await pushLocalProgressToCloud(supabaseClient, user.id, upload);
+    return { adopted, uploaded: pushed ? upload.length : 0 };
+  } catch (err) {
+    console.warn('Progress sync skipped:', err);
+    return { adopted: 0, uploaded: 0 };
+  }
+}
+
+// ==============================
+// DURABLE STORAGE + BACKUP
+// ==============================
+// The shelf is the only copy of the reader's library: IndexedDB can be evicted under disk pressure,
+// and clearing site data wipes it. Ask for persistent storage, and let people take a real backup.
+
+// Chromium grants this silently for an installed app; Safari may not implement it at all. Either
+// way it is best-effort: a refusal only means the browser is still free to evict. Asked once per
+// page load, because the browser remembers its own answer.
+let storagePersistSettled = false;
+
+async function requestPersistentStorage() {
+  if (storagePersistSettled) return false;
+  try {
+    if (!navigator.storage || typeof navigator.storage.persist !== 'function') return false;
+    const granted = await navigator.storage.persist();
+    storagePersistSettled = true;
+    return Boolean(granted);
+  } catch (err) {
+    return false;
+  }
+}
+
+async function reportStorageUsage() {
+  const note = document.getElementById('shelfStorageNote');
+  if (!note) return;
+  try {
+    if (!navigator.storage || typeof navigator.storage.estimate !== 'function') {
+      note.textContent = '';
+      return;
+    }
+    const { usage } = await navigator.storage.estimate();
+    const bytes = Number(usage);
+    if (!Number.isFinite(bytes) || bytes <= 0) {
+      note.textContent = '';
+      return;
+    }
+    const mb = bytes / (1024 * 1024);
+    note.textContent = 'Using ' + (mb >= 10 ? Math.round(mb) : mb.toFixed(1)) + ' MB of device storage.';
+  } catch (err) {
+    note.textContent = '';
+  }
+}
+
+// Pure: the exact file contents. IndexedDB ids are dropped because they are per-device counters;
+// books are matched by title and bookmarks by content when the file is restored.
+function buildBackupPayload(books, bookmarks, exportedAt) {
+  const cleanBooks = (Array.isArray(books) ? books : []).map((book) => ({
+    title: String(book && book.title != null ? book.title : ''),
+    pages: Array.isArray(book && book.pages) ? book.pages : [],
+    chapters: Array.isArray(book && book.chapters) ? book.chapters : [],
+    currentPage: Math.max(0, Math.floor(Number(book && book.currentPage) || 0)),
+    currentSentenceIdx: Math.max(0, Math.floor(Number(book && book.currentSentenceIdx) || 0)),
+    updatedAt: Number(book && book.updatedAt) || 0
+  }));
+  const cleanBookmarks = (Array.isArray(bookmarks) ? bookmarks : []).map((mark) => ({
+    bookTitle: String(mark && mark.bookTitle != null ? mark.bookTitle : ''),
+    page: Math.max(0, Math.floor(Number(mark && mark.page) || 0)),
+    sentenceIdx: Math.max(0, Math.floor(Number(mark && mark.sentenceIdx) || 0)),
+    snippet: String(mark && mark.snippet != null ? mark.snippet : ''),
+    createdAt: Number(mark && mark.createdAt) || 0
+  }));
+  return {
+    format: 'marginalia-backup',
+    version: 1,
+    exportedAt: typeof exportedAt === 'string' ? exportedAt : '',
+    books: cleanBooks,
+    bookmarks: cleanBookmarks
+  };
+}
+
+// Pure: strict on purpose. A bad file must be refused outright, never half-merged.
+function parseBackupPayload(text) {
+  if (typeof text !== 'string' || !text.trim()) {
+    return { ok: false, error: 'That file is empty.' };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    return { ok: false, error: 'That file is not a Marginalia backup.' };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, error: 'That file is not a Marginalia backup.' };
+  }
+  if (parsed.format !== 'marginalia-backup') {
+    return { ok: false, error: 'That file is not a Marginalia backup.' };
+  }
+  if (parsed.version !== 1) {
+    return { ok: false, error: 'That backup came from a different version of Marginalia.' };
+  }
+  if (!Array.isArray(parsed.books) || !Array.isArray(parsed.bookmarks)) {
+    return { ok: false, error: 'That backup is missing its book list.' };
+  }
+  return { ok: true, payload: parsed };
+}
+
+// Pure: newest position wins per title, a book only on this device is kept, and a replaced book
+// keeps its local id so the write updates that record instead of adding a second copy.
+function mergeShelfRecords(existing, incoming) {
+  const byTitle = new Map();
+  for (const book of Array.isArray(existing) ? existing : []) {
+    if (book && typeof book.title === 'string') byTitle.set(book.title, book);
+  }
+  let added = 0;
+  let updated = 0;
+  for (const book of Array.isArray(incoming) ? incoming : []) {
+    if (!book || typeof book.title !== 'string') continue;
+    const current = byTitle.get(book.title);
+    if (!current) {
+      byTitle.set(book.title, book);
+      added += 1;
+      continue;
+    }
+    if ((Number(book.updatedAt) || 0) > (Number(current.updatedAt) || 0)) {
+      byTitle.set(book.title, { ...book, id: current.id });
+      updated += 1;
+    }
+  }
+  return { books: Array.from(byTitle.values()), added, updated };
+}
+
+// Pure: same bookmark in the file and on the device is kept once.
+function mergeBookmarks(existing, incoming) {
+  const seen = new Set();
+  const merged = [];
+  const add = (mark) => {
+    if (!mark) return;
+    const key = [mark.bookTitle, mark.page, mark.sentenceIdx, mark.snippet].join('\u0000');
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(mark);
+  };
+  for (const mark of Array.isArray(existing) ? existing : []) add(mark);
+  for (const mark of Array.isArray(incoming) ? incoming : []) add(mark);
+  return merged;
+}
+
+async function writeRecords(storeName, records) {
+  if (!dbInstance) await initIndexedDB();
+  if (!dbInstance) return false;
+  return new Promise((resolve) => {
+    try {
+      const tx = dbInstance.transaction([storeName], "readwrite");
+      const store = tx.objectStore(storeName);
+      for (const record of records || []) {
+        const copy = { ...record };
+        if (copy.id == null) delete copy.id;
+        store.put(copy);
+      }
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    } catch (err) {
+      resolve(false);
+    }
+  });
+}
+
+async function exportLibraryBackup() {
+  try {
+    const books = await getAllBooksFromShelf();
+    const bookmarks = await getBookmarksFromDB();
+    if (!books.length && !bookmarks.length) {
+      showToast('There is nothing on your shelf to back up yet.');
+      return;
+    }
+    const payload = buildBackupPayload(books, bookmarks, new Date().toISOString());
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'marginalia-backup-' + payload.exportedAt.slice(0, 10) + '.json';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    showToast('Backup downloaded: ' + books.length + ' book(s), ' + bookmarks.length + ' bookmark(s).');
+  } catch (err) {
+    console.error('Backup export failed:', err);
+    showToast('Could not create the backup file. Please try again.');
+  }
+}
+
+async function importLibraryBackup(file) {
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const parsed = parseBackupPayload(text);
+    if (!parsed.ok) {
+      showToast(parsed.error);
+      return;
+    }
+
+    if (!parsed.payload.books.length && !parsed.payload.bookmarks.length) {
+      showToast('That backup has no books or bookmarks in it.');
+      return;
+    }
+
+    const merged = mergeShelfRecords(await getAllBooksFromShelf(), parsed.payload.books);
+    const existingMarks = await getBookmarksFromDB();
+    const mergedMarks = mergeBookmarks(existingMarks, parsed.payload.bookmarks);
+    const newMarks = mergedMarks.length - existingMarks.length;
+
+    const proceed = confirm(
+      'Restore ' + merged.added + ' new book(s) and ' + newMarks + ' bookmark(s)?\n\n' +
+      'Books already on this device keep whichever reading position is newer.'
+    );
+    if (!proceed) return;
+
+    const booksOk = await writeRecords("books", merged.books);
+    await writeRecords("bookmarks", mergedMarks);
+    if (!booksOk) {
+      showToast('Could not write the backup to this device.');
+      return;
+    }
+    showToast('Restored ' + merged.added + ' new book(s), updated ' + merged.updated + '.');
+    await showShelfModal('shelf');
+  } catch (err) {
+    console.error('Backup import failed:', err);
+    showToast('Could not read that backup file.');
+  }
+}
+
+// ==============================
 // PAYSTACK CHECKOUT HELPER
 // ==============================
 async function startPaystackCheckout(planId = null) {
@@ -1096,8 +1491,10 @@ function showInstallHelp(title, steps) {
 })();
 
 // --- SHELF & RECENT MODALS ---
-async function showShelfModal(mode = "shelf") {
+async function showShelfModal(mode = "shelf", options = {}) {
   closeDrawer();
+  // Render from local data first. The shelf has to open instantly even with no network or a stalled
+  // auth refresh; the cloud pull runs after the list is on screen (end of this function).
   const books = await getAllBooksFromShelf();
   shelfModalTitle.textContent = mode === "recent" ? "🕒 Recent list" : "📚 My Shelf";
   shelfModalList.innerHTML = '';
@@ -1125,6 +1522,9 @@ async function showShelfModal(mode = "shelf") {
         e.stopPropagation();
         if (confirm(`Remove "${b.title}" from My Shelf?`)) {
           await deleteBookFromShelf(b.id);
+          // The local delete is already done: the cloud row follows in the background so the shelf
+          // refresh never waits on auth or the network.
+          removeCloudProgressForBook(b.title);
           showShelfModal(mode);
         }
       });
@@ -1147,6 +1547,20 @@ async function showShelfModal(mode = "shelf") {
     });
   }
   shelfModal.style.display = 'flex';
+  reportStorageUsage();
+
+  if (!options.skipCloudSync) {
+    // Background reconcile. A pull that stalls (dead network, hanging token refresh) can only leave
+    // this view's positions stale; it can never hold the shelf shut. Re-render only when a cloud
+    // position actually won, and only while the shelf is still the visible modal.
+    restoreProgressFromCloud()
+      .then((result) => {
+        if (result.adopted > 0 && shelfModal.style.display !== 'none') {
+          showShelfModal(mode, { skipCloudSync: true });
+        }
+      })
+      .catch(() => {});
+  }
 }
 
 navRecentList.addEventListener('click', () => showShelfModal("recent"));
@@ -1156,6 +1570,25 @@ navUploadFile.addEventListener('click', () => {
   fileInput.value = '';
   fileInput.click();
 });
+
+// --- BACKUP / RESTORE BUTTONS ---
+const exportLibraryBtn = document.getElementById('exportLibraryBtn');
+const importLibraryBtn = document.getElementById('importLibraryBtn');
+const importLibraryInput = document.getElementById('importLibraryInput');
+
+if (exportLibraryBtn) {
+  exportLibraryBtn.addEventListener('click', () => { exportLibraryBackup(); });
+}
+if (importLibraryBtn && importLibraryInput) {
+  importLibraryBtn.addEventListener('click', () => {
+    importLibraryInput.value = '';
+    importLibraryInput.click();
+  });
+  importLibraryInput.addEventListener('change', () => {
+    const file = importLibraryInput.files && importLibraryInput.files[0];
+    if (file) importLibraryBackup(file);
+  });
+}
 
 // --- BOOKMARKS ---
 addBookmarkBtn.addEventListener('click', async () => {
@@ -1939,6 +2372,9 @@ async function submitAuth(action) {
     });
     localStorage.setItem('marginalia_auth_token', session.access_token);
     if (session.user) localStorage.setItem('marginalia_auth_user', JSON.stringify(session.user));
+
+    // Signing in is the moment another device's reading positions become relevant.
+    restoreProgressFromCloud();
 
     showAuthAlert(action === 'signup' ? 'Account created & signed in!' : 'Success! Signed in.', 'success');
     resetCaptchaChallenge();
@@ -4294,11 +4730,13 @@ fileInput.addEventListener('change', async (event) => {
     renderPage(0);
 
     if (signedIn) {
+      requestPersistentStorage();
       saveBookToShelf(currentDocName, bookPages, bookChapters);
       // Show full access - all chapters available
       showFullAccessNotice();
     } else {
       // Freemium: save only page 1, show sign-in prompt for more
+      requestPersistentStorage();
       saveBookToShelfFreemium(currentDocName, bookPages, bookChapters);
       showTeaserAccessNotice();
     }
@@ -4344,13 +4782,16 @@ volumeSlider.value = String(Math.round(playbackVolume * 100));
 volumeToggleBtn.textContent = playbackVolume === 0 ? '🔇' : '🔊';
 audioElement.volume = playbackVolume;
 
-initIndexedDB();
 populateVoices();
 renderPage(0);
 updateAuthBadge();
 updateSleepTimerUI();
 refreshProPriceLabels();
 confirmCheckoutReturn();
+
+// Pull the account's reading positions once the local shelf is readable. Deliberately not awaited:
+// IndexedDB may never open, and sync is never allowed to hold up the first render.
+initIndexedDB().then(() => { restoreProgressFromCloud(); });
 
 // --- RETURN FROM PAYSTACK ---
 // Checkout sends the buyer back to "/" with ?trxref=…&reference=…. The webhook is what grants the

@@ -115,6 +115,41 @@ test('unauthenticated file upload executes freemium processing without error or 
   assert.equal(dom.window.document.getElementById('docTitle').textContent, 'chapter1.txt');
 });
 
+test('the shelf renders local data before it reconciles with the cloud', () => {
+  assert.doesNotMatch(appJs, /await restoreProgressFromCloud\(\)/, 'nothing may await the cloud pull');
+
+  const start = appJs.indexOf('async function showShelfModal');
+  const end = appJs.indexOf('navRecentList.addEventListener');
+  assert.ok(start > -1 && end > start, 'showShelfModal is discoverable in app.js');
+  const shelfBody = appJs.slice(start, end);
+
+  assert.ok(
+    shelfBody.indexOf("shelfModal.style.display = 'flex'") < shelfBody.indexOf('restoreProgressFromCloud()'),
+    'the cloud pull starts only after the shelf is visible'
+  );
+  assert.ok(shelfBody.includes('skipCloudSync'), 'the re-render after a sync cannot start another pull');
+});
+
+test('the shelf backup controls and storage note exist in index.html', () => {
+  const dom = setupTestDom();
+  for (const id of ['exportLibraryBtn', 'importLibraryBtn', 'importLibraryInput', 'shelfStorageNote']) {
+    assert.ok(dom.window.document.getElementById(id), `${id} exists in the shelf modal`);
+  }
+});
+
+test('app.js evaluates when the browser refuses persistent storage', () => {
+  const dom = setupTestDom();
+  Object.defineProperty(dom.window.navigator, 'storage', {
+    configurable: true,
+    value: {
+      persist: async () => false,
+      estimate: async () => ({ usage: 5 * 1024 * 1024 })
+    }
+  });
+
+  assert.doesNotThrow(() => { dom.window.eval(appJs); });
+});
+
 test('profileRefillBalance and profileRefillBalanceTopup exist in index.html', () => {
   assert.ok(html.includes('id="profileRefillBalance"'), 'profileRefillBalance element exists in HTML');
   assert.ok(html.includes('id="profileRefillBalanceTopup"'), 'profileRefillBalanceTopup element exists in HTML');

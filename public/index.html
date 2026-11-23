@@ -431,10 +431,14 @@
     <div class="modal-card">
       <div class="modal-title" id="shelfModalTitle">📚 My Shelf</div>
       <p style="font-size:0.82rem; color:var(--text-muted);">
-        Saved locally on your device. Tap a book to open, or tap 🗑️ to delete it.
+        Saved on this device. Export a backup before clearing browser data or switching phones.
       </p>
       <div id="shelfModalList" class="modal-scrollable-list"></div>
+      <div id="shelfStorageNote" style="font-size:0.72rem; color:var(--text-muted);"></div>
       <div class="modal-footer-row" style="display:flex; justify-content:flex-end;">
+        <input type="file" id="importLibraryInput" accept="application/json,.json" style="display:none;" />
+        <button id="exportLibraryBtn" type="button" style="margin-right:auto; padding:0.4rem 0.8rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border);">⬇️ Export backup</button>
+        <button id="importLibraryBtn" type="button" style="margin-right:0.5rem; padding:0.4rem 0.8rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border);">⬆️ Restore</button>
         <button id="closeShelfBtn" data-close="shelfModal" style="padding:0.4rem 0.8rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border);">Close</button>
       </div>
     </div>
