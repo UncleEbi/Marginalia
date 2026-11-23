@@ -12,8 +12,8 @@ const pullCloudProgress = extractFunction('pullCloudProgress');
 const pushLocalProgressToCloud = extractFunction('pushLocalProgressToCloud');
 const deleteCloudProgress = extractFunction('deleteCloudProgress');
 
-function fakeClient({ data = [], error = null } = {}) {
-  const calls = { tables: [], selects: [], upserts: [], deletes: [] };
+function fakeClient({ data = [], error = null, stamped = [] } = {}) {
+  const calls = { tables: [], selects: [], upserts: [], upsertSelects: [], deletes: [] };
 
   const client = {
     from(table) {
@@ -30,7 +30,12 @@ function fakeClient({ data = [], error = null } = {}) {
         },
         upsert(rows, options) {
           calls.upserts.push({ rows, options });
-          return Promise.resolve({ error });
+          return {
+            select(columns) {
+              calls.upsertSelects.push(columns);
+              return Promise.resolve({ data: stamped, error });
+            }
+          };
         },
         delete() {
           return {
@@ -83,7 +88,7 @@ test('pull and push are no-ops when signed out', async () => {
   const { client, calls } = fakeClient();
 
   assert.deepEqual(await pullCloudProgress(null, 'user-1'), []);
-  assert.equal(await pushLocalProgressToCloud(client, null, [{ title: 'Dune' }]), false);
+  assert.equal((await pushLocalProgressToCloud(client, null, [{ title: 'Dune' }])).ok, false);
   assert.deepEqual(calls.tables, []);
 });
 
@@ -91,7 +96,7 @@ test('push upserts with the user id and the unique conflict target', async () =>
   const { client, calls } = fakeClient();
   const rows = [{ title: 'Dune', current_page: 4, current_sentence: 2, updated_at: '2026-01-02T00:00:00.000Z' }];
 
-  assert.equal(await pushLocalProgressToCloud(client, 'user-1', rows), true);
+  assert.equal((await pushLocalProgressToCloud(client, 'user-1', rows)).ok, true);
   assert.deepEqual(calls.tables, ['user_books']);
   assert.deepEqual(calls.upserts, [{
     rows: [{
@@ -116,13 +121,34 @@ test('push keeps each row\'s own updated_at instead of stamping now', async () =
   assert.equal(calls.upserts[0].rows[0].updated_at, original);
 });
 
+test('push asks for the server-stamped rows back', async () => {
+  const stamped = [{ title: 'Dune', updated_at: '2026-01-02T00:00:03.000Z' }];
+  const { client, calls } = fakeClient({ stamped });
+
+  const result = await pushLocalProgressToCloud(client, 'user-1', [
+    { title: 'Dune', current_page: 1, current_sentence: 0, updated_at: '2026-01-02T00:00:00.000Z' }
+  ]);
+
+  assert.deepEqual(calls.upsertSelects, ['title, updated_at'], 'the upsert returns the columns the trigger owns');
+  assert.deepEqual(result, { ok: true, stamped });
+});
+
+test('a failed push returns no stamped rows', async () => {
+  const { client } = fakeClient({ error: { message: 'nope' } });
+
+  assert.deepEqual(
+    await quiet(() => pushLocalProgressToCloud(client, 'user-1', [{ title: 'Dune' }])),
+    { ok: false, stamped: [] }
+  );
+});
+
 test('push does nothing for an empty batch and reports failure on error', async () => {
   const { client, calls } = fakeClient();
-  assert.equal(await pushLocalProgressToCloud(client, 'user-1', []), false);
+  assert.equal((await pushLocalProgressToCloud(client, 'user-1', [])).ok, false);
   assert.deepEqual(calls.tables, []);
 
   const failing = fakeClient({ error: { message: 'nope' } });
-  assert.equal(await quiet(() => pushLocalProgressToCloud(failing.client, 'user-1', [{ title: 'Dune' }])), false);
+  assert.equal((await quiet(() => pushLocalProgressToCloud(failing.client, 'user-1', [{ title: 'Dune' }]))).ok, false);
 });
 
 test('deleting a book removes exactly that account\'s row', async () => {

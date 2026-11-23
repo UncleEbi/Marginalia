@@ -244,7 +244,7 @@ function fakeBookDB(initialBooks) {
 }
 
 // A signed-in client whose upserts can be switched between failing (offline) and succeeding.
-function queueSupabase({ userId = 'user-1', failing = () => true } = {}) {
+function queueSupabase({ userId = 'user-1', failing = () => true, stamped = [] } = {}) {
   const upserts = [];
   const client = {
     auth: {
@@ -258,9 +258,13 @@ function queueSupabase({ userId = 'user-1', failing = () => true } = {}) {
         select: () => ({
           eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) })
         }),
-        upsert: async (rows, options) => {
+        upsert: (rows, options) => {
           upserts.push({ table, rows, options });
-          return failing() ? { error: { message: 'offline' } } : { error: null };
+          return {
+            select: async () => (failing()
+              ? { data: null, error: { message: 'offline' } }
+              : { data: stamped, error: null })
+          };
         }
       };
     }
@@ -336,6 +340,23 @@ test('a push that fails again leaves the position owed for the next attempt', as
   assert.equal(db.puts.length, 0, 'no write was made to the shelf');
 });
 
+test('a confirmed push stores the timestamp the database returned', async () => {
+  const dom = setupTestDom();
+  const writtenAt = Date.now() - 60000;
+  const serverAt = new Date(writtenAt + 5000).toISOString();
+  const db = fakeBookDB([{ ...pendingDune(), updatedAt: writtenAt }]);
+  dom.window.indexedDB = { open: () => db.open() };
+
+  const { client } = queueSupabase({ failing: () => false, stamped: [{ title: 'Dune', updated_at: serverAt }] });
+  dom.window.supabase = { createClient: () => client };
+
+  dom.window.eval(appJs);
+  await settle();
+
+  assert.equal(db.books.get('Dune').updatedAt, Date.parse(serverAt), 'the server clock replaces the device clock');
+  assert.equal(db.books.get('Dune').pendingSync, false);
+});
+
 test('the queue stays dormant when nobody is signed in', async () => {
   const dom = setupTestDom();
   const db = fakeBookDB([pendingDune()]);
@@ -370,7 +391,7 @@ test('local saves mark the row owed, adopted cloud rows settle it, and only a co
     appJs.indexOf('async function syncProgressToCloud'),
     appJs.indexOf('async function getAllBooksFromShelf')
   );
-  assert.ok(push.includes('if (!error) await clearPendingProgress([row])'), 'only a confirmed upsert settles');
+  assert.ok(push.includes('if (push.ok) await clearPendingProgress([row], push.stamped)'), 'only a confirmed upsert settles');
 });
 
 test('the queue retries on reconnect, when the page is shown, and at startup', () => {

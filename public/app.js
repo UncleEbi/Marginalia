@@ -225,12 +225,10 @@ async function syncProgressToCloud(title, page, sentenceIdx) {
     updated_at: new Date().toISOString()
   };
   try {
-    const { error } = await supabaseClient.from('user_books').upsert({
-      user_id: session.user.id,
-      ...row
-    }, { onConflict: 'user_id,title' });
+    // Same push path as the queue, so the server's timestamp comes back here too.
+    const push = await pushLocalProgressToCloud(supabaseClient, session.user.id, [row]);
     // Only a confirmed upsert settles the debt. Any error leaves the flag for the next flush.
-    if (!error) await clearPendingProgress([row]);
+    if (push.ok) await clearPendingProgress([row], push.stamped);
   } catch (e) {}
 }
 
@@ -329,20 +327,25 @@ async function pullCloudProgress(client, userId) {
   }
 }
 
+// Pushes rows and hands back the server's view of them. `stamped` is what the database stored in
+// updated_at — which the user_books trigger sets from the server clock, so two devices compare one
+// authority instead of their own clocks. Without that migration installed the returned value is
+// just the timestamp this client sent, and nothing changes.
 async function pushLocalProgressToCloud(client, userId, rows) {
-  if (!client || !userId || !Array.isArray(rows) || rows.length === 0) return false;
+  if (!client || !userId || !Array.isArray(rows) || rows.length === 0) return { ok: false, stamped: [] };
   try {
-    const { error } = await client
+    const { data, error } = await client
       .from('user_books')
-      .upsert(rows.map((row) => ({ ...row, user_id: userId })), { onConflict: 'user_id,title' });
+      .upsert(rows.map((row) => ({ ...row, user_id: userId })), { onConflict: 'user_id,title' })
+      .select('title, updated_at');
     if (error) {
       console.warn('Progress push failed:', error.message || error);
-      return false;
+      return { ok: false, stamped: [] };
     }
-    return true;
+    return { ok: true, stamped: Array.isArray(data) ? data : [] };
   } catch (err) {
     console.warn('Progress push failed:', err);
-    return false;
+    return { ok: false, stamped: [] };
   }
 }
 
@@ -428,10 +431,12 @@ async function restoreProgressFromCloud() {
     const { adopt, upload } = mergeCloudProgress(localBooks, rows);
 
     const adopted = await applyCloudProgressToDB(adopt);
-    const pushed = upload.length > 0 && await pushLocalProgressToCloud(supabaseClient, user.id, upload);
+    const push = upload.length > 0
+      ? await pushLocalProgressToCloud(supabaseClient, user.id, upload)
+      : { ok: false, stamped: [] };
     // Uploads made here are confirmed too, so anything they covered stops being owed.
-    if (pushed) await clearPendingProgress(upload);
-    return { adopted, uploaded: pushed ? upload.length : 0 };
+    if (push.ok) await clearPendingProgress(upload, push.stamped);
+    return { adopted, uploaded: push.ok ? upload.length : 0 };
   } catch (err) {
     console.warn('Progress sync skipped:', err);
     return { adopted: 0, uploaded: 0 };
@@ -482,12 +487,19 @@ function settlePendingRows(pushed, books) {
   return settled;
 }
 
-// Clears the flag only for rows the server confirmed and only where no newer save has landed. One
-// read and one transaction on purpose: this runs on every page turn that reaches the cloud.
-async function clearPendingProgress(rows) {
+// Clears the flag only for rows the server confirmed and only where no newer save has landed, and
+// stores the timestamp the server returned for them. One read and one transaction on purpose: this
+// runs on page turns that reach the cloud, so it cannot afford more than the write that precedes it.
+async function clearPendingProgress(rows, stamped = []) {
   if (!Array.isArray(rows) || rows.length === 0) return 0;
   if (!dbInstance) await initIndexedDB();
   if (!dbInstance) return 0;
+  const serverTimes = new Map();
+  for (const row of Array.isArray(stamped) ? stamped : []) {
+    if (!row || typeof row.title !== 'string') continue;
+    const at = Date.parse(row.updated_at);
+    if (Number.isFinite(at)) serverTimes.set(row.title, at);
+  }
   return new Promise((resolve) => {
     try {
       const tx = dbInstance.transaction(["books"], "readwrite");
@@ -496,14 +508,17 @@ async function clearPendingProgress(rows) {
       req.onsuccess = () => {
         const books = req.result || [];
         const titles = new Set(settlePendingRows(rows, books));
-        let cleared = 0;
+        let changed = 0;
         for (const book of books) {
           if (!titles.has(book.title) || !book.pendingSync) continue;
           book.pendingSync = false;
+          // Only a settled row takes the server's clock. A save that landed while this push was in
+          // flight keeps its own newer timestamp until its own push is confirmed.
+          if (serverTimes.has(book.title)) book.updatedAt = serverTimes.get(book.title);
           store.put(book);
-          cleared += 1;
+          changed += 1;
         }
-        resolve(cleared);
+        resolve(changed);
       };
       req.onerror = () => resolve(0);
     } catch (err) {
@@ -521,9 +536,9 @@ async function flushPendingProgress() {
     if (!user || !user.id) return 0;
     const rows = selectPendingProgress(await getAllBooksFromShelf());
     if (!rows.length) return 0;
-    const pushed = await pushLocalProgressToCloud(supabaseClient, user.id, rows);
-    if (!pushed) return 0;
-    await clearPendingProgress(rows);
+    const push = await pushLocalProgressToCloud(supabaseClient, user.id, rows);
+    if (!push.ok) return 0;
+    await clearPendingProgress(rows, push.stamped);
     return rows.length;
   } catch (err) {
     return 0;
