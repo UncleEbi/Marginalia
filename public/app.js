@@ -206,7 +206,9 @@ function showFullAccessNotice() {
 
 // Sync progress to cloud when logged in, fallback to local storage
 async function syncProgressToCloud(title, page, sentenceIdx) {
-  // Always update local IndexedDB first
+  // Always update local IndexedDB first. That write marks the row as owed to the cloud, so a push
+  // that never lands — offline, expired token, a tab the phone froze — is retried by
+  // flushPendingProgress instead of being lost.
   await updateBookProgressInDB(title, page, sentenceIdx);
 
   if (!supabaseClient) return;
@@ -216,14 +218,19 @@ async function syncProgressToCloud(title, page, sentenceIdx) {
   const { data: { session } } = await supabaseClient.auth.getSession();
   if (!session?.user) return;
 
+  const row = {
+    title: title,
+    current_page: page,
+    current_sentence: sentenceIdx,
+    updated_at: new Date().toISOString()
+  };
   try {
-    await supabaseClient.from('user_books').upsert({
+    const { error } = await supabaseClient.from('user_books').upsert({
       user_id: session.user.id,
-      title: title,
-      current_page: page,
-      current_sentence: sentenceIdx,
-      updated_at: new Date().toISOString()
+      ...row
     }, { onConflict: 'user_id,title' });
+    // Only a confirmed upsert settles the debt. Any error leaves the flag for the next flush.
+    if (!error) await clearPendingProgress([row]);
   } catch (e) {}
 }
 
@@ -395,6 +402,8 @@ async function applyCloudProgressToDB(records) {
           // Keep the cloud timestamp. Stamping "now" would make this device look newer on every
           // launch and overwrite the other device's real progress.
           book.updatedAt = record.updatedAt;
+          // The account's position supersedes whatever this device still owed for the book.
+          book.pendingSync = false;
           store.put(book);
           applied += 1;
         }
@@ -420,10 +429,104 @@ async function restoreProgressFromCloud() {
 
     const adopted = await applyCloudProgressToDB(adopt);
     const pushed = upload.length > 0 && await pushLocalProgressToCloud(supabaseClient, user.id, upload);
+    // Uploads made here are confirmed too, so anything they covered stops being owed.
+    if (pushed) await clearPendingProgress(upload);
     return { adopted, uploaded: pushed ? upload.length : 0 };
   } catch (err) {
     console.warn('Progress sync skipped:', err);
     return { adopted: 0, uploaded: 0 };
+  }
+}
+
+// ==============================
+// OFFLINE WRITE QUEUE
+// ==============================
+// Reading happens offline: on a plane, in the underground, or while the browser has not refreshed
+// a session yet. A position written then is owed to the cloud rather than lost. Every local save
+// marks the book pendingSync; only a confirmed upsert clears it, so a failure is retried later
+// instead of silently dropping the reader's place.
+
+// Pure: the cloud rows this device still owes, with the same clamping the merge applies so a
+// corrupt local position can never be pushed as a negative page.
+function selectPendingProgress(books) {
+  const rows = [];
+  for (const book of Array.isArray(books) ? books : []) {
+    if (!book || typeof book.title !== 'string' || !book.pendingSync) continue;
+    rows.push({
+      title: book.title,
+      current_page: Math.max(0, Math.floor(Number(book.currentPage) || 0)),
+      current_sentence: Math.max(0, Math.floor(Number(book.currentSentenceIdx) || 0)),
+      updated_at: new Date(Number(book.updatedAt) || Date.now()).toISOString()
+    });
+  }
+  return rows;
+}
+
+// Pure: which pushed rows may have their flag cleared. A save that landed while the push was in
+// flight carries a newer updatedAt than the row that was sent, so it still owes the cloud.
+function settlePendingRows(pushed, books) {
+  const byTitle = new Map();
+  for (const book of Array.isArray(books) ? books : []) {
+    if (book && typeof book.title === 'string') byTitle.set(book.title, book);
+  }
+  const settled = [];
+  for (const row of Array.isArray(pushed) ? pushed : []) {
+    if (!row || typeof row.title !== 'string') continue;
+    const book = byTitle.get(row.title);
+    if (!book || !book.pendingSync) continue;
+    const pushedAt = Date.parse(row.updated_at);
+    if (!Number.isFinite(pushedAt)) continue;
+    if ((Number(book.updatedAt) || 0) > pushedAt) continue;
+    settled.push(row.title);
+  }
+  return settled;
+}
+
+// Clears the flag only for rows the server confirmed and only where no newer save has landed. One
+// read and one transaction on purpose: this runs on every page turn that reaches the cloud.
+async function clearPendingProgress(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return 0;
+  if (!dbInstance) await initIndexedDB();
+  if (!dbInstance) return 0;
+  return new Promise((resolve) => {
+    try {
+      const tx = dbInstance.transaction(["books"], "readwrite");
+      const store = tx.objectStore("books");
+      const req = store.getAll();
+      req.onsuccess = () => {
+        const books = req.result || [];
+        const titles = new Set(settlePendingRows(rows, books));
+        let cleared = 0;
+        for (const book of books) {
+          if (!titles.has(book.title) || !book.pendingSync) continue;
+          book.pendingSync = false;
+          store.put(book);
+          cleared += 1;
+        }
+        resolve(cleared);
+      };
+      req.onerror = () => resolve(0);
+    } catch (err) {
+      resolve(0);
+    }
+  });
+}
+
+// Retries everything this device still owes. Safe to call at any time: signed out or offline it
+// leaves the flags alone for the next attempt and never throws into the reader.
+async function flushPendingProgress() {
+  if (!supabaseClient) return 0;
+  try {
+    const user = await getSignedInUser();
+    if (!user || !user.id) return 0;
+    const rows = selectPendingProgress(await getAllBooksFromShelf());
+    if (!rows.length) return 0;
+    const pushed = await pushLocalProgressToCloud(supabaseClient, user.id, rows);
+    if (!pushed) return 0;
+    await clearPendingProgress(rows);
+    return rows.length;
+  } catch (err) {
+    return 0;
   }
 }
 
@@ -933,6 +1036,8 @@ async function updateBookProgressInDB(title, page, sentenceIdx) {
         book.currentPage = page;
         book.currentSentenceIdx = sentenceIdx;
         book.updatedAt = Date.now();
+        // Owed to the cloud until an upsert is confirmed. See the offline write queue below.
+        book.pendingSync = true;
         store.put(book);
       }
     };
@@ -4789,9 +4894,28 @@ updateSleepTimerUI();
 refreshProPriceLabels();
 confirmCheckoutReturn();
 
+// The queue's retry triggers: the device coming back online, and the page becoming visible again
+// (a phone that slept through a reconnect never fires 'online'). Debounced so switching tabs does
+// not hammer the API.
+let pendingFlushTimer = null;
+function schedulePendingFlush(delay = 0) {
+  if (pendingFlushTimer) return;
+  pendingFlushTimer = setTimeout(() => {
+    pendingFlushTimer = null;
+    flushPendingProgress();
+  }, delay);
+}
+window.addEventListener('online', () => schedulePendingFlush());
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) schedulePendingFlush(5000);
+});
+
 // Pull the account's reading positions once the local shelf is readable. Deliberately not awaited:
-// IndexedDB may never open, and sync is never allowed to hold up the first render.
-initIndexedDB().then(() => { restoreProgressFromCloud(); });
+// IndexedDB may never open, and sync is never allowed to hold up the first render. The flush runs
+// after the pull so a position written offline last session reaches the cloud on this launch.
+initIndexedDB().then(() => {
+  restoreProgressFromCloud().then(() => { flushPendingProgress(); });
+});
 
 // --- RETURN FROM PAYSTACK ---
 // Checkout sends the buyer back to "/" with ?trxref=…&reference=…. The webhook is what grants the

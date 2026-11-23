@@ -206,3 +206,180 @@ test('openProfileModal falls back gracefully when topup columns are missing', as
   assert.equal(dom.window.document.getElementById('profileNeuralCount').textContent, '3,500 / 5,000 Chars');
 });
 
+// --- OFFLINE WRITE QUEUE ---
+// A shelf that is real enough for the queue: open() succeeds on a later tick, getAll hands back
+// copies, and put() records what was written so a test can see the flag move.
+function fakeBookDB(initialBooks) {
+  const books = new Map(initialBooks.map((book) => [book.title, { ...book }]));
+  const puts = [];
+  const store = {
+    getAll() {
+      const req = {};
+      setTimeout(() => {
+        req.result = Array.from(books.values()).map((book) => ({ ...book }));
+        if (req.onsuccess) req.onsuccess();
+      }, 0);
+      return req;
+    },
+    put(record) {
+      puts.push({ ...record });
+      books.set(record.title, { ...record });
+    }
+  };
+  return {
+    books,
+    puts,
+    open() {
+      const req = {};
+      setTimeout(() => {
+        req.result = {
+          objectStoreNames: { contains: () => true },
+          transaction: () => ({ objectStore: () => store })
+        };
+        if (req.onsuccess) req.onsuccess({ target: req });
+      }, 0);
+      return req;
+    }
+  };
+}
+
+// A signed-in client whose upserts can be switched between failing (offline) and succeeding.
+function queueSupabase({ userId = 'user-1', failing = () => true } = {}) {
+  const upserts = [];
+  const client = {
+    auth: {
+      getSession: async () => ({
+        data: { session: userId ? { access_token: 'token-1', user: { id: userId } } : null }
+      }),
+      onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } })
+    },
+    from(table) {
+      return {
+        select: () => ({
+          eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) })
+        }),
+        upsert: async (rows, options) => {
+          upserts.push({ table, rows, options });
+          return failing() ? { error: { message: 'offline' } } : { error: null };
+        }
+      };
+    }
+  };
+  return { client, upserts };
+}
+
+const settle = () => new Promise((resolve) => setTimeout(resolve, 120));
+
+function pendingDune() {
+  return {
+    id: 1,
+    title: 'Dune',
+    pages: [['a page of text']],
+    chapters: [],
+    currentPage: 2,
+    currentSentenceIdx: 1,
+    updatedAt: Date.now() - 60000,
+    pendingSync: true
+  };
+}
+
+test('a position written offline is pushed and settled when the device reconnects', async () => {
+  const dom = setupTestDom();
+  const writtenAt = Date.now() - 60000;
+  const db = fakeBookDB([{ ...pendingDune(), updatedAt: writtenAt }]);
+  dom.window.indexedDB = { open: () => db.open() };
+
+  let offline = true;
+  const { client, upserts } = queueSupabase({ failing: () => offline });
+  dom.window.supabase = { createClient: () => client };
+
+  dom.window.eval(appJs);
+  await settle();
+
+  assert.equal(db.books.get('Dune').pendingSync, true, 'a failed startup push leaves the debt in place');
+  assert.ok(upserts.length >= 1, 'startup tried to push the owed row');
+
+  offline = false;
+  const attemptsBefore = upserts.length;
+  dom.window.dispatchEvent(new dom.window.Event('online'));
+  await settle();
+
+  assert.ok(upserts.length > attemptsBefore, 'the reconnect retried the push');
+  // The rows were built inside the jsdom realm, so compare their plain JSON shape, not prototypes.
+  assert.deepEqual(JSON.parse(JSON.stringify(upserts[upserts.length - 1].rows)), [{
+    title: 'Dune',
+    current_page: 2,
+    current_sentence: 1,
+    updated_at: new Date(writtenAt).toISOString(),
+    user_id: 'user-1'
+  }]);
+  assert.equal(upserts[upserts.length - 1].options.onConflict, 'user_id,title');
+  assert.equal(db.books.get('Dune').pendingSync, false, 'a confirmed push settles the row');
+});
+
+test('a push that fails again leaves the position owed for the next attempt', async () => {
+  const dom = setupTestDom();
+  const db = fakeBookDB([pendingDune()]);
+  dom.window.indexedDB = { open: () => db.open() };
+
+  const { client, upserts } = queueSupabase({ failing: () => true });
+  dom.window.supabase = { createClient: () => client };
+
+  dom.window.eval(appJs);
+  await settle();
+  const attemptsBefore = upserts.length;
+  dom.window.dispatchEvent(new dom.window.Event('online'));
+  await settle();
+
+  assert.ok(upserts.length > attemptsBefore, 'the retry was attempted');
+  assert.equal(db.books.get('Dune').pendingSync, true, 'nothing was settled by a failed push');
+  assert.equal(db.puts.length, 0, 'no write was made to the shelf');
+});
+
+test('the queue stays dormant when nobody is signed in', async () => {
+  const dom = setupTestDom();
+  const db = fakeBookDB([pendingDune()]);
+  dom.window.indexedDB = { open: () => db.open() };
+
+  const { client, upserts } = queueSupabase({ userId: null });
+  dom.window.supabase = { createClient: () => client };
+
+  dom.window.eval(appJs);
+  await settle();
+  dom.window.dispatchEvent(new dom.window.Event('online'));
+  await settle();
+
+  assert.equal(upserts.length, 0, 'signed out, nothing is pushed');
+  assert.equal(db.books.get('Dune').pendingSync, true, 'the debt waits for the next sign-in');
+});
+
+test('local saves mark the row owed, adopted cloud rows settle it, and only a confirmed push clears it', () => {
+  const save = appJs.slice(
+    appJs.indexOf('async function updateBookProgressInDB'),
+    appJs.indexOf('async function saveBookmarkToDB')
+  );
+  assert.ok(save.includes('pendingSync = true'), 'a local save marks the book as owed');
+
+  const adopt = appJs.slice(
+    appJs.indexOf('async function applyCloudProgressToDB'),
+    appJs.indexOf('async function restoreProgressFromCloud')
+  );
+  assert.ok(adopt.includes('pendingSync = false'), 'an adopted position supersedes the debt');
+
+  const push = appJs.slice(
+    appJs.indexOf('async function syncProgressToCloud'),
+    appJs.indexOf('async function getAllBooksFromShelf')
+  );
+  assert.ok(push.includes('if (!error) await clearPendingProgress([row])'), 'only a confirmed upsert settles');
+});
+
+test('the queue retries on reconnect, when the page is shown, and at startup', () => {
+  assert.ok(appJs.includes("window.addEventListener('online', () => schedulePendingFlush())"), 'online retry');
+  assert.ok(appJs.includes("document.addEventListener('visibilitychange', () => {"), 'visibility retry');
+  assert.ok(appJs.includes('if (!document.hidden) schedulePendingFlush(5000);'), 'shown-again retry is debounced');
+  assert.ok(
+    appJs.includes('restoreProgressFromCloud().then(() => { flushPendingProgress(); })'),
+    'startup flushes whatever the pull did not cover'
+  );
+});
+
