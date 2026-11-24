@@ -96,7 +96,7 @@ controlsToggleBar.addEventListener('click', () => openOptionsModal());
 
 // --- INDEXEDDB STORAGE ---
 const DB_NAME = "MarginaliaBookDB";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 let dbInstance = null;
 
 function initIndexedDB() {
@@ -118,6 +118,10 @@ function initIndexedDB() {
         if (!db.objectStoreNames.contains("vocabulary")) {
           db.createObjectStore("vocabulary", { keyPath: "id", autoIncrement: true });
         }
+        if (!db.objectStoreNames.contains("audio_cache")) {
+          const audioStore = db.createObjectStore("audio_cache", { keyPath: "cacheKey" });
+          audioStore.createIndex("lastAccessedAt", "lastAccessedAt", { unique: false });
+        }
       };
       req.onsuccess = (e) => {
         dbInstance = e.target.result;
@@ -126,6 +130,101 @@ function initIndexedDB() {
       req.onerror = () => resolve(null);
     } catch (err) {
       resolve(null);
+    }
+  });
+}
+
+// --- INDEXEDDB AUDIO CACHE (100 MB LRU CAP) ---
+const AUDIO_CACHE_MAX_BYTES = 100 * 1024 * 1024; // 100 MB
+const AUDIO_CACHE_TARGET_BYTES = 85 * 1024 * 1024; // 85 MB
+
+async function computeAudioCacheKey(engine, voice, speed, text) {
+  const normalized = (text || '').trim().replace(/\s+/g, ' ');
+  const str = `${engine}:${voice}:${speed}:${normalized}`;
+  if (typeof crypto !== 'undefined' && crypto.subtle && typeof crypto.subtle.digest === 'function') {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+    return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+  }
+  return `fallback_${Math.abs(h).toString(16)}`;
+}
+
+async function getAudioFromIdbCache(cacheKey) {
+  if (!dbInstance) await initIndexedDB();
+  if (!dbInstance || !dbInstance.objectStoreNames.contains('audio_cache')) return null;
+
+  return new Promise((resolve) => {
+    try {
+      const tx = dbInstance.transaction(['audio_cache'], 'readwrite');
+      const store = tx.objectStore('audio_cache');
+      const req = store.get(cacheKey);
+
+      req.onsuccess = () => {
+        const item = req.result;
+        if (!item || !item.blob) return resolve(null);
+        item.lastAccessedAt = Date.now();
+        store.put(item);
+        resolve(item.blob);
+      };
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+async function saveAudioToIdbCache(cacheKey, blob) {
+  if (!blob || !blob.size) return false;
+  if (!dbInstance) await initIndexedDB();
+  if (!dbInstance || !dbInstance.objectStoreNames.contains('audio_cache')) return false;
+
+  const sizeBytes = blob.size;
+  return new Promise((resolve) => {
+    try {
+      const tx = dbInstance.transaction(['audio_cache'], 'readwrite');
+      const store = tx.objectStore('audio_cache');
+      const index = store.index('lastAccessedAt');
+
+      let totalSize = sizeBytes;
+      const entries = [];
+      const cursorReq = index.openCursor();
+
+      cursorReq.onsuccess = (e) => {
+        const cursor = e.target.result;
+        if (cursor) {
+          totalSize += cursor.value.sizeBytes || 0;
+          entries.push({ key: cursor.primaryKey, size: cursor.value.sizeBytes || 0 });
+          cursor.continue();
+        } else {
+          if (totalSize > AUDIO_CACHE_MAX_BYTES) {
+            for (const entry of entries) {
+              if (totalSize <= AUDIO_CACHE_TARGET_BYTES) break;
+              store.delete(entry.key);
+              totalSize -= entry.size;
+            }
+          }
+          store.put({
+            cacheKey,
+            blob,
+            sizeBytes,
+            lastAccessedAt: Date.now()
+          });
+          resolve(true);
+        }
+      };
+      cursorReq.onerror = () => {
+        try {
+          store.put({ cacheKey, blob, sizeBytes, lastAccessedAt: Date.now() });
+          resolve(true);
+        } catch {
+          resolve(false);
+        }
+      };
+    } catch {
+      resolve(false);
     }
   });
 }
@@ -4667,6 +4766,25 @@ async function getNeuralAudioSrc(text) {
   if (hit && hit.src) return hit.src;
   if (audioInflight.has(key)) return audioInflight.get(key);
 
+  const engine = activeEngine;
+  const voiceId = (engine === 'wasm' && (!voicePicker.value || !['heart', 'michael', 'emma'].includes(voicePicker.value)))
+    ? 'heart'
+    : voicePicker.value;
+  const speed = 1;
+
+  // 1. Check persistent IndexedDB audio cache FIRST (cache-first playback)
+  const cacheKey = await computeAudioCacheKey(engine, voiceId, speed, text);
+  try {
+    const cachedBlob = await getAudioFromIdbCache(cacheKey);
+    if (cachedBlob && cachedBlob.size > 0) {
+      const src = URL.createObjectURL(cachedBlob);
+      cacheAudio(key, src);
+      return src;
+    }
+  } catch (err) {
+    console.warn('IDB audio cache lookup error:', err);
+  }
+
   // A 429 countdown is running: do not ask again until it ends, or the server's lockout just gets
   // longer. This mirrors the auth form, which disables its buttons for the same reason.
   // On-device synthesis (wasm) runs locally with zero API calls and is never rate-limited.
@@ -4679,18 +4797,16 @@ async function getNeuralAudioSrc(text) {
     throw err;
   }
 
-  // capture settings now; they can change while we await
-  // Always ask the server for normal-speed audio: speed is applied on the phone via playbackRate.
-  // (Sending the speed too made the server-side voices play at speed x speed.)
-  const engine = activeEngine;
-  const voiceId = (engine === 'wasm' && (!voicePicker.value || !['heart', 'michael', 'emma'].includes(voicePicker.value)))
-    ? 'heart'
-    : voicePicker.value;
-  const speed = 1;
-
   if (engine === 'wasm') {
     const job = (async () => {
       const src = await synthOnDeviceSpeech(text, voiceId);
+      try {
+        if (src.startsWith('blob:') || src.startsWith('data:')) {
+          const resp = await fetch(src);
+          const b = await resp.blob();
+          saveAudioToIdbCache(cacheKey, b).catch(() => {});
+        }
+      } catch {}
       cacheAudio(key, src);
       return src;
     })();
@@ -4728,6 +4844,7 @@ async function getNeuralAudioSrc(text) {
     if (res.ok && (res.headers.get('Content-Type') || '').includes('audio/')) {
       const blob = await res.blob();
       if (!blob.size) throw new Error("The voice server returned no audio.");
+      saveAudioToIdbCache(cacheKey, blob).catch(() => {});
       src = URL.createObjectURL(blob);
     } else {
       // errors (and older servers) answer with JSON
@@ -4747,7 +4864,16 @@ async function getNeuralAudioSrc(text) {
         throw err;
       }
 
-      src = data.audio_base64 ? base64ToBlobUrl(data.audio_base64) : (data.audioUrl || '');
+      if (data.audio_base64) {
+        const bin = atob(data.audio_base64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const b = new Blob([bytes], { type: 'audio/mpeg' });
+        saveAudioToIdbCache(cacheKey, b).catch(() => {});
+        src = URL.createObjectURL(b);
+      } else {
+        src = data.audioUrl || '';
+      }
       if (!src) throw new Error("The voice server returned no audio.");
       remaining = data.remaining_chars;
     }
@@ -4761,6 +4887,171 @@ async function getNeuralAudioSrc(text) {
 
   audioInflight.set(key, job);
   try { return await job; } finally { audioInflight.delete(key); }
+}
+
+// --- CHAPTER & SUMMARY AUDIO EXPORT (.mp3) ---
+async function canExportAudio() {
+  const customOpenAi = localStorage.getItem('marginalia_byok_openai') || '';
+  const customEleven = localStorage.getItem('marginalia_byok_eleven') || '';
+  if (customOpenAi || customEleven) return true;
+
+  if (typeof supabaseClient === 'undefined' || !supabaseClient) return false;
+  const session = await getSessionSafe();
+  if (!session || !session.user) return false;
+
+  const { data: profile } = await supabaseClient
+    .from('profiles')
+    .select('tier, pro_tier, pro_expires_at')
+    .eq('id', session.user.id)
+    .maybeSingle();
+
+  if (profile && isProActiveClient(profile)) {
+    const tier = profile.pro_tier;
+    if (tier === 'pro_ng' || tier === 'pro_intl' || tier === 'student' || tier === 'studio' || profile.tier === 'pro') {
+      return true;
+    }
+  }
+  return false;
+}
+
+function getActiveChapterSentences() {
+  if (!bookPages || bookPages.length === 0) return [];
+  const currentCh = getCurrentChapter();
+  const currentIdx = bookChapters.findIndex((c) => c.pageIndex === currentCh.pageIndex);
+  const startPage = currentCh.pageIndex;
+  const endPage = (currentIdx >= 0 && currentIdx + 1 < bookChapters.length)
+    ? bookChapters[currentIdx + 1].pageIndex
+    : bookPages.length;
+
+  const pages = bookPages.slice(startPage, endPage);
+  return pages.flatMap((p) => (Array.isArray(p) ? p : [p]))
+    .map((b) => (typeof b === 'string' ? b : (b.text || b.caption || '')))
+    .filter((s) => s && s.trim());
+}
+
+async function exportAudioForSentences(sentences, titlePrefix) {
+  if (!sentences || sentences.length === 0) {
+    alert("No sentences found to export.");
+    return;
+  }
+
+  const allowed = await canExportAudio();
+  if (!allowed) {
+    openPaywall();
+    return;
+  }
+
+  const exportModal = document.getElementById('audioExportModal');
+  const statusText = document.getElementById('audioExportStatusText');
+  const progressBar = document.getElementById('audioExportProgressBar');
+  const cancelBtn = document.getElementById('audioExportCancelBtn');
+
+  if (exportModal) exportModal.style.display = 'flex';
+  if (progressBar) progressBar.style.width = '0%';
+
+  let cancelled = false;
+  const onCancel = () => { cancelled = true; };
+  if (cancelBtn) cancelBtn.onclick = onCancel;
+
+  const engine = activeEngine;
+  const voiceId = (engine === 'wasm' && (!voicePicker.value || !['heart', 'michael', 'emma'].includes(voicePicker.value)))
+    ? 'heart'
+    : voicePicker.value;
+  const speed = 1;
+
+  const chunks = [];
+  const total = sentences.length;
+
+  try {
+    for (let i = 0; i < total; i++) {
+      if (cancelled) break;
+      const s = sentences[i];
+      if (statusText) statusText.textContent = `Processing sentence ${i + 1} of ${total}...`;
+      if (progressBar) progressBar.style.width = `${Math.round(((i) / total) * 100)}%`;
+
+      const cacheKey = await computeAudioCacheKey(engine, voiceId, speed, s);
+      let blob = await getAudioFromIdbCache(cacheKey);
+
+      if (!blob) {
+        const src = await getNeuralAudioSrc(s);
+        if (src.startsWith('blob:') || src.startsWith('data:')) {
+          const resp = await fetch(src);
+          blob = await resp.blob();
+        }
+      }
+
+      if (blob) chunks.push(blob);
+    }
+
+    if (cancelled) {
+      if (statusText) statusText.textContent = "Export cancelled.";
+      setTimeout(() => { if (exportModal) exportModal.style.display = 'none'; }, 800);
+      return;
+    }
+
+    if (chunks.length === 0) {
+      throw new Error("Could not synthesize audio chunks.");
+    }
+
+    if (statusText) statusText.textContent = "Stitching audio file...";
+    if (progressBar) progressBar.style.width = '100%';
+
+    const mime = chunks[0]?.type || 'audio/mpeg';
+    const finalBlob = new Blob(chunks, { type: mime });
+
+    const downloadUrl = URL.createObjectURL(finalBlob);
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    const safeTitle = (titlePrefix || 'export').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const ext = mime.includes('wav') ? '.wav' : '.mp3';
+    a.download = `${safeTitle}${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(downloadUrl), 5000);
+
+    if (statusText) statusText.textContent = "Export complete!";
+    setTimeout(() => {
+      if (exportModal) exportModal.style.display = 'none';
+    }, 800);
+  } catch (err) {
+    if (statusText) statusText.textContent = `Error: ${err.message}`;
+    alert(`Export failed: ${err.message}`);
+  } finally {
+    if (cancelBtn) cancelBtn.onclick = null;
+  }
+}
+
+const exportChapterMp3Btn = document.getElementById('exportChapterMp3Btn');
+if (exportChapterMp3Btn) {
+  exportChapterMp3Btn.addEventListener('click', async () => {
+    const sents = getActiveChapterSentences();
+    const currentCh = getCurrentChapter();
+    const chIdx = bookChapters.findIndex((c) => c.pageIndex === currentCh.pageIndex);
+    const chNum = chIdx >= 0 ? chIdx + 1 : 1;
+    const prefix = `${currentDocName || 'book'}-chapter-${chNum}`;
+    await exportAudioForSentences(sents, prefix);
+  });
+}
+
+const exportSummaryMp3Btn = document.getElementById('exportSummaryMp3Btn');
+if (exportSummaryMp3Btn) {
+  exportSummaryMp3Btn.addEventListener('click', async () => {
+    let sents = [];
+    if (originalBookPages && bookPages && bookPages.length > 0) {
+      sents = bookPages.flatMap((p) => (Array.isArray(p) ? p : [p]))
+        .map((b) => (typeof b === 'string' ? b : (b.text || b.caption || '')))
+        .filter((s) => s && s.trim());
+    } else {
+      const activeCh = getCurrentChapter();
+      const pages = bookPages.slice(activeCh.pageIndex, Math.min(bookPages.length, activeCh.pageIndex + 5));
+      sents = pages.flatMap((p) => (Array.isArray(p) ? p : [p]))
+        .map((b) => (typeof b === 'string' ? b : (b.text || b.caption || '')))
+        .filter((s) => s && s.trim());
+    }
+    const prefix = `${currentDocName || 'summary'}-audio`;
+    await exportAudioForSentences(sents, prefix);
+  });
 }
 
 // The next few things that will be read aloud (follows auto page-flip like playback does)

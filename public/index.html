@@ -386,10 +386,13 @@
     <div class="modal-card">
       <div class="modal-title">📖 Jump to Section</div>
 
-      <div class="jump-current-pos">
-        <span id="pageIndicatorText" style="font-weight:600; font-size:0.85rem; color:var(--text-main); white-space:nowrap;">Page 1 of 1</span>
-        <span style="color:var(--text-muted);">·</span>
-        <span id="chapterIndicatorText" style="font-size:0.78rem; color:var(--accent); max-width:180px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Chapter 1</span>
+      <div class="jump-current-pos" style="display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <span id="pageIndicatorText" style="font-weight:600; font-size:0.85rem; color:var(--text-main); white-space:nowrap;">Page 1 of 1</span>
+          <span style="color:var(--text-muted);">·</span>
+          <span id="chapterIndicatorText" style="font-size:0.78rem; color:var(--accent); max-width:180px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Chapter 1</span>
+        </div>
+        <button id="exportChapterMp3Btn" type="button" style="padding:0.3rem 0.6rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:0.78rem; cursor:pointer; font-weight:600;">⬇️ Export Audio (.mp3)</button>
       </div>
       
       <div class="nav-tab-group">
@@ -827,9 +830,25 @@
         <span style="font-size:0.75rem; color:var(--text-muted);">High-level core themes and key conclusions.</span>
       </button>
 
+      <button id="exportSummaryMp3Btn" type="button" style="width:100%; margin-top:0.6rem; padding:0.6rem; border-radius:8px; border:1px solid var(--border); background:var(--bg-main); color:var(--text-main); cursor:pointer; font-size:0.85rem; font-weight:600;">
+        ⬇️ Export Audio (.mp3)
+      </button>
+
       <div class="modal-footer-row" style="display:flex; justify-content:flex-end;">
         <button id="closeSummaryModalBtn" data-close="summaryModal" style="padding:0.4rem 0.8rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border);">Cancel</button>
       </div>
+    </div>
+  </div>
+
+  <!-- AUDIO EXPORT PROGRESS MODAL -->
+  <div id="audioExportModal" class="modal-overlay">
+    <div class="modal-card" style="max-width:380px; text-align:center;">
+      <div class="modal-title">⬇️ Exporting Audio (.mp3)</div>
+      <p id="audioExportStatusText" style="font-size:0.85rem; color:var(--text-muted); margin:0.8rem 0;">Preparing audio chunks...</p>
+      <div style="width:100%; background:var(--border); height:8px; border-radius:4px; overflow:hidden; margin-bottom:1rem;">
+        <div id="audioExportProgressBar" style="width:0%; height:100%; background:var(--accent); transition:width 0.2s ease;"></div>
+      </div>
+      <button id="audioExportCancelBtn" type="button" style="padding:0.4rem 0.8rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); cursor:pointer;">Cancel</button>
     </div>
   </div>
 
