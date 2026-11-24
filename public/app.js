@@ -1908,6 +1908,7 @@ function unlockAudioForIOS() {
 let speakToken = 0;
 
 function cancelAllSpeech() {
+  stopBrowserSpeechKeepAlive();
   speakToken++;
   wasmScheduledToken = speakToken;
   currentUtterance = null;
@@ -1953,10 +1954,13 @@ function updateMediaMetadata() {
   if (!('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
   try {
     const ch = getCurrentChapter();
+    const docTitle = currentDocName || 'Marginalia Reader';
+    const pageStr = (typeof bookPages !== 'undefined' && bookPages && bookPages.length > 0) ? `Page ${currentPage + 1} of ${bookPages.length}` : `Page ${currentPage + 1}`;
+    const chapterStr = (ch && ch.title) ? ` · ${ch.title}` : '';
     navigator.mediaSession.metadata = new MediaMetadata({
-      title: (ch && ch.title) || currentDocName,
-      artist: currentDocName,
-      album: 'Marginalia',
+      title: `${docTitle} (${pageStr}${chapterStr})`,
+      artist: 'Marginalia Reader',
+      album: docTitle,
       artwork: [
         { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
         { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' }
@@ -1965,14 +1969,40 @@ function updateMediaMetadata() {
   } catch (e) { console.warn('Media metadata failed:', e); }
 }
 
+function startBrowserSpeechKeepAlive() {
+  try {
+    if (!keepAliveAudio) {
+      keepAliveAudio = new Audio(makeSilentWavUrl());
+      keepAliveAudio.loop = true;
+      keepAliveAudio.volume = 0.001;
+    }
+    const p = keepAliveAudio.play();
+    if (p && typeof p.catch === 'function') {
+      p.catch(() => {});
+    }
+  } catch (e) {
+    console.warn('Keep-alive audio failed:', e);
+  }
+}
+
+function stopBrowserSpeechKeepAlive() {
+  if (keepAliveAudio) {
+    try {
+      keepAliveAudio.pause();
+      keepAliveAudio.currentTime = 0;
+    } catch (e) {}
+  }
+}
+
 function syncMediaSessionState(playing) {
   if (!('mediaSession' in navigator)) return;
   try {
     navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
-    // NOTE: no silent "keep-alive" <audio> alongside the system voice. On iPhone, starting an
-    // audio element while speechSynthesis is speaking switches the audio session and cuts the
-    // speech off after the first word. (It couldn't keep speech alive on lock anyway.)
-    if (keepAliveAudio) keepAliveAudio.pause();
+    if (playing && activeEngine === 'browser') {
+      startBrowserSpeechKeepAlive();
+    } else {
+      stopBrowserSpeechKeepAlive();
+    }
   } catch (e) { }
 }
 
@@ -2064,8 +2094,8 @@ function handleHandsfreeNextTrack() {
   set('previoustrack', () => skipSentence(-1));
   set('nexttrack', handleHandsfreeNextTrack);
   set('skipad', () => triggerHandsfreeBookmark());
-  set('seekbackward', () => prevPageBtn.click());
-  set('seekforward', () => nextPageBtn.click());
+  set('seekbackward', (details) => skipSentence(-1));
+  set('seekforward', (details) => skipSentence(1));
 })();
 
 // --- TEXT SELECTION QUICK ACTIONS ---
@@ -4665,6 +4695,7 @@ async function playCurrentSentence() {
 
   highlightActiveSentence();
   mainPlayToggle.textContent = '⏸';
+  updateMediaMetadata();
   syncMediaSessionState(true);
 
   const currentItem = pageItems[currentSentenceIdx];
