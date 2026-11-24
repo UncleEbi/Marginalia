@@ -1821,6 +1821,13 @@ const studyKitPreview = document.getElementById('studyKitPreview');
 const studyKitCountSummary = document.getElementById('studyKitCountSummary');
 const btnStudyKitCopy = document.getElementById('btnStudyKitCopy');
 const btnStudyKitDownload = document.getElementById('btnStudyKitDownload');
+const btnStudyKitShare = document.getElementById('btnStudyKitShare');
+const studyPackShareResult = document.getElementById('studyPackShareResult');
+const studyPackShareUrl = document.getElementById('studyPackShareUrl');
+const btnCopyShareUrl = document.getElementById('btnCopyShareUrl');
+const studyPackBanner = document.getElementById('studyPackBanner');
+const studyPackBannerMeta = document.getElementById('studyPackBannerMeta');
+const studyPackSaveBtn = document.getElementById('studyPackSaveBtn');
 let currentStudyKitTab = 'markdown';
 
 // Cognitive Modes
@@ -3175,8 +3182,167 @@ async function showStudyKitModal() {
     };
   }
 
+  if (studyPackShareResult) studyPackShareResult.style.display = 'none';
+  if (btnStudyKitShare) {
+    btnStudyKitShare.onclick = () => {
+      shareCurrentStudyPack();
+    };
+  }
+  if (btnCopyShareUrl && studyPackShareUrl) {
+    btnCopyShareUrl.onclick = () => {
+      navigator.clipboard.writeText(studyPackShareUrl.value).then(() => {
+        btnCopyShareUrl.textContent = '✓ Copied!';
+        setTimeout(() => { btnCopyShareUrl.textContent = 'Copy'; }, 2000);
+      });
+    };
+  }
+
   renderStudyKitContent();
   if (studyKitModal) studyKitModal.style.display = 'flex';
+}
+
+// --- SHAREABLE STUDY PACKS (VIRAL CAMPUS LOOP) ---
+async function shareCurrentStudyPack() {
+  if (!btnStudyKitShare) return;
+  const originalText = btnStudyKitShare.textContent;
+  btnStudyKitShare.disabled = true;
+  btnStudyKitShare.textContent = 'Generating link...';
+
+  try {
+    const ch = getCurrentChapter();
+    const token = await getFreshAuthToken();
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const vocabList = await getVocabFromDB(currentDocName);
+    const annotations = (currentDocAnnotations || []).filter(a => a.bookTitle === currentDocName);
+
+    const payload = {
+      title: currentDocName,
+      chapter: ch ? ch.title : null,
+      pages: bookPages || [],
+      annotations,
+      vocabulary: vocabList || [],
+      exportedAt: new Date().toISOString()
+    };
+
+    const res = await fetch('/api/study-pack', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        doc_title: currentDocName || 'Study Pack',
+        pack_type: 'chapter',
+        payload
+      })
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || `HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    const shareUrl = data.shareUrl || `${window.location.origin}/?pack=${data.shareToken}`;
+
+    if (studyPackShareResult && studyPackShareUrl) {
+      studyPackShareResult.style.display = 'block';
+      studyPackShareUrl.value = shareUrl;
+    }
+
+    if (navigator.share) {
+      navigator.share({
+        title: `${currentDocName} Study Pack`,
+        text: `Study "${currentDocName}" with my notes and vocabulary on Marginalia:`,
+        url: shareUrl
+      }).catch(() => {});
+    } else {
+      showToast('✓ Link generated! Ready to share.');
+    }
+  } catch (err) {
+    console.error('Error sharing study pack:', err);
+    showToast(`⚠️ Could not share: ${err.message}`);
+  } finally {
+    btnStudyKitShare.disabled = false;
+    btnStudyKitShare.textContent = originalText;
+  }
+}
+
+async function checkSharedStudyPack() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const packToken = urlParams.get('pack');
+  if (!packToken) return;
+
+  try {
+    const res = await fetch(`/api/study-pack?token=${encodeURIComponent(packToken)}`);
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      showToast(`⚠️ Study pack error: ${errData.error || 'Could not load link.'}`);
+      return;
+    }
+
+    const { pack } = await res.json();
+    if (!pack || !pack.payload || !pack.payload.pages) {
+      showToast('⚠️ Shared pack is empty or invalid.');
+      return;
+    }
+
+    currentDocName = pack.doc_title || 'Shared Study Pack';
+    bookPages = pack.payload.pages;
+    totalSentences = bookPages.reduce((acc, p) => acc + (Array.isArray(p) ? p.length : 0), 0);
+    currentPage = 0;
+    currentSentenceIdx = 0;
+
+    // Load annotations into memory and save locally
+    if (Array.isArray(pack.payload.annotations)) {
+      currentDocAnnotations = pack.payload.annotations;
+      for (const ann of pack.payload.annotations) {
+        saveAnnotationToDB({
+          bookTitle: currentDocName,
+          page: ann.page,
+          sentenceIdx: ann.sentenceIdx,
+          quoteText: ann.quoteText,
+          noteText: ann.noteText,
+          color: ann.color
+        }).catch(() => {});
+      }
+    }
+
+    // Load vocabulary
+    if (Array.isArray(pack.payload.vocabulary)) {
+      for (const v of pack.payload.vocabulary) {
+        saveVocabToDB({
+          word: v.word,
+          partOfSpeech: v.partOfSpeech,
+          definition: v.definition,
+          bookTitle: currentDocName,
+          context: v.context
+        }).catch(() => {});
+      }
+    }
+
+    renderPage(0);
+
+    // Show viral study pack banner
+    if (studyPackBanner) {
+      studyPackBanner.style.display = 'flex';
+      if (studyPackBannerMeta) {
+        const annCount = pack.payload.annotations?.length || 0;
+        const vocCount = pack.payload.vocabulary?.length || 0;
+        studyPackBannerMeta.textContent = `"${currentDocName}" with ${annCount} note${annCount === 1 ? '' : 's'} & ${vocCount} term${vocCount === 1 ? '' : 's'}`;
+      }
+    }
+
+    if (studyPackSaveBtn) {
+      studyPackSaveBtn.addEventListener('click', async () => {
+        await saveBookToDB(currentDocName, bookPages);
+        studyPackSaveBtn.textContent = '✓ Saved in Library';
+        studyPackSaveBtn.disabled = true;
+        showToast('✓ Saved to your Marginalia library!');
+      });
+    }
+  } catch (err) {
+    console.warn('Error loading shared pack:', err);
+  }
 }
 
 if (navStudyKit) {
@@ -7300,9 +7466,11 @@ audioElement.volume = playbackVolume;
 initIndexedDB().then(() => {
   refreshCurrentDocAnnotations().then(() => renderPage(0)).catch(() => renderPage(0));
   checkShareHandoff();
+  checkSharedStudyPack();
 }).catch(() => {
   renderPage(0);
   checkShareHandoff();
+  checkSharedStudyPack();
 });
 populateVoices();
 updateAuthBadge();

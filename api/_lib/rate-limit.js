@@ -56,6 +56,10 @@ export const TIERS = {
   // Web article URL extraction: 15 requests per minute per IP
   extract_url: {
     ip: { limit: 15, windowSeconds: 60 }
+  },
+  // Shareable read-only Study Packs: 15 requests per minute per IP
+  study_pack: {
+    ip: { limit: 15, windowSeconds: 60 }
   }
 };
 

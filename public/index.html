@@ -601,11 +601,19 @@
         <button id="tabStudyKitAnki" class="nav-tab-btn" type="button">Anki Flashcards</button>
       </div>
       <textarea id="studyKitPreview" readonly style="width:100%; height:180px; padding:0.5rem; font-family:monospace; font-size:12px; border-radius:6px; border:1px solid var(--border); background:var(--bg-main); color:var(--text-main); resize:none;"></textarea>
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:0.75rem;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:0.75rem; flex-wrap:wrap; gap:0.4rem;">
         <span id="studyKitCountSummary" style="font-size:0.78rem; color:var(--text-muted);"></span>
-        <div style="display:flex; gap:0.5rem;">
+        <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+          <button id="btnStudyKitShare" type="button" style="padding:0.4rem 0.85rem; border-radius:6px; border:1px solid var(--accent); background:transparent; color:var(--accent); font-weight:600; cursor:pointer;">🔗 Share Study Pack</button>
           <button id="btnStudyKitCopy" type="button" style="padding:0.4rem 0.85rem; border-radius:6px; border:1px solid var(--border); background:var(--bg-main); color:var(--text-main); cursor:pointer;">📋 Copy</button>
           <button id="btnStudyKitDownload" type="button" style="padding:0.4rem 0.85rem; border-radius:6px; background:var(--accent); color:#fff; border:none; font-weight:600; cursor:pointer;">⬇️ Download</button>
+        </div>
+      </div>
+      <div id="studyPackShareResult" style="display:none; margin-top:0.75rem; padding:0.6rem; border-radius:6px; background:var(--bg-main); border:1px solid var(--border);">
+        <div style="font-size:0.78rem; font-weight:600; color:var(--text-main); margin-bottom:0.35rem;">Link ready to share with classmates:</div>
+        <div style="display:flex; gap:0.4rem;">
+          <input id="studyPackShareUrl" type="text" readonly style="flex:1; padding:0.35rem 0.5rem; border-radius:4px; border:1px solid var(--border); background:var(--bg-card); color:var(--text-main); font-size:0.8rem;" />
+          <button id="btnCopyShareUrl" type="button" style="padding:0.35rem 0.75rem; border-radius:4px; background:var(--accent); color:#fff; border:none; font-weight:600; font-size:0.8rem; cursor:pointer;">Copy</button>
         </div>
       </div>
     </div>
@@ -1000,6 +1008,21 @@
       <div id="pageViewCanvasContainer" class="page-view-canvas-wrap">
         <canvas id="pageViewCanvas"></canvas>
       </div>
+    </div>
+  </aside>
+
+  <!-- SHARED STUDY PACK VIRAL BANNER -->
+  <aside id="studyPackBanner" aria-label="Shared Study Pack Info" style="display:none; position:fixed; bottom:0; left:0; right:0; z-index:900; background:var(--bg-card); border-top:1px solid var(--border); box-shadow:0 -4px 12px rgba(0,0,0,0.25); padding:0.6rem 1rem; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;">
+    <div style="display:flex; align-items:center; gap:0.6rem;">
+      <span style="font-size:1.2rem;">📖</span>
+      <div>
+        <div style="font-size:0.85rem; font-weight:600; color:var(--text-main);">Shared Study Pack · Studying with Marginalia</div>
+        <div id="studyPackBannerMeta" style="font-size:0.75rem; color:var(--text-muted);">Read and listen along with shared notes and vocabulary</div>
+      </div>
+    </div>
+    <div style="display:flex; gap:0.5rem;">
+      <button id="studyPackSaveBtn" type="button" style="padding:0.35rem 0.75rem; font-size:0.8rem; border-radius:5px; background:var(--accent); color:#fff; border:none; font-weight:600; cursor:pointer;">📥 Save to My Library</button>
+      <a href="/" target="_blank" style="padding:0.35rem 0.75rem; font-size:0.8rem; border-radius:5px; border:1px solid var(--border); background:var(--bg-main); color:var(--text-main); text-decoration:none; font-weight:500;">Open Marginalia</a>
     </div>
   </aside>
 
