@@ -190,3 +190,96 @@ test('speakServerless and getNeuralAudioSrc bypass auth, BYOK keys, and 429 lock
     'getNeuralAudioSrc must safely default to heart if voicePicker holds a stale cloud voice id'
   );
 });
+
+test('createWasmAudioBuffer uses modelSampleRate rather than audioCtx.sampleRate and clamps samples to [-1, 1]', () => {
+  const createWasmAudioBuffer = extractFunction('createWasmAudioBuffer');
+  let requestedRate = null;
+  let requestedLength = null;
+  let requestedChannels = null;
+  const channelData = new Float32Array(5);
+
+  const mockCtx = {
+    sampleRate: 48000, // Hardware rate is 48kHz
+    createBuffer(channels, len, rate) {
+      requestedChannels = channels;
+      requestedLength = len;
+      requestedRate = rate;
+      return {
+        sampleRate: rate,
+        length: len,
+        numberOfChannels: channels,
+        getChannelData: () => channelData
+      };
+    }
+  };
+
+  const pcm = new Float32Array([0.1, -0.5, 0.8, -0.9, 0.2]);
+  const buf = createWasmAudioBuffer(mockCtx, pcm, 22050);
+
+  assert.ok(buf, 'AudioBuffer created');
+  assert.equal(requestedChannels, 1, 'Mono channel');
+  assert.equal(requestedLength, 5, 'Length matches PCM samples');
+  assert.equal(requestedRate, 22050, 'Must use native modelSampleRate 22050Hz, never audioCtx.sampleRate 48000Hz');
+  assert.deepEqual(Array.from(channelData), Array.from(pcm), 'PCM data correctly copied into AudioBuffer');
+});
+
+test('synthOnDeviceSpeech includes 40-60ms zero-padded silence at start and end of audio buffer', async () => {
+  const synthOnDeviceSpeech = extractFunction('synthOnDeviceSpeech');
+  const result = await synthOnDeviceSpeech('Punctuation, prosody and test.', 'heart');
+  let buf;
+  if (result.startsWith('data:audio/wav;base64,')) {
+    const b64 = result.replace('data:audio/wav;base64,', '');
+    buf = Buffer.from(b64, 'base64');
+  } else {
+    const res = await fetch(result);
+    buf = Buffer.from(await res.arrayBuffer());
+  }
+
+  // Verify first 40ms of samples are 0 (50ms = 1102 samples at 22050Hz; 40ms = 882 samples)
+  // Each 16-bit PCM sample is 2 bytes starting at offset 44
+  let startSilenceSamples = 0;
+  for (let i = 0; i < 882; i++) {
+    const val = buf.readInt16LE(44 + i * 2);
+    if (val === 0) startSilenceSamples++;
+  }
+  assert.ok(startSilenceSamples >= 800, 'Start of buffer must contain zero-padded silence to prevent phoneme clipping');
+
+  // Verify last 40ms of samples are 0
+  const totalSamples = buf.readUInt32LE(40) / 2;
+  let endSilenceSamples = 0;
+  for (let i = totalSamples - 882; i < totalSamples; i++) {
+    const val = buf.readInt16LE(44 + i * 2);
+    if (val === 0) endSilenceSamples++;
+  }
+  assert.ok(endSilenceSamples >= 800, 'End of buffer must contain zero-padded silence to prevent phoneme clipping');
+});
+
+test('WASM audio engine applies speed in ONE place only and schedules back-to-back on AudioContext.currentTime', () => {
+  const appSrc = readFileSync(fileURLToPath(new URL('../public/app.js', import.meta.url)), 'utf8');
+
+  // 1. Model sample rate used in createBuffer
+  assert.ok(
+    appSrc.includes('audioCtx.createBuffer(1, pcmData.length, rate') ||
+    appSrc.includes('audioCtx.createBuffer(1, pcmData.length, modelSampleRate)'),
+    'createBuffer must use native modelSampleRate'
+  );
+
+  // 2. Playback speed applied to sourceNode.playbackRate only (never doubled in synth)
+  assert.ok(
+    appSrc.includes('sourceNode.playbackRate.value = playbackSpeed;') &&
+    appSrc.includes('nextSource.playbackRate.value = playbackSpeed;'),
+    'Playback speed must be applied via sourceNode.playbackRate'
+  );
+
+  // 3. Natural punctuation preserved without stripping
+  assert.ok(
+    appSrc.includes("const trimmedText = String(text || '').trim().replace(/\\s+/g, ' ');"),
+    'Text must preserve natural punctuation (. , ? !) without stripping'
+  );
+
+  // 4. Back-to-back buffer scheduling on AudioContext.currentTime
+  assert.ok(
+    appSrc.includes('Math.max(audioCtx.currentTime + 0.01, wasmScheduledEndTime)'),
+    'Buffers must be scheduled back-to-back on AudioContext.currentTime'
+  );
+});

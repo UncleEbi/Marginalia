@@ -1800,12 +1800,19 @@ let speakToken = 0;
 
 function cancelAllSpeech() {
   speakToken++;
+  wasmScheduledToken = speakToken;
   currentUtterance = null;
   audioElement.onended = null;
   audioElement.ontimeupdate = null;
   audioElement.onloadedmetadata = null;
   browserSpeech.cancel();
   try { audioElement.pause(); } catch (e) { }
+  if (typeof wasmActiveSourceNode !== 'undefined' && wasmActiveSourceNode) {
+    try { wasmActiveSourceNode.stop(); wasmActiveSourceNode.disconnect(); } catch (e) {}
+    wasmActiveSourceNode = null;
+  }
+  if (typeof wasmScheduledEndTime !== 'undefined') wasmScheduledEndTime = 0;
+  if (typeof wasmScheduledSentenceIdx !== 'undefined') wasmScheduledSentenceIdx = -1;
   cancelWordAnimation();
 }
 
@@ -4324,6 +4331,7 @@ function neuralCacheKey(text) {
 
 function releaseAudioSrc(src) {
   if (src && src.startsWith('blob:')) { try { URL.revokeObjectURL(src); } catch (e) { } }
+  if (src && typeof synthPcmCache !== 'undefined') { try { synthPcmCache.delete(src); } catch (e) { } }
 }
 
 function cacheAudio(key, src) {
@@ -4348,13 +4356,49 @@ function base64ToBlobUrl(b64) {
   return URL.createObjectURL(new Blob([bytes], { type: 'audio/mpeg' }));
 }
 
+// --- STUDIO (ON-DEVICE) WEBASSEMBLY TTS PIPELINE ----------------------------
+const modelSampleRate = 22050; // Exact native WASM model sample rate (Piper/VITS standard)
+const synthPcmCache = new Map();
+let wasmAudioCtx = null;
+let wasmGainNode = null;
+let wasmScheduledEndTime = 0;
+let wasmActiveSourceNode = null;
+let wasmScheduledSentenceIdx = -1;
+let wasmScheduledToken = 0;
+let wasmChunkStartTime = 0;
+
+function getWasmAudioCtx() {
+  if (typeof window === 'undefined') return null;
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return null;
+  if (!wasmAudioCtx) {
+    wasmAudioCtx = new AudioCtx();
+    wasmGainNode = wasmAudioCtx.createGain();
+    wasmGainNode.gain.value = playbackVolume;
+    wasmGainNode.connect(wasmAudioCtx.destination);
+  }
+  if (wasmAudioCtx.state === 'suspended') {
+    wasmAudioCtx.resume().catch(() => {});
+  }
+  return wasmAudioCtx;
+}
+
+function createWasmAudioBuffer(audioCtx, pcmData, rate = modelSampleRate) {
+  if (!audioCtx || !pcmData) return null;
+  // Match Native Model Sample Rate: ensure AudioContext.createBuffer uses modelSampleRate rather than audioCtx.sampleRate
+  const audioBuffer = audioCtx.createBuffer(1, pcmData.length, rate);
+  audioBuffer.getChannelData(0).set(pcmData);
+  return audioBuffer;
+}
+
 /**
  * Synthesizes speech locally in-browser to a PCM 16-bit WAV Blob URL.
- * Enables zero-cost, offline, lockscreen-compatible audio via <audio id="neuralAudio">.
+ * Enables zero-cost, offline, lockscreen-compatible audio via Web Audio API and <audio id="neuralAudio">.
  * Lightweight parametric formant synthesizer with letter-group acoustic modeling.
  */
 async function synthOnDeviceSpeech(text, voiceId = 'heart') {
-  const sampleRate = 22050;
+  const modelSampleRate = 22050; // Native model output sample rate
+  const sampleRate = modelSampleRate;
 
   // Voice acoustic profiles: fundamental pitch F0, vocal tract formant scaling, intonation, and timing
   const profiles = {
@@ -4391,8 +4435,9 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
     }
   }
 
-  // Tokenize text into words & punctuation units
-  const tokens = String(text || '').match(/\S+/g) || ['...'];
+  // Preserve natural punctuation (. , ? !) for prosody; trim excessive whitespace without stripping punctuation
+  const trimmedText = String(text || '').trim().replace(/\s+/g, ' ');
+  const tokens = trimmedText.match(/\S+/g) || ['...'];
   const segments = [];
 
   for (let t = 0; t < tokens.length; t++) {
@@ -4439,6 +4484,11 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
   }
 
   const rawSamples = [];
+
+  // Add 40-60ms (50ms) of zero-padded silence at start so first phoneme does not clip
+  const padSamples = Math.round(sampleRate * 0.05);
+  for (let i = 0; i < padSamples; i++) rawSamples.push(0);
+
   let glottalPhase = 0;
   let tGlobal = 0;
   const res1 = [0, 0];
@@ -4457,6 +4507,7 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
         for (let i = 0; i < gapCount; i++) rawSamples.push(0);
       }
 
+      // Normal 1.0x synthesis: playback speed is applied in ONE place only (via playbackRate)
       const pCount = Math.floor(u.dur * prof.durScale * sampleRate);
       const curF1 = (u.f1 || 500) * prof.formantScale;
       const curF2 = (u.f2 || 1500) * prof.formantScale;
@@ -4464,10 +4515,10 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
       for (let i = 0; i < pCount; i++) {
         const prog = i / pCount;
 
-        // Pitch with intonation and vibrato
+        // Pitch with prosody intonation and vibrato
         let pitch = prof.baseFreq;
-        if (seg.isQuestion) pitch *= 1.0 + 0.15 * prog;
-        else if (seg.isPeriod) pitch *= 1.0 - 0.12 * prog;
+        if (seg.isQuestion) pitch *= 1.0 + 0.18 * prog;
+        else if (seg.isPeriod) pitch *= 1.0 - 0.14 * prog;
         pitch += Math.sin(2 * Math.PI * prof.vibratoRate * tGlobal) * prof.vibratoDepth;
 
         // Glottal excitation
@@ -4500,7 +4551,22 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
     }
   }
 
+  // Add 40-60ms (50ms) of zero-padded silence at end so last phoneme does not clip
+  for (let i = 0; i < padSamples; i++) rawSamples.push(0);
+
+  // Normalize and clamp Float32Array samples to [-1.0, 1.0] to prevent digital clipping
   const totalSamples = rawSamples.length;
+  const pcmData = new Float32Array(totalSamples);
+  let maxAmp = 0;
+  for (let i = 0; i < totalSamples; i++) {
+    const a = Math.abs(rawSamples[i]);
+    if (a > maxAmp) maxAmp = a;
+  }
+  const normFactor = maxAmp > 1.0 ? 0.98 / maxAmp : 1.0;
+  for (let i = 0; i < totalSamples; i++) {
+    pcmData[i] = Math.max(-1.0, Math.min(1.0, rawSamples[i] * normFactor));
+  }
+
   const buffer = new ArrayBuffer(44 + totalSamples * 2);
   const view = new DataView(buffer);
   const writeStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
@@ -4512,25 +4578,32 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
   view.setUint32(16, 16, true);
   view.setUint16(20, 1, true);
   view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
+  view.setUint32(24, modelSampleRate, true);
+  view.setUint32(28, modelSampleRate * 2, true);
   view.setUint16(32, 2, true);
   view.setUint16(34, 16, true);
   writeStr(36, 'data');
   view.setUint32(40, totalSamples * 2, true);
 
   for (let i = 0; i < totalSamples; i++) {
-    const s = Math.max(-1, Math.min(1, rawSamples[i]));
+    const s = pcmData[i];
     view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
   }
 
+  let srcUrl = '';
   if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
     const blob = new Blob([buffer], { type: 'audio/wav' });
-    return URL.createObjectURL(blob);
+    srcUrl = URL.createObjectURL(blob);
   } else if (typeof Buffer !== 'undefined') {
-    return 'data:audio/wav;base64,' + Buffer.from(buffer).toString('base64');
+    srcUrl = 'data:audio/wav;base64,' + Buffer.from(buffer).toString('base64');
   }
-  return '';
+
+  // Stash pcmData for instant synchronous Web Audio buffer creation
+  if (srcUrl && typeof srcUrl === 'string') {
+    try { synthPcmCache.set(srcUrl, pcmData); } catch (e) {}
+  }
+
+  return srcUrl;
 }
 
 async function getNeuralAudioSrc(text) {
@@ -4709,6 +4782,80 @@ async function speakServerless(text, opts = {}) {
     // User hit pause / skipped / switched voice while the audio was downloading
     if (stale()) return;
 
+    // --- Studio (On-Device) WASM AudioContext Buffer Scheduling Path ---
+    const audioCtx = (activeEngine === 'wasm') ? getWasmAudioCtx() : null;
+    const pcmData = (activeEngine === 'wasm' && audioSrc) ? synthPcmCache.get(audioSrc) : null;
+
+    if (activeEngine === 'wasm' && audioCtx && pcmData) {
+      // 1. Match Native Model Sample Rate: AudioContext.createBuffer(1, pcmData.length, modelSampleRate)
+      const audioBuffer = createWasmAudioBuffer(audioCtx, pcmData, modelSampleRate);
+
+      const wordsArr = text.trim().split(/\s+/).filter(w => w.length > 0);
+      const computed = computeWordTimeline(wordsArr, playbackSpeed, audioBuffer.duration);
+      const timeline = computed.timeline;
+
+      // 4. Smooth Buffer Scheduling: check if this sentence was already pre-scheduled back-to-back
+      const alreadyScheduled = (wasmScheduledSentenceIdx === currentSentenceIdx && wasmScheduledToken === myToken);
+      let startTime = 0;
+
+      if (!alreadyScheduled) {
+        // 2. Prevent Double Speed Distortion: speed is applied in ONE place only (AudioBufferSourceNode.playbackRate)
+        const sourceNode = audioCtx.createBufferSource();
+        sourceNode.buffer = audioBuffer;
+        sourceNode.playbackRate.value = playbackSpeed;
+        sourceNode.connect(wasmGainNode || audioCtx.destination);
+
+        const now = audioCtx.currentTime;
+        startTime = Math.max(now + 0.02, wasmScheduledEndTime);
+        sourceNode.start(startTime);
+
+        const chunkDur = audioBuffer.duration / playbackSpeed;
+        wasmScheduledEndTime = startTime + chunkDur;
+        wasmActiveSourceNode = sourceNode;
+        wasmScheduledSentenceIdx = currentSentenceIdx;
+        wasmScheduledToken = myToken;
+        wasmChunkStartTime = startTime;
+
+        sourceNode.onended = () => {
+          cancelWordAnimation();
+          if (myToken !== speakToken || standalone || !isPlaying) return;
+          currentSentenceIdx++;
+          playCurrentSentence();
+        };
+      } else {
+        startTime = wasmChunkStartTime;
+      }
+
+      function renderWasmFrame() {
+        if (myToken !== speakToken || !isPlaying) return;
+        const cur = Math.max(0, (audioCtx.currentTime - startTime) * playbackSpeed);
+        if (highlightMode === 'word') {
+          let activeIdx = 0;
+          for (let i = 0; i < timeline.length; i++) {
+            if (cur >= timeline[i].start) activeIdx = i;
+            else break;
+          }
+          highlightActiveWord(activeIdx);
+        }
+        if (isPlaying && (audioCtx.currentTime - startTime) * playbackSpeed <= audioBuffer.duration + 0.5) {
+          wordAnimFrameId = requestAnimationFrame(renderWasmFrame);
+        }
+      }
+
+      if (highlightMode === 'word') {
+        cancelWordAnimation();
+        wordAnimFrameId = requestAnimationFrame(renderWasmFrame);
+      }
+
+      // 4. Smooth Buffer Scheduling: Pre-synthesize the NEXT sentence chunk while the current chunk is playing
+      // and schedule buffers back-to-back on AudioContext.currentTime
+      if (!standalone) {
+        scheduleNextWasmChunkBackToBack(audioCtx, myToken);
+      }
+
+      return;
+    }
+
     const wordsArr = text.trim().split(/\s+/).filter(w => w.length > 0);
     let timeline = null;
 
@@ -4782,6 +4929,60 @@ async function speakServerless(text, opts = {}) {
   }
 }
 
+async function scheduleNextWasmChunkBackToBack(audioCtx, myToken) {
+  if (myToken !== speakToken || !isPlaying || activeEngine !== 'wasm') return;
+  const nextTexts = upcomingNeuralTexts(1);
+  if (!nextTexts || nextTexts.length === 0) return;
+  const nextText = nextTexts[0];
+  const nextSentenceTargetIdx = currentSentenceIdx + 1;
+
+  if (wasmScheduledSentenceIdx >= nextSentenceTargetIdx && wasmScheduledToken === myToken) {
+    return;
+  }
+
+  // Pre-synthesize the next chunk in background while current chunk is playing
+  const key = neuralCacheKey(nextText);
+  let nextSrc = audioPreloadCache.get(key)?.src;
+  if (!nextSrc) {
+    nextSrc = await getNeuralAudioSrc(nextText).catch(() => null);
+  }
+  if (!nextSrc || myToken !== speakToken || !isPlaying) return;
+
+  const nextPcm = synthPcmCache.get(nextSrc);
+  if (!nextPcm) return;
+
+  if (wasmScheduledSentenceIdx >= nextSentenceTargetIdx && wasmScheduledToken === myToken) {
+    return;
+  }
+
+  // 1. Match Native Model Sample Rate: AudioContext.createBuffer(1, pcmData.length, modelSampleRate)
+  const nextBuffer = createWasmAudioBuffer(audioCtx, nextPcm, modelSampleRate);
+
+  // 2. Prevent Double Speed Distortion: speed is applied in ONE place only (AudioBufferSourceNode.playbackRate)
+  const nextSource = audioCtx.createBufferSource();
+  nextSource.buffer = nextBuffer;
+  nextSource.playbackRate.value = playbackSpeed;
+  nextSource.connect(wasmGainNode || audioCtx.destination);
+
+  // 4. Smooth Buffer Scheduling: schedule back-to-back on AudioContext.currentTime at exact sample boundary
+  const schedStart = Math.max(audioCtx.currentTime + 0.01, wasmScheduledEndTime);
+  nextSource.start(schedStart);
+
+  const dur = nextBuffer.duration / playbackSpeed;
+  wasmScheduledEndTime = schedStart + dur;
+  wasmScheduledSentenceIdx = nextSentenceTargetIdx;
+  wasmScheduledToken = myToken;
+  wasmChunkStartTime = schedStart;
+  wasmActiveSourceNode = nextSource;
+
+  nextSource.onended = () => {
+    cancelWordAnimation();
+    if (myToken !== speakToken || !isPlaying) return;
+    currentSentenceIdx++;
+    playCurrentSentence();
+  };
+}
+
 function stopAudio() {
   isPlaying = false;
   mainPlayToggle.textContent = '▶';
@@ -4832,6 +5033,9 @@ speedCycleBtn.addEventListener('click', () => {
       cancelAllSpeech();
       playCurrentSentence();
     } else {
+      if (activeEngine === 'wasm' && wasmActiveSourceNode && wasmActiveSourceNode.playbackRate) {
+        wasmActiveSourceNode.playbackRate.value = playbackSpeed;
+      }
       audioElement.playbackRate = playbackSpeed;
     }
   }
@@ -5034,6 +5238,9 @@ volumeSlider.addEventListener('input', () => {
   playbackVolume = Math.min(1, Math.max(0, Number(volumeSlider.value) / 100));
   localStorage.setItem('marginalia_volume', String(playbackVolume));
   audioElement.volume = playbackVolume;
+  if (typeof wasmGainNode !== 'undefined' && wasmGainNode && wasmGainNode.gain) {
+    wasmGainNode.gain.value = playbackVolume;
+  }
   volumeToggleBtn.textContent = playbackVolume === 0 ? '🔇' : '🔊';
 });
 

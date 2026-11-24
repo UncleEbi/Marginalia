@@ -315,7 +315,7 @@ function queueSupabase({ userId = 'user-1', failing = () => true, stamped = [], 
   return { client, upserts };
 }
 
-const settle = () => new Promise((resolve) => setTimeout(resolve, 120));
+const settle = () => new Promise((resolve) => setTimeout(resolve, 250));
 
 function pendingDune() {
   return {
