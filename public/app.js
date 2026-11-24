@@ -2540,11 +2540,59 @@ async function showShelfModal(mode = "shelf", options = {}) {
 
 navRecentList.addEventListener('click', () => showShelfModal("recent"));
 navMyShelf.addEventListener('click', () => showShelfModal("shelf"));
+
+const importModal = document.getElementById('importModal');
+const importChooseFileBtn = document.getElementById('importChooseFileBtn');
+const importArticleUrlInput = document.getElementById('importArticleUrlInput');
+const importArticleBtn = document.getElementById('importArticleBtn');
+const importArticleStatus = document.getElementById('importArticleStatus');
+
+function openImportModal() {
+  if (importModal) {
+    if (importArticleUrlInput) importArticleUrlInput.value = '';
+    if (importArticleStatus) {
+      importArticleStatus.style.display = 'none';
+      importArticleStatus.textContent = '';
+    }
+    importModal.style.display = 'flex';
+  }
+}
+
 navUploadFile.addEventListener('click', () => {
   closeDrawer();
-  fileInput.value = '';
-  fileInput.click();
+  openImportModal();
 });
+
+if (importChooseFileBtn) {
+  importChooseFileBtn.addEventListener('click', () => {
+    closeModalById('importModal');
+    fileInput.value = '';
+    fileInput.click();
+  });
+}
+
+if (importArticleBtn && importArticleUrlInput) {
+  importArticleBtn.addEventListener('click', () => {
+    const url = importArticleUrlInput.value.trim();
+    if (!url) {
+      if (importArticleStatus) {
+        importArticleStatus.style.display = 'block';
+        importArticleStatus.style.color = '#ef4444';
+        importArticleStatus.textContent = 'Please enter a web article URL.';
+      }
+      return;
+    }
+    closeModalById('importModal');
+    importWebArticle(url);
+  });
+
+  importArticleUrlInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      importArticleBtn.click();
+    }
+  });
+}
 
 // --- BACKUP / RESTORE BUTTONS ---
 const exportLibraryBtn = document.getElementById('exportLibraryBtn');
@@ -6349,9 +6397,8 @@ function repairSavedPages(pages) {
   }) : page));
 }
 
-// PRIMARY FILE IMPORT LISTENER (freemium teaser pattern)
-fileInput.addEventListener('change', async (event) => {
-  const file = event.target.files && event.target.files[0];
+// PRIMARY FILE IMPORT AND DOCUMENT LOADER
+async function loadDocumentFile(file) {
   if (!file) return;
 
   stopAudio();
@@ -6361,9 +6408,6 @@ fileInput.addEventListener('change', async (event) => {
   contentPane.innerHTML = `<div style="text-align:center; padding:3rem; color:var(--text-muted); font-style:italic;">Processing "${escapeHtml(file.name)}"...</div>`;
 
   try {
-    // Freemium teaser: extract only page 1 for unauthenticated users
-    // (signedIn, not isUserSignedIn: a local const with the same name as the
-    //  function would shadow it and hit the temporal dead zone in this block)
     const signedIn = await isUserSignedIn();
     let result;
 
@@ -6389,15 +6433,12 @@ fileInput.addEventListener('change', async (event) => {
     if (signedIn) {
       requestPersistentStorage();
       saveBookToShelf(currentDocName, bookPages, bookChapters);
-      // Show full access - all chapters available
       showFullAccessNotice();
     } else {
-      // Freemium: save only page 1, show sign-in prompt for more
       requestPersistentStorage();
       saveBookToShelfFreemium(currentDocName, bookPages, bookChapters);
       showTeaserAccessNotice();
     }
-
   } catch (err) {
     preloadStatus.textContent = "Error";
     alert(err.message);
@@ -6405,7 +6446,148 @@ fileInput.addEventListener('change', async (event) => {
   } finally {
     fileInput.value = '';
   }
+}
+
+async function importWebArticle(url) {
+  if (!url || typeof url !== 'string') return;
+  url = url.trim();
+  if (!/^https?:\/\//i.test(url)) {
+    alert('Please enter a valid HTTP or HTTPS article URL.');
+    return;
+  }
+
+  stopAudio();
+  preloadStatus.textContent = 'Fetching article...';
+  contentPane.innerHTML = `<div style="text-align:center; padding:3rem; color:var(--text-muted); font-style:italic;">Extracting article from ${escapeHtml(url)}...</div>`;
+
+  try {
+    const res = await fetch('/api/extract-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to extract article from URL.');
+    }
+
+    const title = data.title || 'Web Article';
+    const contentText = data.contentText || '';
+    if (!contentText.trim()) {
+      throw new Error('No readable article text found at this URL.');
+    }
+
+    currentDocName = title;
+    docTitle.textContent = currentDocName;
+
+    const sents = splitIntoSentences(contentText);
+    if (sents.length === 0) throw new Error('Document is empty.');
+
+    const pages = [];
+    for (let i = 0; i < sents.length; i += 5) {
+      pages.push(sents.slice(i, i + 5));
+    }
+    bookPages = pages;
+    bookChapters = [{ title: title, pageIndex: 0 }];
+    if (sleepTimerMode === 'chapter') clearSleepTimer();
+
+    currentPage = 0;
+    currentSentenceIdx = 0;
+    learnedCadenceMultiplier = cadenceByVoice.get(voiceCadenceKey()) || 1.0;
+    preloadStatus.textContent = 'Ready';
+    await refreshCurrentDocAnnotations();
+    renderPage(0);
+
+    const signedIn = await isUserSignedIn();
+    requestPersistentStorage();
+    if (signedIn) {
+      saveBookToShelf(currentDocName, bookPages, bookChapters);
+      showFullAccessNotice();
+    } else {
+      saveBookToShelfFreemium(currentDocName, bookPages, bookChapters);
+      showTeaserAccessNotice();
+    }
+  } catch (err) {
+    preloadStatus.textContent = 'Error';
+    alert(err.message);
+    renderPage(currentPage);
+  }
+}
+
+fileInput.addEventListener('change', async (event) => {
+  const file = event.target.files && event.target.files[0];
+  if (file) await loadDocumentFile(file);
 });
+
+// PWA SHARE TARGET HANDOFF
+function readAndClearShareHandoff() {
+  return new Promise((resolve) => {
+    if (typeof indexedDB === 'undefined') return resolve(null);
+    try {
+      const openReq = indexedDB.open('MarginaliaShareHandoff', 1);
+      openReq.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('handoff')) {
+          db.createObjectStore('handoff');
+        }
+      };
+      openReq.onsuccess = (e) => {
+        const db = e.target.result;
+        const tx = db.transaction('handoff', 'readwrite');
+        const store = tx.objectStore('handoff');
+        const getReq = store.get('latest');
+        getReq.onsuccess = () => {
+          const result = getReq.result;
+          store.delete('latest');
+          tx.oncomplete = () => { db.close(); resolve(result); };
+        };
+        getReq.onerror = () => { db.close(); resolve(null); };
+      };
+      openReq.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+async function checkShareHandoff() {
+  try {
+    if (typeof window === 'undefined' || !window.location) return;
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('shared') !== '1') return;
+
+    if (window.history && window.history.replaceState) {
+      const cleanSearch = window.location.search
+        .replace(/([?&])shared=1(&|$)/, '$1')
+        .replace(/[?&]$/, '');
+      const newUrl = window.location.pathname + (cleanSearch ? (cleanSearch.startsWith('?') ? cleanSearch : '?' + cleanSearch) : '');
+      window.history.replaceState({}, '', newUrl || '/');
+    }
+
+    const handoff = await readAndClearShareHandoff();
+    if (!handoff) return;
+
+    if (handoff.file && handoff.file.buffer) {
+      const file = new File([handoff.file.buffer], handoff.file.name || 'Shared Document', {
+        type: handoff.file.type || 'application/octet-stream'
+      });
+      await loadDocumentFile(file);
+    } else if (handoff.url) {
+      await importWebArticle(handoff.url);
+    } else if (handoff.text) {
+      const rawUrlMatch = handoff.text.match(/https?:\/\/[^\s]+/i);
+      if (rawUrlMatch) {
+        await importWebArticle(rawUrlMatch[0]);
+      } else {
+        const blob = new Blob([handoff.text], { type: 'text/plain' });
+        const file = new File([blob], (handoff.title || 'Shared Note') + '.txt', { type: 'text/plain' });
+        await loadDocumentFile(file);
+      }
+    }
+  } catch (err) {
+    console.error('Failed to process shared handoff:', err);
+  }
+}
 
 // STARTUP PREFERENCES RESTORATION
 const savedTheme = localStorage.getItem('marginalia_theme') || 'parchment';
@@ -6454,7 +6636,11 @@ audioElement.volume = playbackVolume;
 
 initIndexedDB().then(() => {
   refreshCurrentDocAnnotations().then(() => renderPage(0)).catch(() => renderPage(0));
-}).catch(() => renderPage(0));
+  checkShareHandoff();
+}).catch(() => {
+  renderPage(0);
+  checkShareHandoff();
+});
 populateVoices();
 updateAuthBadge();
 updateSleepTimerUI();

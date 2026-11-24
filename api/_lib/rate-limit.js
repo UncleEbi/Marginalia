@@ -52,6 +52,10 @@ export const TIERS = {
   // Paystack can legitimately burst after a sale; this is a flood ceiling, not a business limit.
   webhook: {
     ip: { limit: 200, windowSeconds: 60 }
+  },
+  // Web article URL extraction: 15 requests per minute per IP
+  extract_url: {
+    ip: { limit: 15, windowSeconds: 60 }
   }
 };
 

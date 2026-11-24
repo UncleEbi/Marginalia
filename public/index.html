@@ -484,6 +484,36 @@
     </div>
   </div>
 
+  <!-- IMPORT NEW DOCUMENT MODAL -->
+  <div id="importModal" class="modal-overlay">
+    <div class="modal-card">
+      <div class="modal-title">📂 Import New Document</div>
+      <p style="font-size:0.82rem; color:var(--text-muted); margin-bottom:1rem;">
+        Open a document file from your device or paste a web article link to read with synchronized audio.
+      </p>
+
+      <div style="margin-bottom:1.25rem;">
+        <label style="display:block; font-size:0.85rem; font-weight:600; margin-bottom:0.4rem; color:var(--text-main);">From File</label>
+        <button id="importChooseFileBtn" type="button" style="width:100%; padding:0.6rem; border-radius:6px; background:var(--accent); color:var(--btn-text); border:none; cursor:pointer; font-weight:600; font-size:0.9rem;">
+          📁 Choose File (PDF, EPUB, DOCX, TXT)
+        </button>
+      </div>
+
+      <div style="margin-bottom:1.25rem;">
+        <label for="importArticleUrlInput" style="display:block; font-size:0.85rem; font-weight:600; margin-bottom:0.4rem; color:var(--text-main);">Paste Article URL</label>
+        <div style="display:flex; gap:0.5rem;">
+          <input type="url" id="importArticleUrlInput" placeholder="https://example.com/article" style="flex:1; padding:0.5rem 0.75rem; border-radius:6px; border:1px solid var(--border); background:var(--bg-main); color:var(--text-main); font-size:0.88rem;" />
+          <button id="importArticleBtn" type="button" style="padding:0.5rem 0.9rem; border-radius:6px; background:var(--accent); color:var(--btn-text); border:none; cursor:pointer; font-weight:600; font-size:0.88rem; white-space:nowrap;">Import</button>
+        </div>
+        <div id="importArticleStatus" style="font-size:0.8rem; color:var(--text-muted); margin-top:0.35rem; display:none;"></div>
+      </div>
+
+      <div class="modal-footer-row" style="display:flex; justify-content:flex-end;">
+        <button id="closeImportModalBtn" data-close="importModal" type="button" style="padding:0.4rem 0.8rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); cursor:pointer;">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- MY SHELF MODAL -->
   <div id="shelfModal" class="modal-overlay">
     <div class="modal-card">

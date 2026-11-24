@@ -35,10 +35,73 @@ self.addEventListener('activate', (e) => {
   );
 });
 
+// Share target handoff store in IndexedDB
+function saveShareHandoff(data) {
+  return new Promise((resolve) => {
+    try {
+      const openReq = indexedDB.open('MarginaliaShareHandoff', 1);
+      openReq.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('handoff')) {
+          db.createObjectStore('handoff');
+        }
+      };
+      openReq.onsuccess = (e) => {
+        const db = e.target.result;
+        const tx = db.transaction('handoff', 'readwrite');
+        tx.objectStore('handoff').put(data, 'latest');
+        tx.oncomplete = () => { db.close(); resolve(true); };
+        tx.onerror = () => { db.close(); resolve(false); };
+      };
+      openReq.onerror = () => resolve(false);
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
 self.addEventListener('fetch', (e) => {
   const req = e.request;
-  if (req.method !== 'GET') return;
   const url = new URL(req.url);
+
+  // Intercept PWA Share Target POST
+  if (req.method === 'POST' && (url.pathname === '/share-target' || url.pathname.endsWith('/share-target'))) {
+    e.respondWith((async () => {
+      try {
+        const formData = await req.formData();
+        const title = formData.get('title') || '';
+        const text = formData.get('text') || '';
+        const sharedUrl = formData.get('url') || '';
+        const file = formData.get('document');
+
+        let fileData = null;
+        if (file && typeof file === 'object' && file.name) {
+          const buffer = await file.arrayBuffer();
+          fileData = {
+            name: file.name,
+            type: file.type || 'application/octet-stream',
+            buffer
+          };
+        }
+
+        const handoff = {
+          title: typeof title === 'string' ? title : '',
+          text: typeof text === 'string' ? text : '',
+          url: typeof sharedUrl === 'string' ? sharedUrl : '',
+          file: fileData,
+          timestamp: Date.now()
+        };
+
+        await saveShareHandoff(handoff);
+      } catch (err) {
+        console.error('Share target handoff error:', err);
+      }
+      return Response.redirect('/?shared=1', 303);
+    })());
+    return;
+  }
+
+  if (req.method !== 'GET') return;
   if (url.pathname.startsWith('/api/')) return; // Never cache dynamic backend summaries or TTS calls
 
   if (url.origin === self.location.origin) {
