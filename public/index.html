@@ -328,6 +328,7 @@
         <span id="docTitle" style="font-weight:600; max-width:65%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Marginalia Quickstart</span>
 
         <div style="display:flex; align-items:center; gap:0.4rem;">
+          <button id="pageViewToggleBtn" class="btn-page-view" style="display:none; padding:0.22rem 0.55rem; font-size:0.75rem; border-radius:5px; border:1px solid var(--border); background:var(--bg-main); color:var(--text-main); font-weight:600; cursor:pointer;" title="View original PDF page diagrams and tables">📄 Page View</button>
           <button id="addBookmarkBtn" class="bookmark-ribbon-btn" title="Bookmark Sentence">🔖</button>
           <span id="summaryReturnSpan" style="display:none;">
             <button id="exitSummaryBtn" style="padding:0.2rem 0.45rem; font-size:0.74rem; border-radius:4px; border:1px solid var(--border); background:var(--bg-main); color:var(--text-main);">← Book</button>
@@ -946,6 +947,36 @@
 
   <!-- Cloudflare Turnstile: loaded explicitly so the widget only appears when a challenge is required -->
   <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
+
+  <!-- ORIGINAL PAGE CANVAS DRAWER -->
+  <aside id="pageViewDrawer" class="page-view-drawer" aria-label="Original PDF Page View" style="display:none;">
+    <div class="page-view-header">
+      <div class="page-view-title-group">
+        <span class="page-view-title">📄 Original Page</span>
+        <span id="pageViewIndicator" class="page-view-indicator">Page 1</span>
+      </div>
+
+      <div class="page-view-controls">
+        <label class="page-view-toggle-label" title="Automatically sync page with audio read-along">
+          <input type="checkbox" id="pageViewAutoFollow" checked />
+          <span>Auto-follow audio</span>
+        </label>
+        <button id="pageViewPrevBtn" class="page-view-btn" title="Previous PDF Page">←</button>
+        <button id="pageViewNextBtn" class="page-view-btn" title="Next PDF Page">→</button>
+        <button id="pageViewZoomOutBtn" class="page-view-btn" title="Zoom out">−</button>
+        <span id="pageViewZoomLevel" style="font-size:0.75rem; min-width:35px; text-align:center;">100%</span>
+        <button id="pageViewZoomInBtn" class="page-view-btn" title="Zoom in">+</button>
+        <button id="pageViewCloseBtn" class="page-view-btn page-view-close" title="Close Page View">✕</button>
+      </div>
+    </div>
+
+    <div id="pageViewContent" class="page-view-body">
+      <div id="pageViewLoading" style="display:none; text-align:center; padding:2rem; color:var(--text-muted); font-size:0.85rem;">Rendering page...</div>
+      <div id="pageViewCanvasContainer" class="page-view-canvas-wrap">
+        <canvas id="pageViewCanvas"></canvas>
+      </div>
+    </div>
+  </aside>
 
   <!-- APPLICATION LOGIC -->
   <script src="app.js"></script>
