@@ -758,6 +758,31 @@
           </select>
         </div>
 
+        <div>
+          <label style="font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:0.35rem;">Skip Code & Raw Tables</label>
+          <select id="skipCodeTablesSelect" style="width:100%; padding:0.45rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:16px;">
+            <option value="off" selected>Off (Read all text)</option>
+            <option value="on">On (Skip code blocks & dense symbol tables)</option>
+          </select>
+        </div>
+
+        <details id="pronunciationDictSection" style="border:1px solid var(--border); border-radius:8px; padding:0.6rem 0.8rem; background:var(--bg-card); margin-top:0.35rem;">
+          <summary style="font-weight:600; cursor:pointer; font-size:0.85rem; user-select:none; color:var(--text-main);">
+            🗣️ Pronunciation Dictionary
+          </summary>
+          <div style="margin-top:0.6rem;">
+            <p style="font-size:0.74rem; color:var(--text-muted); margin-bottom:0.5rem;">
+              Replace technical abbreviations and course acronyms with how they should be spoken aloud.
+            </p>
+            <div style="display:flex; gap:0.4rem; margin-bottom:0.5rem; flex-wrap:wrap;">
+              <input type="text" id="dictWordInput" placeholder="Word (e.g. IEEE)" style="flex:1; min-width:90px; padding:0.4rem 0.5rem; border-radius:5px; border:1px solid var(--border); background:var(--bg-main); color:var(--text-main); font-size:0.8rem;" />
+              <input type="text" id="dictSpokenInput" placeholder="Spoken As (e.g. I triple E)" style="flex:1; min-width:120px; padding:0.4rem 0.5rem; border-radius:5px; border:1px solid var(--border); background:var(--bg-main); color:var(--text-main); font-size:0.8rem;" />
+              <button id="dictAddBtn" type="button" style="padding:0.4rem 0.75rem; border-radius:5px; background:var(--accent); color:#fff; border:none; font-weight:600; font-size:0.8rem; cursor:pointer;">+ Add</button>
+            </div>
+            <div id="dictList" style="max-height:140px; overflow-y:auto; display:flex; flex-direction:column; gap:0.3rem;"></div>
+          </div>
+        </details>
+
         <div id="karaokeCalibrationContainer" style="border-top:1px dashed var(--border); padding-top:0.75rem;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.3rem;">
             <label style="font-weight:600; font-size:0.85rem;">Karaoke Sync Adjustment</label>

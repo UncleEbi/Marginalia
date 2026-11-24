@@ -50,7 +50,7 @@ test('public/app.js implements cache-first playback before fetching TTS', () => 
   const app = read('public/app.js');
   const getNeuralSrcIdx = app.indexOf('async function getNeuralAudioSrc(text)');
   assert.ok(getNeuralSrcIdx > -1, 'getNeuralAudioSrc exists');
-  const body = app.slice(getNeuralSrcIdx, getNeuralSrcIdx + 3000);
+  const body = app.slice(getNeuralSrcIdx, getNeuralSrcIdx + 5000);
 
   const idbCheckIdx = body.indexOf('getAudioFromIdbCache');
   const fetchTtsIdx = body.indexOf("fetch('/api/tts'");

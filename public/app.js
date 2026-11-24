@@ -1827,6 +1827,11 @@ let currentStudyKitTab = 'markdown';
 const bionicModeSelect = document.getElementById('bionicModeSelect');
 const pacingRulerSelect = document.getElementById('pacingRulerSelect');
 const smartPdfCleanupSelect = document.getElementById('smartPdfCleanupSelect');
+const skipCodeTablesSelect = document.getElementById('skipCodeTablesSelect');
+const dictWordInput = document.getElementById('dictWordInput');
+const dictSpokenInput = document.getElementById('dictSpokenInput');
+const dictAddBtn = document.getElementById('dictAddBtn');
+const dictList = document.getElementById('dictList');
 let bionicMode = localStorage.getItem('marginalia_bionic_mode') || 'off';
 let pacingRulerMode = localStorage.getItem('marginalia_pacing_ruler') || 'off';
 let smartPdfCleanup = localStorage.getItem('marginalia_smart_pdf_cleanup') !== 'off';
@@ -3235,6 +3240,8 @@ function openOptionsModal() {
   if (bionicModeSelect) bionicModeSelect.value = bionicMode;
   if (pacingRulerSelect) pacingRulerSelect.value = pacingRulerMode;
   if (smartPdfCleanupSelect) smartPdfCleanupSelect.value = smartPdfCleanup ? 'on' : 'off';
+  if (skipCodeTablesSelect) skipCodeTablesSelect.value = localStorage.getItem('marginalia_skip_code_tables') || 'off';
+  renderPronunciationDictUI();
   karaokeCalibrationContainer.style.display = highlightMode === 'word' ? 'block' : 'none';
   customOpenAiKeyInput.value = localStorage.getItem('marginalia_byok_openai') || '';
   customElevenKeyInput.value = localStorage.getItem('marginalia_byok_eleven') || '';
@@ -3341,6 +3348,9 @@ saveOptionsBtn.addEventListener('click', () => {
   if (smartPdfCleanupSelect) {
     smartPdfCleanup = smartPdfCleanupSelect.value !== 'off';
     localStorage.setItem('marginalia_smart_pdf_cleanup', smartPdfCleanup ? 'on' : 'off');
+  }
+  if (skipCodeTablesSelect) {
+    localStorage.setItem('marginalia_skip_code_tables', skipCodeTablesSelect.value);
   }
 
   applyFontFace(selectedFont);
@@ -4498,6 +4508,136 @@ function highlightActiveWord(wIdx) {
   });
 }
 
+// --- STEM-AWARE SPEECH RULES & PRONUNCIATION DICTIONARY ---
+function getPronunciationDict() {
+  try {
+    const raw = localStorage.getItem('marginalia_pronunciation_dict');
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function savePronunciationDict(dict) {
+  try {
+    localStorage.setItem('marginalia_pronunciation_dict', JSON.stringify(dict));
+  } catch (e) {
+    console.warn('Could not persist pronunciation dictionary:', e);
+  }
+}
+
+function isDenseCodeOrTable(str) {
+  if (!str || typeof str !== 'string') return false;
+  const trimmed = str.trim();
+  if (trimmed.startsWith('```') || trimmed.endsWith('```')) return true;
+  if (trimmed.length > 40) {
+    const symbols = trimmed.match(/[{}[\]()<>;:=+\-*\/\\|_~`^$%#@&]/g);
+    const symbolCount = symbols ? symbols.length : 0;
+    if (symbolCount / trimmed.length > 0.35) return true;
+  }
+  return false;
+}
+
+function normalizeForSpeech(text) {
+  if (!text || typeof text !== 'string') return '';
+  let s = text;
+
+  // 1. Skip Code & Raw Tables check (toggleable in Reading Options)
+  const skipCode = localStorage.getItem('marginalia_skip_code_tables') === 'on';
+  if (skipCode && isDenseCodeOrTable(s)) {
+    return 'Code block skipped.';
+  }
+
+  // 2. Custom pronunciation dictionary replacements (case-sensitive, word boundaries)
+  const dict = getPronunciationDict();
+  if (Array.isArray(dict)) {
+    for (const item of dict) {
+      if (item && item.word && typeof item.word === 'string' && item.spokenAs && typeof item.spokenAs === 'string') {
+        const escaped = item.word.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if (escaped) {
+          s = s.replace(new RegExp(`\\b${escaped}\\b`, 'g'), item.spokenAs.trim());
+        }
+      }
+    }
+  }
+
+  // 3. STEM & Academic abbreviation expansions
+  // Fig. & Figs.
+  s = s.replace(/\bFigs\.\s*(\d+)/gi, 'Figures $1');
+  s = s.replace(/\bFig\.\s*(\d+)/gi, 'Figure $1');
+  s = s.replace(/\bFigs\./gi, 'Figures');
+  s = s.replace(/\bFig\./gi, 'Figure');
+
+  // Eq. & Eqs.
+  s = s.replace(/\bEqs\.\s*(\d+)/gi, 'Equations $1');
+  s = s.replace(/\bEq\.\s*(\d+)/gi, 'Equation $1');
+  s = s.replace(/\bEqs\./gi, 'Equations');
+  s = s.replace(/\bEq\./gi, 'Equation');
+
+  // et al.
+  s = s.replace(/\bet\s+al\.(?=\s|[.,;!?]|$)/gi, 'et all');
+
+  // e.g. & i.e.
+  s = s.replace(/\be\.g\.,?/gi, 'for example');
+  s = s.replace(/\bi\.e\.,?/gi, 'that is');
+
+  // STEM units: kWh, MHz, Ω
+  s = s.replace(/\b(\d+(?:\.\d+)?)\s*kWh\b/g, '$1 kilowatt hours');
+  s = s.replace(/\bkWh\b/g, 'kilowatt hours');
+  s = s.replace(/\b(\d+(?:\.\d+)?)\s*MHz\b/g, '$1 megahertz');
+  s = s.replace(/\bMHz\b/g, 'megahertz');
+  s = s.replace(/\b(\d+(?:\.\d+)?)\s*Ω\b/g, '$1 ohms');
+  s = s.replace(/Ω/g, 'ohms');
+
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+function renderPronunciationDictUI() {
+  if (typeof dictList === 'undefined' || !dictList) return;
+  const dict = getPronunciationDict();
+  dictList.innerHTML = '';
+  if (!dict || dict.length === 0) {
+    dictList.innerHTML = '<span style="font-size:0.75rem; color:var(--text-muted); font-style:italic;">No custom pronunciations added yet.</span>';
+    return;
+  }
+  dict.forEach((entry, idx) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; background:var(--bg-main); padding:0.3rem 0.5rem; border-radius:4px; font-size:0.8rem; border:1px solid var(--border);';
+    row.innerHTML = `<span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:80%;"><strong style="color:var(--text-main);">${escapeHtml(entry.word)}</strong> &rarr; <span style="color:var(--accent);">${escapeHtml(entry.spokenAs)}</span></span><button type="button" data-idx="${idx}" style="background:transparent; border:none; color:var(--danger, #e53e3e); cursor:pointer; font-size:0.9rem; padding:0 0.2rem;" title="Delete">&times;</button>`;
+    const delBtn = row.querySelector('button');
+    if (delBtn) {
+      delBtn.addEventListener('click', () => {
+        const current = getPronunciationDict();
+        current.splice(idx, 1);
+        savePronunciationDict(current);
+        renderPronunciationDictUI();
+      });
+    }
+    dictList.appendChild(row);
+  });
+}
+
+if (typeof dictAddBtn !== 'undefined' && dictAddBtn) {
+  dictAddBtn.addEventListener('click', () => {
+    const word = (typeof dictWordInput !== 'undefined' && dictWordInput) ? dictWordInput.value.trim() : '';
+    const spokenAs = (typeof dictSpokenInput !== 'undefined' && dictSpokenInput) ? dictSpokenInput.value.trim() : '';
+    if (!word || !spokenAs) return;
+    const current = getPronunciationDict();
+    const existingIndex = current.findIndex(e => e.word.toLowerCase() === word.toLowerCase());
+    if (existingIndex >= 0) {
+      current[existingIndex] = { word, spokenAs };
+    } else {
+      current.push({ word, spokenAs });
+    }
+    savePronunciationDict(current);
+    if (typeof dictWordInput !== 'undefined' && dictWordInput) dictWordInput.value = '';
+    if (typeof dictSpokenInput !== 'undefined' && dictSpokenInput) dictSpokenInput.value = '';
+    renderPronunciationDictUI();
+  });
+}
+
 // --- PLAYBACK ENGINE ---
 async function playCurrentSentence() {
   // Sleep timer: stop exactly at a sentence boundary (stays accurate even when a
@@ -4553,7 +4693,8 @@ function speakBrowser(text) {
   browserSpeech.cancel();
   cancelWordAnimation();
 
-  const utter = new SpeechSynthesisUtterance(text);
+  const spokenText = normalizeForSpeech(text);
+  const utter = new SpeechSynthesisUtterance(spokenText);
   currentUtterance = utter;
   utter.rate = playbackSpeed;
   utter.volume = playbackVolume;
@@ -4938,7 +5079,8 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
 }
 
 async function getNeuralAudioSrc(text) {
-  const key = neuralCacheKey(text);
+  const spokenText = normalizeForSpeech(text);
+  const key = neuralCacheKey(spokenText);
   const hit = audioPreloadCache.get(key);
   if (hit && hit.src) return hit.src;
   if (audioInflight.has(key)) return audioInflight.get(key);
@@ -4950,7 +5092,7 @@ async function getNeuralAudioSrc(text) {
   const speed = 1;
 
   // 1. Check persistent IndexedDB audio cache FIRST (cache-first playback)
-  const cacheKey = await computeAudioCacheKey(engine, voiceId, speed, text);
+  const cacheKey = await computeAudioCacheKey(engine, voiceId, speed, spokenText);
   try {
     const cachedBlob = await getAudioFromIdbCache(cacheKey);
     if (cachedBlob && cachedBlob.size > 0) {
@@ -4976,7 +5118,7 @@ async function getNeuralAudioSrc(text) {
 
   if (engine === 'wasm') {
     const job = (async () => {
-      const src = await synthOnDeviceSpeech(text, voiceId);
+      const src = await synthOnDeviceSpeech(spokenText, voiceId);
       try {
         if (src.startsWith('blob:') || src.startsWith('data:')) {
           const resp = await fetch(src);
@@ -5013,7 +5155,7 @@ async function getNeuralAudioSrc(text) {
     const res = await fetch('/api/tts', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ text, voiceId, engine, speed })
+      body: JSON.stringify({ text: spokenText, voiceId, engine, speed })
     });
     let src = '';
     let remaining = res.headers.get('X-Remaining-Chars');
@@ -7108,6 +7250,9 @@ document.body.classList.toggle('pacing-ruler-active', pacingRulerMode === 'activ
 const savedPdfCleanup = localStorage.getItem('marginalia_smart_pdf_cleanup');
 smartPdfCleanup = savedPdfCleanup !== 'off';
 if (smartPdfCleanupSelect) smartPdfCleanupSelect.value = smartPdfCleanup ? 'on' : 'off';
+
+const savedSkipCode = localStorage.getItem('marginalia_skip_code_tables') || 'off';
+if (skipCodeTablesSelect) skipCodeTablesSelect.value = savedSkipCode;
 
 const savedCalibration = localStorage.getItem('marginalia_sync_calibration');
 if (savedCalibration) {
