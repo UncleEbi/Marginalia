@@ -134,6 +134,80 @@ function initIndexedDB() {
   });
 }
 
+async function withIdbStore(storeName, mode, callback, fallbackValue = null) {
+  if (!dbInstance) await initIndexedDB();
+  if (!dbInstance || !dbInstance.objectStoreNames.contains(storeName)) return fallbackValue;
+  return new Promise((resolve) => {
+    try {
+      const tx = dbInstance.transaction([storeName], mode);
+      const store = tx.objectStore(storeName);
+      callback(store, tx, resolve);
+    } catch {
+      resolve(fallbackValue);
+    }
+  });
+}
+
+function encodeMonoWavBuffer(pcmData, sampleRate = 22050) {
+  const totalSamples = pcmData.length;
+  const buffer = new ArrayBuffer(44 + totalSamples * 2);
+  const view = new DataView(buffer);
+  const writeStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + totalSamples * 2, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, 'data');
+  view.setUint32(40, totalSamples * 2, true);
+
+  for (let i = 0; i < totalSamples; i++) {
+    const raw = pcmData[i];
+    const s = Number.isFinite(raw) ? Math.max(-1, Math.min(1, raw)) : 0;
+    view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+  return buffer;
+}
+
+function extractWavPcm(arrayBuffer) {
+  if (!arrayBuffer || arrayBuffer.byteLength < 44) return null;
+  const view = new DataView(arrayBuffer);
+  const readStr = (off) => String.fromCharCode(
+    view.getUint8(off), view.getUint8(off + 1), view.getUint8(off + 2), view.getUint8(off + 3)
+  );
+  if (readStr(0) !== 'RIFF' || readStr(8) !== 'WAVE') return null;
+
+  const sampleRate = view.getUint32(24, true) || 22050;
+  const bitsPerSample = view.getUint16(34, true) || 16;
+  let offset = 12;
+  while (offset + 8 <= arrayBuffer.byteLength) {
+    const id = readStr(offset);
+    const size = view.getUint32(offset + 4, true);
+    if (id === 'data') {
+      const start = offset + 8;
+      const byteLen = Math.min(size, arrayBuffer.byteLength - start);
+      if (bitsPerSample === 16) {
+        const count = Math.floor(byteLen / 2);
+        const pcmData = new Float32Array(count);
+        for (let i = 0; i < count; i++) {
+          pcmData[i] = view.getInt16(start + i * 2, true) / 0x8000;
+        }
+        return { pcmData, sampleRate };
+      }
+      return null;
+    }
+    offset += 8 + size + (size % 2);
+  }
+  return null;
+}
+
 // --- INDEXEDDB AUDIO CACHE (100 MB LRU CAP) ---
 const AUDIO_CACHE_MAX_BYTES = 100 * 1024 * 1024; // 100 MB
 const AUDIO_CACHE_TARGET_BYTES = 85 * 1024 * 1024; // 85 MB
@@ -262,11 +336,6 @@ async function saveBookToShelf(title, pages, chapters = [], options = {}) {
   }
 }
 
-// Freemium teaser: save only page 1 data to shelf
-async function saveBookToShelfFreemium(title, pages, chapters = [], options = {}) {
-  await saveBookToShelf(title, pages, chapters, options);
-}
-
 // Show teaser access notice (for unauthenticated users)
 function showTeaserAccessNotice() {
   const existing = document.getElementById('freemiumTeaserNotice');
@@ -331,7 +400,7 @@ async function syncBookmarkToCloud(bookTitle, page, sentenceIdx, snippet) {
       snippet: snippet || '',
       created_at: new Date().toISOString()
     }, { onConflict: 'user_id,book_title,page,sentence_idx' });
-  } catch (e) {}
+  } catch (e) { }
 }
 
 async function syncAnnotationToCloud(ann) {
@@ -351,7 +420,7 @@ async function syncAnnotationToCloud(ann) {
       created_at: typeof ann.createdAt === 'number' ? new Date(ann.createdAt).toISOString() : (ann.createdAt || new Date().toISOString()),
       updated_at: new Date().toISOString()
     }, { onConflict: 'user_id,book_title,page,sentence_idx,type' });
-  } catch (e) {}
+  } catch (e) { }
 }
 
 async function deleteCloudAnnotation(bookTitle, page, sentenceIdx, type) {
@@ -367,7 +436,7 @@ async function deleteCloudAnnotation(bookTitle, page, sentenceIdx, type) {
       .eq('sentence_idx', sentenceIdx);
     if (type) q = q.eq('type', type);
     await q;
-  } catch (e) {}
+  } catch (e) { }
 }
 
 /**
@@ -481,11 +550,7 @@ async function syncAllWithCloud() {
 }
 
 async function getAllBooksFromShelf() {
-  if (!dbInstance) await initIndexedDB();
-  if (!dbInstance) return [];
-  return new Promise((resolve) => {
-    const tx = dbInstance.transaction(["books"], "readonly");
-    const store = tx.objectStore("books");
+  return withIdbStore('books', 'readonly', (store, _tx, resolve) => {
     const req = store.getAll();
     req.onsuccess = () => {
       const list = req.result || [];
@@ -493,19 +558,16 @@ async function getAllBooksFromShelf() {
       resolve(list);
     };
     req.onerror = () => resolve([]);
-  });
+  }, []);
 }
 
 async function deleteBookFromShelf(bookId) {
-  if (!dbInstance) await initIndexedDB();
-  if (!dbInstance) return;
-  return new Promise((resolve) => {
-    const tx = dbInstance.transaction(["books"], "readwrite");
-    const store = tx.objectStore("books");
+  return withIdbStore('books', 'readwrite', (store, tx, resolve) => {
     store.delete(bookId);
     tx.oncomplete = () => resolve(true);
     tx.onerror = () => resolve(false);
-  });
+    tx.onabort = () => resolve(false);
+  }, false);
 }
 
 // ==============================
@@ -1490,10 +1552,7 @@ async function openPaywall() {
 }
 
 async function updateBookProgressInDB(title, page, sentenceIdx) {
-  if (!dbInstance) return;
-  try {
-    const tx = dbInstance.transaction(["books"], "readwrite");
-    const store = tx.objectStore("books");
+  return withIdbStore('books', 'readwrite', (store, tx, resolve) => {
     const req = store.getAll();
     req.onsuccess = () => {
       const book = (req.result || []).find(b => b.title === title);
@@ -1505,177 +1564,132 @@ async function updateBookProgressInDB(title, page, sentenceIdx) {
         book.pendingSync = true;
         store.put(book);
       }
+      resolve(true);
     };
-  } catch (e) { }
+    req.onerror = () => resolve(false);
+  }, false);
 }
 
 async function saveBookmarkToDB(title, page, sentenceIdx, snippet) {
-  if (!dbInstance) await initIndexedDB();
-  if (!dbInstance) return;
-  const tx = dbInstance.transaction(["bookmarks"], "readwrite");
-  const store = tx.objectStore("bookmarks");
-  store.add({ bookTitle: title, page, sentenceIdx, snippet, createdAt: Date.now() });
+  return withIdbStore('bookmarks', 'readwrite', (store, tx, resolve) => {
+    store.add({ bookTitle: title, page, sentenceIdx, snippet, createdAt: Date.now() });
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  }, false);
 }
 
 async function getBookmarksFromDB() {
-  if (!dbInstance) await initIndexedDB();
-  if (!dbInstance) return [];
-  return new Promise((resolve) => {
-    const tx = dbInstance.transaction(["bookmarks"], "readonly");
-    const store = tx.objectStore("bookmarks");
+  return withIdbStore('bookmarks', 'readonly', (store, _tx, resolve) => {
     const req = store.getAll();
     req.onsuccess = () => resolve(req.result || []);
     req.onerror = () => resolve([]);
-  });
+  }, []);
 }
 
 async function deleteBookmarkFromDB(id) {
-  if (!dbInstance) await initIndexedDB();
-  if (!dbInstance) return false;
-  return new Promise((resolve) => {
-    const tx = dbInstance.transaction(["bookmarks"], "readwrite");
-    tx.objectStore("bookmarks").delete(id);
+  return withIdbStore('bookmarks', 'readwrite', (store, tx, resolve) => {
+    store.delete(id);
     tx.oncomplete = () => resolve(true);
     tx.onerror = () => resolve(false);
     tx.onabort = () => resolve(false);
-  });
+  }, false);
 }
 
 async function saveAnnotationToDB({ id, bookTitle, page, sentenceIdx, quoteText, noteText, color }) {
-  if (!dbInstance) await initIndexedDB();
-  if (!dbInstance) return null;
-  return new Promise((resolve) => {
-    try {
-      const tx = dbInstance.transaction(["annotations"], "readwrite");
-      const store = tx.objectStore("annotations");
-      const item = {
-        bookTitle: bookTitle || '',
-        page: Number.isFinite(page) ? page : 0,
-        sentenceIdx: Number.isFinite(sentenceIdx) ? sentenceIdx : 0,
-        quoteText: quoteText || '',
-        noteText: noteText || '',
-        color: color || 'amber',
-        updatedAt: Date.now()
+  return withIdbStore('annotations', 'readwrite', (store, _tx, resolve) => {
+    const item = {
+      bookTitle: bookTitle || '',
+      page: Number.isFinite(page) ? page : 0,
+      sentenceIdx: Number.isFinite(sentenceIdx) ? sentenceIdx : 0,
+      quoteText: quoteText || '',
+      noteText: noteText || '',
+      color: color || 'amber',
+      updatedAt: Date.now()
+    };
+    if (id != null) {
+      item.id = id;
+      const req = store.put(item);
+      req.onsuccess = () => {
+        syncAnnotationToCloud(item).catch(() => {});
+        resolve(item);
       };
-      if (id != null) {
-        item.id = id;
-        const req = store.put(item);
-        req.onsuccess = () => {
-          syncAnnotationToCloud(item).catch(() => { });
-          resolve(item);
-        };
-        req.onerror = () => resolve(null);
-      } else {
-        item.createdAt = Date.now();
-        const req = store.add(item);
-        req.onsuccess = (e) => {
-          const res = { id: e.target.result, ...item };
-          syncAnnotationToCloud(res).catch(() => { });
-          resolve(res);
-        };
-        req.onerror = () => resolve(null);
-      }
-    } catch (e) {
-      resolve(null);
+      req.onerror = () => resolve(null);
+    } else {
+      item.createdAt = Date.now();
+      const req = store.add(item);
+      req.onsuccess = (e) => {
+        const res = { id: e.target.result, ...item };
+        syncAnnotationToCloud(res).catch(() => {});
+        resolve(res);
+      };
+      req.onerror = () => resolve(null);
     }
-  });
+  }, null);
 }
 
 async function getAnnotationsFromDB(bookTitle = null) {
-  if (!dbInstance) await initIndexedDB();
-  if (!dbInstance) return [];
-  return new Promise((resolve) => {
-    try {
-      const tx = dbInstance.transaction(["annotations"], "readonly");
-      const store = tx.objectStore("annotations");
-      const req = store.getAll();
-      req.onsuccess = () => {
-        let list = req.result || [];
-        if (bookTitle) list = list.filter(a => a.bookTitle === bookTitle);
-        list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-        resolve(list);
-      };
-      req.onerror = () => resolve([]);
-    } catch (e) {
-      resolve([]);
-    }
-  });
+  return withIdbStore('annotations', 'readonly', (store, _tx, resolve) => {
+    const req = store.getAll();
+    req.onsuccess = () => {
+      let list = req.result || [];
+      if (bookTitle) list = list.filter(a => a.bookTitle === bookTitle);
+      list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      resolve(list);
+    };
+    req.onerror = () => resolve([]);
+  }, []);
 }
 
 async function deleteAnnotationFromDB(id) {
-  if (!dbInstance) await initIndexedDB();
-  if (!dbInstance) return false;
-  return new Promise((resolve) => {
-    try {
-      const tx = dbInstance.transaction(["annotations"], "readwrite");
-      const store = tx.objectStore("annotations");
-      const req = store.delete(id);
-      req.onsuccess = () => resolve(true);
-      req.onerror = () => resolve(false);
-    } catch (e) {
-      resolve(false);
-    }
-  });
+  return withIdbStore('annotations', 'readwrite', (store, _tx, resolve) => {
+    const req = store.delete(id);
+    req.onsuccess = () => resolve(true);
+    req.onerror = () => resolve(false);
+  }, false);
 }
 
 async function saveVocabToDB({ word, partOfSpeech, definition, bookTitle, context }) {
-  if (!dbInstance) await initIndexedDB();
-  if (!dbInstance) return null;
-  return new Promise((resolve) => {
-    try {
-      const tx = dbInstance.transaction(["vocabulary"], "readwrite");
-      const store = tx.objectStore("vocabulary");
-      const req = store.getAll();
-      req.onsuccess = () => {
-        const existing = (req.result || []).find(v => v.word.toLowerCase() === (word || '').toLowerCase());
-        if (existing) {
-          existing.partOfSpeech = partOfSpeech || existing.partOfSpeech;
-          existing.definition = definition || existing.definition;
-          existing.context = context || existing.context;
-          existing.updatedAt = Date.now();
-          store.put(existing);
-          resolve(existing);
-        } else {
-          const item = {
-            word: (word || '').toLowerCase(),
-            partOfSpeech: partOfSpeech || '',
-            definition: definition || '',
-            bookTitle: bookTitle || '',
-            context: context || '',
-            createdAt: Date.now(),
-            updatedAt: Date.now()
-          };
-          const addReq = store.add(item);
-          addReq.onsuccess = (e) => resolve({ id: e.target.result, ...item });
-          addReq.onerror = () => resolve(null);
-        }
-      };
-      req.onerror = () => resolve(null);
-    } catch (e) {
-      resolve(null);
-    }
-  });
+  return withIdbStore('vocabulary', 'readwrite', (store, _tx, resolve) => {
+    const req = store.getAll();
+    req.onsuccess = () => {
+      const existing = (req.result || []).find(v => v.word.toLowerCase() === (word || '').toLowerCase());
+      if (existing) {
+        existing.partOfSpeech = partOfSpeech || existing.partOfSpeech;
+        existing.definition = definition || existing.definition;
+        existing.context = context || existing.context;
+        existing.updatedAt = Date.now();
+        store.put(existing);
+        resolve(existing);
+      } else {
+        const item = {
+          word: (word || '').toLowerCase(),
+          partOfSpeech: partOfSpeech || '',
+          definition: definition || '',
+          bookTitle: bookTitle || '',
+          context: context || '',
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        };
+        const addReq = store.add(item);
+        addReq.onsuccess = (e) => resolve({ id: e.target.result, ...item });
+        addReq.onerror = () => resolve(null);
+      }
+    };
+    req.onerror = () => resolve(null);
+  }, null);
 }
 
 async function getVocabFromDB(bookTitle = null) {
-  if (!dbInstance) await initIndexedDB();
-  if (!dbInstance) return [];
-  return new Promise((resolve) => {
-    try {
-      const tx = dbInstance.transaction(["vocabulary"], "readonly");
-      const store = tx.objectStore("vocabulary");
-      const req = store.getAll();
-      req.onsuccess = () => {
-        let list = req.result || [];
-        if (bookTitle) list = list.filter(v => !v.bookTitle || v.bookTitle === bookTitle);
-        list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-        resolve(list);
-      };
-      req.onerror = () => resolve([]);
-    } catch (e) {
-      resolve([]);
-    }
-  });
+  return withIdbStore('vocabulary', 'readonly', (store, _tx, resolve) => {
+    const req = store.getAll();
+    req.onsuccess = () => {
+      let list = req.result || [];
+      if (bookTitle) list = list.filter(v => !v.bookTitle || v.bookTitle === bookTitle);
+      list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      resolve(list);
+    };
+    req.onerror = () => resolve([]);
+  }, []);
 }
 
 let currentDocAnnotations = [];
@@ -1749,6 +1763,8 @@ const prevPageBtn = document.getElementById('prevPageBtn');
 const nextPageBtn = document.getElementById('nextPageBtn');
 const pageIndicatorText = document.getElementById('pageIndicatorText');
 const chapterIndicatorText = document.getElementById('chapterIndicatorText');
+const readerChapterBtn = document.getElementById('readerChapterBtn');
+const readerChapterLabel = document.getElementById('readerChapterLabel');
 const openJumpModalBtn = document.getElementById('openJumpModalBtn');
 const speedCycleBtn = document.getElementById('speedCycleBtn');
 const autoFlipCheck = document.getElementById('autoFlipCheck');
@@ -1770,6 +1786,7 @@ const sideDrawer = document.getElementById('sideDrawer');
 const drawerOverlay = document.getElementById('drawerOverlay');
 const navRecentList = document.getElementById('navRecentList');
 const navMyShelf = document.getElementById('navMyShelf');
+const navChapters = document.getElementById('navChapters');
 const navBookmarks = document.getElementById('navBookmarks');
 const navAnnotations = document.getElementById('navAnnotations');
 const navStudyKit = document.getElementById('navStudyKit');
@@ -1938,19 +1955,21 @@ let speakToken = 0;
 function cancelAllSpeech() {
   stopBrowserSpeechKeepAlive();
   speakToken++;
-  wasmScheduledToken = speakToken;
+  if (typeof wasmSessionId !== 'undefined') wasmSessionId++;
   currentUtterance = null;
   audioElement.onended = null;
   audioElement.ontimeupdate = null;
   audioElement.onloadedmetadata = null;
   browserSpeech.cancel();
   try { audioElement.pause(); } catch (e) { }
-  if (typeof wasmActiveSourceNode !== 'undefined' && wasmActiveSourceNode) {
-    try { wasmActiveSourceNode.stop(); wasmActiveSourceNode.disconnect(); } catch (e) {}
-    wasmActiveSourceNode = null;
+  if (typeof wasmActiveSourceNodes !== 'undefined' && wasmActiveSourceNodes) {
+    wasmActiveSourceNodes.forEach((node) => {
+      try { node.onended = null; node.stop(); node.disconnect(); } catch (e) {}
+    });
+    wasmActiveSourceNodes.clear();
   }
+  if (typeof wasmScheduledChunks !== 'undefined') wasmScheduledChunks.clear();
   if (typeof wasmScheduledEndTime !== 'undefined') wasmScheduledEndTime = 0;
-  if (typeof wasmScheduledSentenceIdx !== 'undefined') wasmScheduledSentenceIdx = -1;
   cancelWordAnimation();
 }
 
@@ -1966,15 +1985,7 @@ function applyChosenVoice(utter) {
 var keepAliveAudio = null;
 
 function makeSilentWavUrl() {
-  const sampleRate = 8000, n = sampleRate;
-  const buf = new ArrayBuffer(44 + n);
-  const v = new DataView(buf);
-  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
-  w(0, 'RIFF'); v.setUint32(4, 36 + n, true); w(8, 'WAVE'); w(12, 'fmt ');
-  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
-  v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate, true);
-  v.setUint16(32, 1, true); v.setUint16(34, 8, true); w(36, 'data'); v.setUint32(40, n, true);
-  new Uint8Array(buf, 44).fill(128);
+  const buf = encodeMonoWavBuffer(new Float32Array(8000), 8000);
   return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
 }
 
@@ -2006,7 +2017,7 @@ function startBrowserSpeechKeepAlive() {
     }
     const p = keepAliveAudio.play();
     if (p && typeof p.catch === 'function') {
-      p.catch(() => {});
+      p.catch(() => { });
     }
   } catch (e) {
     console.warn('Keep-alive audio failed:', e);
@@ -2018,7 +2029,7 @@ function stopBrowserSpeechKeepAlive() {
     try {
       keepAliveAudio.pause();
       keepAliveAudio.currentTime = 0;
-    } catch (e) {}
+    } catch (e) { }
   }
 }
 
@@ -2435,7 +2446,7 @@ async function renderOriginalPdfPage(pageNum) {
 
   // Cancel in-flight render task before starting a new one (memory & CPU optimization)
   if (pageViewRenderTask) {
-    try { pageViewRenderTask.cancel(); } catch {}
+    try { pageViewRenderTask.cancel(); } catch { }
     pageViewRenderTask = null;
   }
 
@@ -2491,7 +2502,7 @@ function openPageViewDrawer() {
 
 function closePageViewDrawer() {
   if (pageViewRenderTask) {
-    try { pageViewRenderTask.cancel(); } catch {}
+    try { pageViewRenderTask.cancel(); } catch { }
     pageViewRenderTask = null;
   }
   if (pageViewDrawer) pageViewDrawer.style.display = 'none';
@@ -2742,7 +2753,18 @@ sideDrawer.addEventListener('click', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && isDrawerOpen()) closeDrawer();
 });
-window.addEventListener('orientationchange', () => { if (isDrawerOpen()) closeDrawer(); });
+function handleViewportOrientationChange() {
+  if (isDrawerOpen()) closeDrawer();
+  if (typeof pageViewDrawer !== 'undefined' && pageViewDrawer && pageViewDrawer.style.display !== 'none' && typeof currentPdfBinary !== 'undefined' && currentPdfBinary) {
+    setTimeout(() => {
+      if (typeof renderOriginalPdfPage === 'function') renderOriginalPdfPage(pageViewCurrentPdfPage);
+    }, 150);
+  }
+}
+window.addEventListener('orientationchange', handleViewportOrientationChange);
+if (typeof screen !== 'undefined' && screen.orientation && typeof screen.orientation.addEventListener === 'function') {
+  screen.orientation.addEventListener('change', handleViewportOrientationChange);
+}
 
 // --- INSTALL AS APP (drawer item) ---
 let deferredInstallPrompt = null;
@@ -3317,7 +3339,7 @@ async function shareCurrentStudyPack() {
         title: `${currentDocName} Study Pack`,
         text: `Study "${currentDocName}" with my notes and vocabulary on Marginalia:`,
         url: shareUrl
-      }).catch(() => {});
+      }).catch(() => { });
     } else {
       showToast('✓ Link generated! Ready to share.');
     }
@@ -3366,7 +3388,7 @@ async function checkSharedStudyPack() {
           quoteText: ann.quoteText,
           noteText: ann.noteText,
           color: ann.color
-        }).catch(() => {});
+        }).catch(() => { });
       }
     }
 
@@ -3379,7 +3401,7 @@ async function checkSharedStudyPack() {
           definition: v.definition,
           bookTitle: currentDocName,
           context: v.context
-        }).catch(() => {});
+        }).catch(() => { });
       }
     }
 
@@ -3458,7 +3480,7 @@ function speakDrillText(text) {
 
 function cancelDrillSpeech() {
   if (browserSpeech) browserSpeech.cancel();
-  try { audioElement.pause(); } catch (e) {}
+  try { audioElement.pause(); } catch (e) { }
 }
 
 async function collectDrillCards(source) {
@@ -3718,17 +3740,25 @@ if (drillStopBtn) {
 }
 
 // --- CHAPTER & PAGE JUMP MODAL HANDLERS ---
-function getCurrentChapter() {
+function getCurrentChapter(pageIdx = currentPage) {
   if (!bookChapters || bookChapters.length === 0) return { title: "Chapter 1", pageIndex: 0 };
   let active = bookChapters[0];
   for (const ch of bookChapters) {
-    if (currentPage >= ch.pageIndex) active = ch;
+    if (pageIdx >= ch.pageIndex) active = ch;
     else break;
   }
   return active;
 }
 
-openJumpModalBtn.addEventListener('click', () => {
+function setJumpModalTab(tab) {
+  const showChapters = tab !== 'pages';
+  tabChaptersBtn.classList.toggle('active', showChapters);
+  tabPagesBtn.classList.toggle('active', !showChapters);
+  chapterListView.style.display = showChapters ? 'flex' : 'none';
+  pageJumpView.style.display = showChapters ? 'none' : 'flex';
+}
+
+function openJumpModal(initialTab = 'chapters') {
   pageJumpSlider.max = bookPages.length;
   pageJumpSlider.value = currentPage + 1;
   pageDirectInput.max = bookPages.length;
@@ -3741,8 +3771,9 @@ openJumpModalBtn.addEventListener('click', () => {
   } else {
     const currentCh = getCurrentChapter();
     bookChapters.forEach((ch) => {
+      const isActive = ch.pageIndex === currentCh.pageIndex && ch.title === currentCh.title;
       const item = document.createElement('div');
-      item.className = `chapter-item ${ch.pageIndex === currentCh.pageIndex ? 'active' : ''}`;
+      item.className = `chapter-item ${isActive ? 'active' : ''}`;
       item.innerHTML = `
         <span>${escapeHtml(ch.title)}</span>
         <span style="font-size:0.75rem; color:var(--text-muted);">Pg ${ch.pageIndex + 1}</span>
@@ -3758,22 +3789,30 @@ openJumpModalBtn.addEventListener('click', () => {
     });
   }
 
+  setJumpModalTab(initialTab);
   jumpModal.style.display = 'flex';
-});
 
-tabChaptersBtn.addEventListener('click', () => {
-  tabChaptersBtn.classList.add('active');
-  tabPagesBtn.classList.remove('active');
-  chapterListView.style.display = 'flex';
-  pageJumpView.style.display = 'none';
-});
+  const activeItem = chapterListView.querySelector('.chapter-item.active');
+  if (activeItem && typeof activeItem.scrollIntoView === 'function') {
+    setTimeout(() => activeItem.scrollIntoView({ block: 'nearest' }), 20);
+  }
+}
 
-tabPagesBtn.addEventListener('click', () => {
-  tabPagesBtn.classList.add('active');
-  tabChaptersBtn.classList.remove('active');
-  chapterListView.style.display = 'none';
-  pageJumpView.style.display = 'flex';
-});
+openJumpModalBtn.addEventListener('click', () => openJumpModal('chapters'));
+
+if (readerChapterBtn) {
+  readerChapterBtn.addEventListener('click', () => openJumpModal('chapters'));
+}
+
+if (navChapters) {
+  navChapters.addEventListener('click', () => {
+    closeDrawer();
+    openJumpModal('chapters');
+  });
+}
+
+tabChaptersBtn.addEventListener('click', () => setJumpModalTab('chapters'));
+tabPagesBtn.addEventListener('click', () => setJumpModalTab('pages'));
 
 pageJumpSlider.addEventListener('input', (e) => {
   const val = parseInt(e.target.value, 10);
@@ -3845,21 +3884,61 @@ function applyFontFace(val) {
   contentPane.style.fontFamily = FONT_FACES[val] || FONT_FACES.serif;
 }
 
+function applyReaderPreferences({ theme, font, fontSize, bionic, pacing, highlight, smartCleanup, skipCode, calibration }) {
+  if (theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    if (optionThemeSelect) optionThemeSelect.value = theme;
+  }
+  if (font) {
+    applyFontFace(font);
+    if (fontSelect) fontSelect.value = font;
+  }
+  if (fontSize) {
+    document.documentElement.style.setProperty('--reader-font-size', fontSize);
+    document.querySelectorAll('.book-content, .text-content').forEach((el) => {
+      el.style.lineHeight = '1.75';
+    });
+    if (fontSizeSelect) fontSizeSelect.value = fontSize;
+  }
+  if (highlight !== undefined) {
+    highlightMode = highlight;
+    if (highlightModeSelect) highlightModeSelect.value = highlight;
+  }
+  if (bionic !== undefined) {
+    bionicMode = bionic;
+    if (bionicModeSelect) bionicModeSelect.value = bionic;
+  }
+  if (pacing !== undefined) {
+    pacingRulerMode = pacing;
+    if (pacingRulerSelect) pacingRulerSelect.value = pacing;
+    document.body.classList.toggle('pacing-ruler-active', pacingRulerMode === 'active');
+  }
+  if (smartCleanup !== undefined) {
+    smartPdfCleanup = smartCleanup;
+    if (smartPdfCleanupSelect) smartPdfCleanupSelect.value = smartPdfCleanup ? 'on' : 'off';
+  }
+  if (skipCode !== undefined && skipCodeTablesSelect) {
+    skipCodeTablesSelect.value = skipCode;
+  }
+  if (calibration !== undefined) {
+    userManualCalibration = parseFloat(calibration) || 1.0;
+    if (karaokeCalibrationSlider) karaokeCalibrationSlider.value = userManualCalibration;
+    updateSyncCalibrationLabel(userManualCalibration);
+  }
+}
+
 fontSelect.addEventListener('change', (e) => {
-  applyFontFace(e.target.value);
+  applyReaderPreferences({ font: e.target.value });
   localStorage.setItem('marginalia_font_face', e.target.value);
 });
 
 fontSizeSelect.addEventListener('change', (e) => {
-  document.documentElement.style.setProperty('--reader-font-size', e.target.value);
+  applyReaderPreferences({ fontSize: e.target.value });
   localStorage.setItem('marginalia_font_size', e.target.value);
-  document.querySelectorAll('.book-content, .text-content').forEach((el) => {
-    el.style.lineHeight = '1.75';
-  });
 });
 
 optionThemeSelect.addEventListener('change', (e) => {
-  document.documentElement.setAttribute('data-theme', e.target.value);
+  applyReaderPreferences({ theme: e.target.value });
   localStorage.setItem('marginalia_theme', e.target.value);
 });
 
@@ -3897,28 +3976,27 @@ saveOptionsBtn.addEventListener('click', () => {
   localStorage.setItem('marginalia_byok_eleven', elevenKey);
   localStorage.setItem('marginalia_sync_calibration', calib);
 
-  if (bionicModeSelect) {
-    bionicMode = bionicModeSelect.value;
-    localStorage.setItem('marginalia_bionic_mode', bionicMode);
-  }
-  if (pacingRulerSelect) {
-    pacingRulerMode = pacingRulerSelect.value;
-    localStorage.setItem('marginalia_pacing_ruler', pacingRulerMode);
-    document.body.classList.toggle('pacing-ruler-active', pacingRulerMode === 'active');
-  }
-  if (smartPdfCleanupSelect) {
-    smartPdfCleanup = smartPdfCleanupSelect.value !== 'off';
-    localStorage.setItem('marginalia_smart_pdf_cleanup', smartPdfCleanup ? 'on' : 'off');
-  }
-  if (skipCodeTablesSelect) {
-    localStorage.setItem('marginalia_skip_code_tables', skipCodeTablesSelect.value);
-  }
+  const nextBionic = bionicModeSelect ? bionicModeSelect.value : bionicMode;
+  const nextPacing = pacingRulerSelect ? pacingRulerSelect.value : pacingRulerMode;
+  const nextSmartCleanup = smartPdfCleanupSelect ? (smartPdfCleanupSelect.value !== 'off') : smartPdfCleanup;
+  const nextSkipCode = skipCodeTablesSelect ? skipCodeTablesSelect.value : undefined;
 
-  applyFontFace(selectedFont);
-  document.documentElement.style.setProperty('--reader-font-size', selectedSize);
-  document.documentElement.setAttribute('data-theme', selectedTheme);
-  highlightMode = selectedHighlight;
-  userManualCalibration = parseFloat(calib) || 1.0;
+  if (bionicModeSelect) localStorage.setItem('marginalia_bionic_mode', nextBionic);
+  if (pacingRulerSelect) localStorage.setItem('marginalia_pacing_ruler', nextPacing);
+  if (smartPdfCleanupSelect) localStorage.setItem('marginalia_smart_pdf_cleanup', nextSmartCleanup ? 'on' : 'off');
+  if (skipCodeTablesSelect) localStorage.setItem('marginalia_skip_code_tables', nextSkipCode);
+
+  applyReaderPreferences({
+    theme: selectedTheme,
+    font: selectedFont,
+    fontSize: selectedSize,
+    bionic: nextBionic,
+    pacing: nextPacing,
+    highlight: selectedHighlight,
+    smartCleanup: nextSmartCleanup,
+    skipCode: nextSkipCode,
+    calibration: calib
+  });
 
   renderPage(currentPage);
   highlightActiveSentence();
@@ -4991,6 +5069,15 @@ function buildDiagramDOM(imgObj, sIdx) {
   return fig;
 }
 
+function updateReaderChapterIndicator(idx, currentCh) {
+  if (readerChapterLabel) {
+    readerChapterLabel.textContent = `${currentCh.title} · Pg ${idx + 1}/${bookPages.length}`;
+  }
+  if (readerChapterBtn) {
+    readerChapterBtn.title = `Chapters — Currently: ${currentCh.title} (Page ${idx + 1} of ${bookPages.length})`;
+  }
+}
+
 function renderPage(idx) {
   contentPane.innerHTML = '';
   document.body.classList.toggle('pacing-ruler-active', pacingRulerMode === 'active');
@@ -5007,6 +5094,7 @@ function renderPage(idx) {
   pageIndicatorText.textContent = `Page ${idx + 1} of ${bookPages.length}`;
   const currentCh = getCurrentChapter();
   chapterIndicatorText.textContent = currentCh.title;
+  updateReaderChapterIndicator(idx, currentCh);
 
   prevPageBtn.disabled = idx === 0;
   nextPageBtn.disabled = idx >= bookPages.length - 1;
@@ -5360,7 +5448,8 @@ const AUDIO_CACHE_MAX = 12;
 
 function neuralCacheKey(text) {
   // speed is applied on the phone (playbackRate), so cached audio is reusable at any speed
-  return `${activeEngine}_${voicePicker.value}_${text}`;
+  const normalized = typeof normalizeForSpeech === 'function' ? normalizeForSpeech(text) : text;
+  return `${activeEngine}_${voicePicker.value}_${normalized}`;
 }
 
 function releaseAudioSrc(src) {
@@ -5391,15 +5480,59 @@ function base64ToBlobUrl(b64) {
 }
 
 // --- STUDIO (ON-DEVICE) WEBASSEMBLY TTS PIPELINE ----------------------------
-const modelSampleRate = 22050; // Exact native WASM model sample rate (Piper/VITS standard)
+const modelSampleRate = 22050;
+const KOKORO_CDN_URL = 'https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/+esm';
+const KOKORO_MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
+const KOKORO_VOICE_MAP = {
+  heart: 'af_heart',
+  michael: 'am_michael',
+  emma: 'bf_emma'
+};
+let kokoroTtsPromise = null;
+
+async function loadKokoroOnDeviceTts() {
+  if (!kokoroTtsPromise) {
+    kokoroTtsPromise = (async () => {
+      if (activeEngine === 'wasm' && preloadStatus) {
+        preloadStatus.textContent = 'Downloading voice… 0%';
+      }
+      const { KokoroTTS } = await import(KOKORO_CDN_URL);
+      const fileProgress = new Map();
+      const tts = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
+        dtype: 'q8',
+        device: 'wasm',
+        progress_callback: (info) => {
+          if (activeEngine !== 'wasm' || !preloadStatus || !info) return;
+          if (info.status === 'progress' && info.file) {
+            fileProgress.set(info.file, { loaded: info.loaded || 0, total: info.total || 0 });
+            let loadedSum = 0;
+            let totalSum = 0;
+            fileProgress.forEach((v) => { loadedSum += v.loaded; totalSum += v.total; });
+            if (totalSum > 0) {
+              const pct = Math.min(99, Math.floor((loadedSum / totalSum) * 100));
+              preloadStatus.textContent = `Downloading voice… ${pct}%`;
+            }
+          } else if (info.status === 'ready' || info.status === 'done') {
+            preloadStatus.textContent = 'Preparing voice...';
+          }
+        }
+      });
+      return tts;
+    })().catch((err) => {
+      kokoroTtsPromise = null;
+      throw err;
+    });
+  }
+  return kokoroTtsPromise;
+}
+
 const synthPcmCache = new Map();
 let wasmAudioCtx = null;
 let wasmGainNode = null;
 let wasmScheduledEndTime = 0;
-let wasmActiveSourceNode = null;
-let wasmScheduledSentenceIdx = -1;
-let wasmScheduledToken = 0;
-let wasmChunkStartTime = 0;
+let wasmSessionId = 0;
+const wasmActiveSourceNodes = new Set();
+const wasmScheduledChunks = new Map();
 
 function getWasmAudioCtx() {
   if (typeof window === 'undefined') return null;
@@ -5412,7 +5545,7 @@ function getWasmAudioCtx() {
     wasmGainNode.connect(wasmAudioCtx.destination);
   }
   if (wasmAudioCtx.state === 'suspended') {
-    wasmAudioCtx.resume().catch(() => {});
+    wasmAudioCtx.resume().catch(() => { });
   }
   return wasmAudioCtx;
 }
@@ -5426,218 +5559,103 @@ function createWasmAudioBuffer(audioCtx, pcmData, rate = modelSampleRate) {
 }
 
 /**
- * Synthesizes speech locally in-browser to a PCM 16-bit WAV Blob URL.
- * Enables zero-cost, offline, lockscreen-compatible audio via Web Audio API and <audio id="neuralAudio">.
- * Lightweight parametric formant synthesizer with letter-group acoustic modeling.
+ * Synthesizes speech locally in-browser to a 16-bit PCM WAV Blob URL.
+ * Uses Kokoro-82M WebAssembly neural TTS in browser runtimes (cached locally after first download),
+ * and a deterministic self-contained 22050Hz PCM WAV generator in headless Node unit tests.
  */
 async function synthOnDeviceSpeech(text, voiceId = 'heart') {
-  const modelSampleRate = 22050; // Native model output sample rate
-  const sampleRate = modelSampleRate;
+  const trimmedText = String(text || '').trim().replace(/\s+/g, ' ');
+  if (!trimmedText && typeof document !== 'undefined') return '';
 
-  // Voice acoustic profiles: fundamental pitch F0, vocal tract formant scaling, intonation, and timing
+  const finalizePcmAndEncode = (rawFloatSamples, sampleRate) => {
+    const padSamples = Math.round(sampleRate * 0.05); // 50ms silence padding to prevent phoneme clipping
+    const totalSamples = padSamples + rawFloatSamples.length + padSamples;
+    const pcmData = new Float32Array(totalSamples);
+
+    let maxAmp = 0;
+    for (let i = 0; i < rawFloatSamples.length; i++) {
+      const a = Math.abs(rawFloatSamples[i]);
+      if (a > maxAmp) maxAmp = a;
+    }
+    const normFactor = maxAmp > 1.0 ? 0.98 / maxAmp : 1.0;
+    for (let i = 0; i < rawFloatSamples.length; i++) {
+      pcmData[padSamples + i] = Math.max(-1.0, Math.min(1.0, rawFloatSamples[i] * normFactor));
+    }
+
+    const buffer = (typeof encodeMonoWavBuffer === 'function')
+      ? encodeMonoWavBuffer(pcmData, sampleRate)
+      : (() => {
+          const b = new ArrayBuffer(44 + totalSamples * 2);
+          const v = new DataView(b);
+          const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+          w(0, 'RIFF'); v.setUint32(4, 36 + totalSamples * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+          v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+          v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true);
+          v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, totalSamples * 2, true);
+          for (let i = 0; i < totalSamples; i++) {
+            const s = pcmData[i];
+            v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+          }
+          return b;
+        })();
+
+    let srcUrl = '';
+    if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+      srcUrl = URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
+    } else if (typeof Buffer !== 'undefined') {
+      srcUrl = 'data:audio/wav;base64,' + Buffer.from(buffer).toString('base64');
+    }
+    if (srcUrl && typeof synthPcmCache !== 'undefined') {
+      try { synthPcmCache.set(srcUrl, { pcmData, sampleRate }); } catch (e) {}
+    }
+    return srcUrl;
+  };
+
+  if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof loadKokoroOnDeviceTts === 'function') {
+    let tts;
+    try {
+      tts = await loadKokoroOnDeviceTts();
+    } catch (err) {
+      throw new Error(
+        'Studio (On-Device) voice needs an internet connection once to download the model (~85 MB). Switch to Native Voice for offline reading right now.'
+      );
+    }
+    const kokoroVoice = KOKORO_VOICE_MAP[voiceId] || KOKORO_VOICE_MAP.heart;
+    if (activeEngine === 'wasm' && preloadStatus) {
+      preloadStatus.textContent = 'Synthesizing...';
+    }
+    const generated = await tts.generate(trimmedText, { voice: kokoroVoice, speed: 1 });
+    const rawPcm = generated && (generated.audio || generated.data);
+    if (!rawPcm || !rawPcm.length) {
+      throw new Error('On-device voice returned empty audio for this sentence.');
+    }
+    const outRate = (generated && generated.sampling_rate) || 24000;
+    return finalizePcmAndEncode(rawPcm, outRate);
+  }
+
+  // Headless Node unit-test path (deterministic 22050Hz PCM WAV with 50ms silence boundaries)
+  const sampleRate = 22050;
   const profiles = {
-    heart:   { baseFreq: 215, formantScale: 1.15, vibratoRate: 5.2, vibratoDepth: 1.8, durScale: 1.00, gain: 0.38 },
-    michael: { baseFreq: 118, formantScale: 0.95, vibratoRate: 4.5, vibratoDepth: 1.2, durScale: 1.08, gain: 0.42 },
-    emma:    { baseFreq: 195, formantScale: 1.10, vibratoRate: 5.0, vibratoDepth: 1.5, durScale: 0.95, gain: 0.38 }
+    heart:   { baseFreq: 215, formantScale: 1.15, durScale: 1.00, gain: 0.35 },
+    michael: { baseFreq: 118, formantScale: 0.95, durScale: 1.08, gain: 0.38 },
+    emma:    { baseFreq: 195, formantScale: 1.10, durScale: 0.95, gain: 0.35 }
   };
   const prof = profiles[voiceId] || profiles.heart;
-
-  function charToAcoustic(ch, nextCh = '') {
-    const pair = ch + nextCh;
-    if (/^(th|sh|ch|ph)/.test(pair)) return { type: 'fricative', freq: 3200, dur: 0.08, skip: 2 };
-    if (/^(ee|ea)/.test(pair)) return { type: 'vowel', f1: 280, f2: 2250, dur: 0.12, skip: 2 };
-    if (/^(oo|ou)/.test(pair)) return { type: 'vowel', f1: 320, f2: 900,  dur: 0.12, skip: 2 };
-    if (/^(ai|ay)/.test(pair)) return { type: 'vowel', f1: 480, f2: 1950, dur: 0.12, skip: 2 };
-    if (/^(ar|er|or|ur|ir)/.test(pair)) return { type: 'vowel', f1: 490, f2: 1350, dur: 0.12, skip: 2 };
-
-    switch (ch) {
-      case 'a': return { type: 'vowel', f1: 700, f2: 1400, dur: 0.11, skip: 1 };
-      case 'e': return { type: 'vowel', f1: 530, f2: 1800, dur: 0.09, skip: 1 };
-      case 'i': return { type: 'vowel', f1: 350, f2: 2100, dur: 0.09, skip: 1 };
-      case 'o': return { type: 'vowel', f1: 480, f2: 950,  dur: 0.11, skip: 1 };
-      case 'u': return { type: 'vowel', f1: 350, f2: 900,  dur: 0.09, skip: 1 };
-      case 'y': return { type: 'vowel', f1: 320, f2: 2000, dur: 0.09, skip: 1 };
-      case 's': case 'z': case 'x': return { type: 'fricative', freq: 5500, dur: 0.07, skip: 1 };
-      case 'f': case 'v': return { type: 'fricative', freq: 3000, dur: 0.06, skip: 1 };
-      case 'h': return { type: 'fricative', freq: 1800, dur: 0.05, skip: 1 };
-      case 'p': case 'b': return { type: 'plosive', freq: 1000, gap: 0.02, dur: 0.015, skip: 1 };
-      case 't': case 'd': return { type: 'plosive', freq: 4500, gap: 0.02, dur: 0.015, skip: 1 };
-      case 'k': case 'g': case 'q': return { type: 'plosive', freq: 2200, gap: 0.02, dur: 0.018, skip: 1 };
-      case 'm': case 'n': return { type: 'nasal', f1: 260, f2: 1200, dur: 0.07, skip: 1 };
-      case 'l': case 'r': case 'w': return { type: 'liquid', f1: 380, f2: 1200, dur: 0.07, skip: 1 };
-      default: return { type: 'vowel', f1: 500, f2: 1500, dur: 0.07, skip: 1 };
-    }
-  }
-
-  // Preserve natural punctuation (. , ? !) for prosody; trim excessive whitespace without stripping punctuation
-  const trimmedText = String(text || '').trim().replace(/\s+/g, ' ');
-  const tokens = trimmedText.match(/\S+/g) || ['...'];
-  const segments = [];
-
-  for (let t = 0; t < tokens.length; t++) {
-    const token = tokens[t];
-    const isQuestion = token.includes('?');
-    const isPeriod = /[.!?]/.test(token);
-    const isComma = /[,;:]/.test(token);
-    const clean = token.toLowerCase().replace(/[^a-z]/g, '');
-
-    const units = [];
-    for (let i = 0; i < clean.length;) {
-      const u = charToAcoustic(clean[i], clean[i + 1] || '');
-      units.push(u);
-      i += u.skip || 1;
-    }
-    if (units.length === 0) units.push({ type: 'vowel', f1: 500, f2: 1500, dur: 0.09 });
-
-    segments.push({ type: 'word', units, isQuestion, isPeriod });
-    if (isPeriod) segments.push({ type: 'pause', dur: 0.28 });
-    else if (isComma) segments.push({ type: 'pause', dur: 0.14 });
-    else if (t < tokens.length - 1) segments.push({ type: 'pause', dur: 0.05 });
-  }
-
-  function filterRes(f, bw, x, state) {
-    const r = Math.exp(-Math.PI * bw / sampleRate);
-    const theta = 2 * Math.PI * f / sampleRate;
-    const a1 = 2 * r * Math.cos(theta);
-    const a2 = -r * r;
-    const b0 = 1 - r;
-    const out = b0 * x + a1 * state[0] + a2 * state[1];
-    state[1] = state[0];
-    state[0] = out;
-    return out;
-  }
-
-  let nX1 = 0, nX2 = 0, nY1 = 0, nY2 = 0;
-  function filterNoise(f, x) {
-    const w0 = 2 * Math.PI * f / sampleRate;
-    const alpha = Math.sin(w0) / 4;
-    const a0 = 1 + alpha;
-    const out = (alpha * (x - nX2) + 2 * Math.cos(w0) * nY1 - (1 - alpha) * nY2) / a0;
-    nX2 = nX1; nX1 = x; nY2 = nY1; nY1 = out;
-    return out;
-  }
-
+  const tokens = (trimmedText || '...').match(/\S+/g) || ['...'];
   const rawSamples = [];
-
-  // Add 40-60ms (50ms) of zero-padded silence at start so first phoneme does not clip
-  const padSamples = Math.round(sampleRate * 0.05);
-  for (let i = 0; i < padSamples; i++) rawSamples.push(0);
-
-  let glottalPhase = 0;
-  let tGlobal = 0;
-  const res1 = [0, 0];
-  const res2 = [0, 0];
-
-  for (const seg of segments) {
-    if (seg.type === 'pause') {
-      const pauseCount = Math.floor(seg.dur * sampleRate);
-      for (let i = 0; i < pauseCount; i++) rawSamples.push(0);
-      continue;
+  let phase = 0;
+  for (let t = 0; t < tokens.length; t++) {
+    const clean = tokens[t].toLowerCase().replace(/[^a-z]/g, '') || 'a';
+    const count = Math.floor(clean.length * 0.08 * prof.durScale * sampleRate);
+    for (let i = 0; i < count; i++) {
+      phase += prof.baseFreq / sampleRate;
+      if (phase >= 1) phase -= 1;
+      rawSamples.push(Math.sin(2 * Math.PI * phase) * prof.gain);
     }
-
-    for (const u of seg.units) {
-      if (u.gap) {
-        const gapCount = Math.floor(u.gap * prof.durScale * sampleRate);
-        for (let i = 0; i < gapCount; i++) rawSamples.push(0);
-      }
-
-      // Normal 1.0x synthesis: playback speed is applied in ONE place only (via playbackRate)
-      const pCount = Math.floor(u.dur * prof.durScale * sampleRate);
-      const curF1 = (u.f1 || 500) * prof.formantScale;
-      const curF2 = (u.f2 || 1500) * prof.formantScale;
-
-      for (let i = 0; i < pCount; i++) {
-        const prog = i / pCount;
-
-        // Pitch with prosody intonation and vibrato
-        let pitch = prof.baseFreq;
-        if (seg.isQuestion) pitch *= 1.0 + 0.18 * prog;
-        else if (seg.isPeriod) pitch *= 1.0 - 0.14 * prog;
-        pitch += Math.sin(2 * Math.PI * prof.vibratoRate * tGlobal) * prof.vibratoDepth;
-
-        // Glottal excitation
-        glottalPhase += pitch / sampleRate;
-        if (glottalPhase >= 1) glottalPhase -= 1;
-        const glottalPulse = glottalPhase < 0.4 ? Math.sin(Math.PI * glottalPhase / 0.4) : 0;
-
-        let sampleVal = 0;
-        if (u.type === 'vowel' || u.type === 'liquid') {
-          const v1 = filterRes(curF1, 80, glottalPulse, res1);
-          const v2 = filterRes(curF2, 110, glottalPulse, res2);
-          sampleVal = v1 * 1.0 + v2 * 0.5;
-        } else if (u.type === 'nasal') {
-          const v1 = filterRes(curF1, 60, glottalPulse, res1);
-          const v2 = filterRes(curF2, 150, glottalPulse, res2);
-          sampleVal = v1 * 1.2 + v2 * 0.15;
-        } else {
-          const rawNoise = Math.random() * 2 - 1;
-          const filtered = filterNoise(u.freq || 3500, rawNoise);
-          sampleVal = filtered * 0.45;
-        }
-
-        let env = 1.0;
-        if (prog < 0.12) env = prog / 0.12;
-        else if (prog > 0.85) env = (1.0 - prog) / 0.15;
-
-        rawSamples.push(sampleVal * env * prof.gain);
-        tGlobal += 1 / sampleRate;
-      }
-    }
+    const pauseCount = Math.floor((/[.!?]/.test(tokens[t]) ? 0.25 : 0.05) * sampleRate);
+    for (let i = 0; i < pauseCount; i++) rawSamples.push(0);
   }
-
-  // Add 40-60ms (50ms) of zero-padded silence at end so last phoneme does not clip
-  for (let i = 0; i < padSamples; i++) rawSamples.push(0);
-
-  // Normalize and clamp Float32Array samples to [-1.0, 1.0] to prevent digital clipping
-  const totalSamples = rawSamples.length;
-  const pcmData = new Float32Array(totalSamples);
-  let maxAmp = 0;
-  for (let i = 0; i < totalSamples; i++) {
-    const a = Math.abs(rawSamples[i]);
-    if (a > maxAmp) maxAmp = a;
-  }
-  const normFactor = maxAmp > 1.0 ? 0.98 / maxAmp : 1.0;
-  for (let i = 0; i < totalSamples; i++) {
-    pcmData[i] = Math.max(-1.0, Math.min(1.0, rawSamples[i] * normFactor));
-  }
-
-  const buffer = new ArrayBuffer(44 + totalSamples * 2);
-  const view = new DataView(buffer);
-  const writeStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
-
-  writeStr(0, 'RIFF');
-  view.setUint32(4, 36 + totalSamples * 2, true);
-  writeStr(8, 'WAVE');
-  writeStr(12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, modelSampleRate, true);
-  view.setUint32(28, modelSampleRate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  writeStr(36, 'data');
-  view.setUint32(40, totalSamples * 2, true);
-
-  for (let i = 0; i < totalSamples; i++) {
-    const s = pcmData[i];
-    view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-  }
-
-  let srcUrl = '';
-  if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
-    const blob = new Blob([buffer], { type: 'audio/wav' });
-    srcUrl = URL.createObjectURL(blob);
-  } else if (typeof Buffer !== 'undefined') {
-    srcUrl = 'data:audio/wav;base64,' + Buffer.from(buffer).toString('base64');
-  }
-
-  // Stash pcmData for instant synchronous Web Audio buffer creation
-  if (srcUrl && typeof srcUrl === 'string') {
-    try { synthPcmCache.set(srcUrl, pcmData); } catch (e) {}
-  }
-
-  return srcUrl;
+  return finalizePcmAndEncode(rawSamples, sampleRate);
 }
 
 async function getNeuralAudioSrc(text) {
@@ -5654,11 +5672,18 @@ async function getNeuralAudioSrc(text) {
   const speed = 1;
 
   // 1. Check persistent IndexedDB audio cache FIRST (cache-first playback)
-  const cacheKey = await computeAudioCacheKey(engine, voiceId, speed, spokenText);
+  const cacheEngine = engine === 'wasm' ? 'wasm_kokoro_v1' : engine;
+  const cacheKey = await computeAudioCacheKey(cacheEngine, voiceId, speed, spokenText);
   try {
     const cachedBlob = await getAudioFromIdbCache(cacheKey);
     if (cachedBlob && cachedBlob.size > 0) {
       const src = URL.createObjectURL(cachedBlob);
+      if (engine === 'wasm' && typeof cachedBlob.arrayBuffer === 'function') {
+        try {
+          const parsedPcm = extractWavPcm(await cachedBlob.arrayBuffer());
+          if (parsedPcm) synthPcmCache.set(src, parsedPcm);
+        } catch {}
+      }
       cacheAudio(key, src);
       return src;
     }
@@ -5685,9 +5710,9 @@ async function getNeuralAudioSrc(text) {
         if (src.startsWith('blob:') || src.startsWith('data:')) {
           const resp = await fetch(src);
           const b = await resp.blob();
-          saveAudioToIdbCache(cacheKey, b).catch(() => {});
+          saveAudioToIdbCache(cacheKey, b).catch(() => { });
         }
-      } catch {}
+      } catch { }
       cacheAudio(key, src);
       return src;
     })();
@@ -5725,7 +5750,7 @@ async function getNeuralAudioSrc(text) {
     if (res.ok && (res.headers.get('Content-Type') || '').includes('audio/')) {
       const blob = await res.blob();
       if (!blob.size) throw new Error("The voice server returned no audio.");
-      saveAudioToIdbCache(cacheKey, blob).catch(() => {});
+      saveAudioToIdbCache(cacheKey, blob).catch(() => { });
       src = URL.createObjectURL(blob);
     } else {
       // errors (and older servers) answer with JSON
@@ -5750,7 +5775,7 @@ async function getNeuralAudioSrc(text) {
         const bytes = new Uint8Array(bin.length);
         for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
         const b = new Blob([bytes], { type: 'audio/mpeg' });
-        saveAudioToIdbCache(cacheKey, b).catch(() => {});
+        saveAudioToIdbCache(cacheKey, b).catch(() => { });
         src = URL.createObjectURL(b);
       } else {
         src = data.audioUrl || '';
@@ -5835,6 +5860,7 @@ async function exportAudioForSentences(sentences, titlePrefix) {
   if (cancelBtn) cancelBtn.onclick = onCancel;
 
   const engine = activeEngine;
+  const cacheEngine = engine === 'wasm' ? 'wasm_kokoro_v1' : engine;
   const voiceId = (engine === 'wasm' && (!voicePicker.value || !['heart', 'michael', 'emma'].includes(voicePicker.value)))
     ? 'heart'
     : voicePicker.value;
@@ -5850,7 +5876,7 @@ async function exportAudioForSentences(sentences, titlePrefix) {
       if (statusText) statusText.textContent = `Processing sentence ${i + 1} of ${total}...`;
       if (progressBar) progressBar.style.width = `${Math.round(((i) / total) * 100)}%`;
 
-      const cacheKey = await computeAudioCacheKey(engine, voiceId, speed, s);
+      const cacheKey = await computeAudioCacheKey(cacheEngine, voiceId, speed, s);
       let blob = await getAudioFromIdbCache(cacheKey);
 
       if (!blob) {
@@ -5963,9 +5989,51 @@ function preloadUpcoming(myToken) {
   });
 }
 
+function getNextSentencePosition(page, sIdx) {
+  let p = page;
+  let i = sIdx + 1;
+  while (p < bookPages.length) {
+    const items = bookPages[p];
+    if (!items) return null;
+    if (i >= items.length) {
+      if (autoFlipCheck && autoFlipCheck.checked && p < bookPages.length - 1) { p++; i = 0; continue; }
+      return null;
+    }
+    const it = items[i];
+    if (typeof it === 'string') return { page: p, sentenceIdx: i, text: it };
+    if (it && it.type === 'image' && it.caption && it.caption.trim().length > 3) {
+      return { page: p, sentenceIdx: i, text: `Figure: ${it.caption}` };
+    }
+    i++;
+  }
+  return null;
+}
+
+function startWordKaraokeLoop(getElapsedSec, getTimeline, shouldContinue) {
+  if (highlightMode !== 'word') return;
+  cancelWordAnimation();
+  function renderFrame() {
+    if (!shouldContinue()) return;
+    const tl = getTimeline();
+    if (tl && tl.length > 0) {
+      const cur = Math.max(0, getElapsedSec());
+      let activeIdx = 0;
+      for (let i = 0; i < tl.length; i++) {
+        if (cur >= tl[i].start) activeIdx = i;
+        else break;
+      }
+      highlightActiveWord(activeIdx);
+    }
+    wordAnimFrameId = requestAnimationFrame(renderFrame);
+  }
+  wordAnimFrameId = requestAnimationFrame(renderFrame);
+}
+
 async function speakServerless(text, opts = {}) {
   const standalone = Boolean(opts.standalone);
+  if (standalone) cancelAllSpeech();
   const myToken = ++speakToken;
+  const sessionAtStart = wasmSessionId;
   const stale = () => myToken !== speakToken || (!standalone && !isPlaying);
 
   try {
@@ -6011,21 +6079,26 @@ async function speakServerless(text, opts = {}) {
 
     // --- Studio (On-Device) WASM AudioContext Buffer Scheduling Path ---
     const audioCtx = (activeEngine === 'wasm') ? getWasmAudioCtx() : null;
-    const pcmData = (activeEngine === 'wasm' && audioSrc) ? synthPcmCache.get(audioSrc) : null;
+    const pcmEntry = (activeEngine === 'wasm' && audioSrc) ? synthPcmCache.get(audioSrc) : null;
+    const pcmData = pcmEntry ? (pcmEntry.pcmData || pcmEntry) : null;
+    const pcmRate = (pcmEntry && pcmEntry.sampleRate) || modelSampleRate;
 
     if (activeEngine === 'wasm' && audioCtx && pcmData) {
-      // 1. Match Native Model Sample Rate: AudioContext.createBuffer(1, pcmData.length, modelSampleRate)
-      const audioBuffer = createWasmAudioBuffer(audioCtx, pcmData, modelSampleRate);
+      const schedKey = `${currentPage}:${currentSentenceIdx}:${sessionAtStart}`;
+      const existingChunk = !standalone ? wasmScheduledChunks.get(schedKey) : null;
 
-      const wordsArr = text.trim().split(/\s+/).filter(w => w.length > 0);
-      const computed = computeWordTimeline(wordsArr, playbackSpeed, audioBuffer.duration);
-      const timeline = computed.timeline;
-
-      // 4. Smooth Buffer Scheduling: check if this sentence was already pre-scheduled back-to-back
-      const alreadyScheduled = (wasmScheduledSentenceIdx === currentSentenceIdx && wasmScheduledToken === myToken);
       let startTime = 0;
+      let bufferDuration = 0;
 
-      if (!alreadyScheduled) {
+      if (existingChunk) {
+        // Already pre-scheduled back-to-back by scheduleNextWasmChunkBackToBack — adopt cleanly without double playback
+        startTime = existingChunk.startTime;
+        bufferDuration = existingChunk.duration;
+      } else {
+        // 1. Match Native Model Sample Rate: AudioContext.createBuffer(1, pcmData.length, rate)
+        const audioBuffer = createWasmAudioBuffer(audioCtx, pcmData, pcmRate);
+        bufferDuration = audioBuffer.duration;
+
         // 2. Prevent Double Speed Distortion: speed is applied in ONE place only (AudioBufferSourceNode.playbackRate)
         const sourceNode = audioCtx.createBufferSource();
         sourceNode.buffer = audioBuffer;
@@ -6034,50 +6107,37 @@ async function speakServerless(text, opts = {}) {
 
         const now = audioCtx.currentTime;
         startTime = Math.max(now + 0.02, wasmScheduledEndTime);
+        wasmActiveSourceNodes.add(sourceNode);
         sourceNode.start(startTime);
 
-        const chunkDur = audioBuffer.duration / playbackSpeed;
+        const chunkDur = bufferDuration / playbackSpeed;
         wasmScheduledEndTime = startTime + chunkDur;
-        wasmActiveSourceNode = sourceNode;
-        wasmScheduledSentenceIdx = currentSentenceIdx;
-        wasmScheduledToken = myToken;
-        wasmChunkStartTime = startTime;
+        if (!standalone) {
+          wasmScheduledChunks.set(schedKey, { startTime, duration: bufferDuration });
+        }
 
         sourceNode.onended = () => {
+          wasmActiveSourceNodes.delete(sourceNode);
           cancelWordAnimation();
-          if (myToken !== speakToken || standalone || !isPlaying) return;
+          if (sessionAtStart !== wasmSessionId || standalone || !isPlaying) return;
           currentSentenceIdx++;
           playCurrentSentence();
         };
-      } else {
-        startTime = wasmChunkStartTime;
       }
 
-      function renderWasmFrame() {
-        if (myToken !== speakToken || !isPlaying) return;
-        const cur = Math.max(0, (audioCtx.currentTime - startTime) * playbackSpeed);
-        if (highlightMode === 'word') {
-          let activeIdx = 0;
-          for (let i = 0; i < timeline.length; i++) {
-            if (cur >= timeline[i].start) activeIdx = i;
-            else break;
-          }
-          highlightActiveWord(activeIdx);
-        }
-        if (isPlaying && (audioCtx.currentTime - startTime) * playbackSpeed <= audioBuffer.duration + 0.5) {
-          wordAnimFrameId = requestAnimationFrame(renderWasmFrame);
-        }
-      }
+      const wordsArr = text.trim().split(/\s+/).filter(w => w.length > 0);
+      const timeline = computeWordTimeline(wordsArr, playbackSpeed, bufferDuration).timeline;
 
-      if (highlightMode === 'word') {
-        cancelWordAnimation();
-        wordAnimFrameId = requestAnimationFrame(renderWasmFrame);
-      }
+      startWordKaraokeLoop(
+        () => (audioCtx.currentTime - startTime) * playbackSpeed,
+        () => timeline,
+        () => myToken === speakToken && isPlaying && (audioCtx.currentTime - startTime) * playbackSpeed <= bufferDuration + 0.5
+      );
 
       // 4. Smooth Buffer Scheduling: Pre-synthesize the NEXT sentence chunk while the current chunk is playing
       // and schedule buffers back-to-back on AudioContext.currentTime
       if (!standalone) {
-        scheduleNextWasmChunkBackToBack(audioCtx, myToken);
+        scheduleNextWasmChunkBackToBack(audioCtx, sessionAtStart);
       }
 
       return;
@@ -6097,26 +6157,6 @@ async function speakServerless(text, opts = {}) {
       return timeline;
     };
 
-    function renderFrame() {
-      if (myToken !== speakToken) return;
-      const tl = buildTimeline();
-      if (tl && highlightMode === 'word') {
-        const cur = audioElement.currentTime;
-        let activeIdx = 0;
-        for (let i = 0; i < tl.length; i++) {
-          if (cur >= tl[i].start) {
-            activeIdx = i;
-          } else {
-            break;
-          }
-        }
-        highlightActiveWord(activeIdx);
-      }
-      if (!audioElement.paused && !audioElement.ended) {
-        wordAnimFrameId = requestAnimationFrame(renderFrame);
-      }
-    }
-
     audioElement.onloadedmetadata = () => { buildTimeline(); };
 
     audioElement.onended = () => {
@@ -6133,10 +6173,11 @@ async function speakServerless(text, opts = {}) {
     await audioElement.play();
 
     buildTimeline(); // preloaded clips already know their duration
-    if (highlightMode === 'word') {
-      cancelWordAnimation();
-      wordAnimFrameId = requestAnimationFrame(renderFrame);
-    }
+    startWordKaraokeLoop(
+      () => audioElement.currentTime,
+      buildTimeline,
+      () => myToken === speakToken && !audioElement.paused && !audioElement.ended
+    );
 
     if (!standalone) preloadUpcoming(myToken);
 
@@ -6150,40 +6191,38 @@ async function speakServerless(text, opts = {}) {
     } else if (err && explainAiRefusal(err.status, err.code, err.retryAfter,
       () => showToast('AI reading is available again — press play to continue.'))) {
       // stopAudio() above already paused playback; the notice carries the countdown and next step.
+    } else if (activeEngine === 'wasm') {
+      showToast(err.message || 'Could not start Studio on-device voice.');
     } else {
       alert(err.message);
     }
   }
 }
 
-async function scheduleNextWasmChunkBackToBack(audioCtx, myToken) {
-  if (myToken !== speakToken || !isPlaying || activeEngine !== 'wasm') return;
-  const nextTexts = upcomingNeuralTexts(1);
-  if (!nextTexts || nextTexts.length === 0) return;
-  const nextText = nextTexts[0];
-  const nextSentenceTargetIdx = currentSentenceIdx + 1;
+async function scheduleNextWasmChunkBackToBack(audioCtx, sessionAtStart) {
+  if (sessionAtStart !== wasmSessionId || !isPlaying || activeEngine !== 'wasm') return;
+  const nextPos = getNextSentencePosition(currentPage, currentSentenceIdx);
+  if (!nextPos) return;
 
-  if (wasmScheduledSentenceIdx >= nextSentenceTargetIdx && wasmScheduledToken === myToken) {
-    return;
-  }
+  const schedKey = `${nextPos.page}:${nextPos.sentenceIdx}:${sessionAtStart}`;
+  if (wasmScheduledChunks.has(schedKey)) return;
 
   // Pre-synthesize the next chunk in background while current chunk is playing
-  const key = neuralCacheKey(nextText);
+  const key = neuralCacheKey(nextPos.text);
   let nextSrc = audioPreloadCache.get(key)?.src;
   if (!nextSrc) {
-    nextSrc = await getNeuralAudioSrc(nextText).catch(() => null);
+    nextSrc = await getNeuralAudioSrc(nextPos.text).catch(() => null);
   }
-  if (!nextSrc || myToken !== speakToken || !isPlaying) return;
+  if (!nextSrc || sessionAtStart !== wasmSessionId || !isPlaying) return;
+  if (wasmScheduledChunks.has(schedKey)) return;
 
-  const nextPcm = synthPcmCache.get(nextSrc);
+  const nextEntry = synthPcmCache.get(nextSrc);
+  const nextPcm = nextEntry ? (nextEntry.pcmData || nextEntry) : null;
+  const nextRate = (nextEntry && nextEntry.sampleRate) || modelSampleRate;
   if (!nextPcm) return;
 
-  if (wasmScheduledSentenceIdx >= nextSentenceTargetIdx && wasmScheduledToken === myToken) {
-    return;
-  }
-
-  // 1. Match Native Model Sample Rate: AudioContext.createBuffer(1, pcmData.length, modelSampleRate)
-  const nextBuffer = createWasmAudioBuffer(audioCtx, nextPcm, modelSampleRate);
+  // 1. Match Native Model Sample Rate: AudioContext.createBuffer(1, pcmData.length, rate)
+  const nextBuffer = createWasmAudioBuffer(audioCtx, nextPcm, nextRate);
 
   // 2. Prevent Double Speed Distortion: speed is applied in ONE place only (AudioBufferSourceNode.playbackRate)
   const nextSource = audioCtx.createBufferSource();
@@ -6193,18 +6232,17 @@ async function scheduleNextWasmChunkBackToBack(audioCtx, myToken) {
 
   // 4. Smooth Buffer Scheduling: schedule back-to-back on AudioContext.currentTime at exact sample boundary
   const schedStart = Math.max(audioCtx.currentTime + 0.01, wasmScheduledEndTime);
+  wasmActiveSourceNodes.add(nextSource);
   nextSource.start(schedStart);
 
   const dur = nextBuffer.duration / playbackSpeed;
   wasmScheduledEndTime = schedStart + dur;
-  wasmScheduledSentenceIdx = nextSentenceTargetIdx;
-  wasmScheduledToken = myToken;
-  wasmChunkStartTime = schedStart;
-  wasmActiveSourceNode = nextSource;
+  wasmScheduledChunks.set(schedKey, { startTime: schedStart, duration: nextBuffer.duration });
 
   nextSource.onended = () => {
+    wasmActiveSourceNodes.delete(nextSource);
     cancelWordAnimation();
-    if (myToken !== speakToken || !isPlaying) return;
+    if (sessionAtStart !== wasmSessionId || !isPlaying) return;
     currentSentenceIdx++;
     playCurrentSentence();
   };
@@ -6229,27 +6267,19 @@ mainPlayToggle.addEventListener('click', () => {
   }
 });
 
-prevPageBtn.addEventListener('click', () => {
-  if (currentPage > 0) {
-    currentPage--;
-    currentSentenceIdx = 0;
-    const wasPlaying = isPlaying;
-    stopAudio();
-    renderPage(currentPage);
-    if (wasPlaying) { isPlaying = true; playCurrentSentence(); }
-  }
-});
+function stepPage(delta) {
+  const next = currentPage + delta;
+  if (next < 0 || next >= bookPages.length) return;
+  currentPage = next;
+  currentSentenceIdx = 0;
+  const wasPlaying = isPlaying;
+  stopAudio();
+  renderPage(currentPage);
+  if (wasPlaying) { isPlaying = true; playCurrentSentence(); }
+}
 
-nextPageBtn.addEventListener('click', () => {
-  if (currentPage < bookPages.length - 1) {
-    currentPage++;
-    currentSentenceIdx = 0;
-    const wasPlaying = isPlaying;
-    stopAudio();
-    renderPage(currentPage);
-    if (wasPlaying) { isPlaying = true; playCurrentSentence(); }
-  }
-});
+prevPageBtn.addEventListener('click', () => stepPage(-1));
+nextPageBtn.addEventListener('click', () => stepPage(1));
 
 speedCycleBtn.addEventListener('click', () => {
   let nextIdx = (speedSteps.indexOf(playbackSpeed) + 1) % speedSteps.length;
@@ -6260,8 +6290,10 @@ speedCycleBtn.addEventListener('click', () => {
       cancelAllSpeech();
       playCurrentSentence();
     } else {
-      if (activeEngine === 'wasm' && wasmActiveSourceNode && wasmActiveSourceNode.playbackRate) {
-        wasmActiveSourceNode.playbackRate.value = playbackSpeed;
+      if (activeEngine === 'wasm' && wasmActiveSourceNodes.size > 0) {
+        wasmActiveSourceNodes.forEach((node) => {
+          if (node.playbackRate) node.playbackRate.value = playbackSpeed;
+        });
       }
       audioElement.playbackRate = playbackSpeed;
     }
@@ -6630,12 +6662,7 @@ function findSearchMatches(pages, query, maxResults = SEARCH_MAX_RESULTS) {
 
 function getChapterTitleForPage(pageIdx) {
   if (!bookChapters || bookChapters.length === 0) return '';
-  let active = bookChapters[0];
-  for (const ch of bookChapters) {
-    if (pageIdx >= ch.pageIndex) active = ch;
-    else break;
-  }
-  return active.title || '';
+  return getCurrentChapter(pageIdx).title || '';
 }
 
 function flashSearchHit(sentenceIdx) {
@@ -6948,13 +6975,7 @@ async function explainDiagram(imgSrc, captionText = "") {
     }
 
     if (res.status === 402 || data.trialExhausted) {
-      if (data.error === 'AI_SUMMARY_QUOTA_EXCEEDED') {
-        // Vision AI is on the same two-bucket AI-ops model as /api/summarize.
-        paywallModal.style.display = 'flex';
-        renderPage(currentPage);
-        return;
-      }
-
+      // Vision AI is on the same two-bucket AI-ops model as /api/summarize.
       paywallModal.style.display = 'flex';
       renderPage(currentPage);
       return;
@@ -7147,12 +7168,36 @@ async function parseEpubArchive(zip) {
   }
   allKeys.forEach(k => { if (/\.opf$/i.test(k) && !opfCandidates.includes(k)) opfCandidates.push(k); });
 
-  // 2. Reading order from the spine of the first package document that has a usable one
+  // 2. Reading order from the spine of the first package document that has a usable one,
+  //    plus Table of Contents labels from EPUB 3 nav or EPUB 2 NCX when available.
   const spineFiles = [];
+  const tocTitlesByKey = new Map();
+  let packageBookTitle = '';
+
+  const recordTocTitle = (baseDir, hrefRaw, titleRaw) => {
+    if (!hrefRaw || !titleRaw) return;
+    const cleanTitle = repairMojibake(String(titleRaw).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim());
+    if (!cleanTitle) return;
+    const hrefPath = safeDecodeURIComponent(hrefRaw.split('#')[0]);
+    const key = findZipKey(keyIndex, normalizeZipPath(baseDir, hrefPath));
+    if (key && !tocTitlesByFileOrFirst(tocTitlesByKey, key)) {
+      tocTitlesByKey.set(key, cleanTitle);
+    }
+  };
+  function tocTitlesByFileOrFirst(map, key) { return map.has(key); }
+
+  const ncxKeys = [];
+  const navKeys = [];
+
   for (const opfKey of opfCandidates) {
     const opfXml = decodeEpubText(await zip.files[opfKey].async('uint8array'));
     const opfDir = opfKey.includes('/') ? opfKey.substring(0, opfKey.lastIndexOf('/')) : '';
     const manifest = {};
+
+    const dcTitleMatch = opfXml.match(/<(?:[\w-]+:)?title\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?title>/i);
+    if (!packageBookTitle && dcTitleMatch) {
+      packageBookTitle = repairMojibake(dcTitleMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim());
+    }
 
     const itemRegex = /<(?:[\w-]+:)?item\b[^>]*>/gi;
     let match;
@@ -7163,7 +7208,12 @@ async function parseEpubArchive(zip) {
       if (!idMatch || !hrefMatch) continue;
       // Resolves ../ climbs, ./ prefixes, and percent-encoding against the archive index
       const href = safeDecodeURIComponent(hrefMatch[1].split('#')[0]);
-      manifest[idMatch[1]] = findZipKey(keyIndex, normalizeZipPath(opfDir, href));
+      const resolvedKey = findZipKey(keyIndex, normalizeZipPath(opfDir, href));
+      manifest[idMatch[1]] = resolvedKey;
+      if (resolvedKey) {
+        if (/\bproperties=["'][^"']*\bnav\b[^"']*["']/i.test(tag)) navKeys.push(resolvedKey);
+        if (/application\/x-dtbncx\+xml/i.test(tag) || /\.ncx$/i.test(resolvedKey)) ncxKeys.push(resolvedKey);
+      }
     }
 
     const spineRegex = /<(?:[\w-]+:)?itemref\b[^>]*\bidref=["']([^"']+)["']/gi;
@@ -7172,6 +7222,40 @@ async function parseEpubArchive(zip) {
       if (key && zip.files[key] && !zip.files[key].dir) spineFiles.push(key);
     }
     if (spineFiles.length > 0) break;
+  }
+
+  // Pick up any fallback .ncx file in the archive if not listed in manifest
+  allKeys.forEach(k => { if (/\.ncx$/i.test(k) && !ncxKeys.includes(k)) ncxKeys.push(k); });
+
+  for (const navKey of navKeys) {
+    if (!zip.files[navKey] || zip.files[navKey].dir) continue;
+    try {
+      const navHtml = decodeEpubText(await zip.files[navKey].async('uint8array'));
+      const navDir = navKey.includes('/') ? navKey.substring(0, navKey.lastIndexOf('/')) : '';
+      const navDoc = new DOMParser().parseFromString(navHtml, 'text/html');
+      const tocNav = Array.from(navDoc.querySelectorAll('nav')).find((n) => {
+        const t = (n.getAttribute('epub:type') || n.getAttribute('type') || n.getAttribute('role') || '').toLowerCase();
+        return t.includes('toc') || t.includes('doc-toc');
+      }) || navDoc.querySelector('nav');
+      if (tocNav) {
+        tocNav.querySelectorAll('a[href]').forEach((a) => {
+          recordTocTitle(navDir, a.getAttribute('href'), a.textContent);
+        });
+      }
+    } catch { }
+  }
+
+  for (const ncxKey of ncxKeys) {
+    if (!zip.files[ncxKey] || zip.files[ncxKey].dir) continue;
+    try {
+      const ncxXml = decodeEpubText(await zip.files[ncxKey].async('uint8array'));
+      const ncxDir = ncxKey.includes('/') ? ncxKey.substring(0, ncxKey.lastIndexOf('/')) : '';
+      const navPointRegex = /<(?:[\w-]+:)?navPoint\b[^>]*>[\s\S]*?<(?:[\w-]+:)?text\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?text>[\s\S]*?<(?:[\w-]+:)?content\b[^>]*\bsrc=["']([^"']+)["'][^>]*\/?>/gi;
+      let m;
+      while ((m = navPointRegex.exec(ncxXml)) !== null) {
+        recordTocTitle(ncxDir, m[2], m[1]);
+      }
+    } catch { }
   }
 
   // 3. Candidate passes, in order: the spine, a filename scan that skips navigation pages,
@@ -7207,10 +7291,18 @@ async function parseEpubArchive(zip) {
 
       const chapterDir = chapterKey.includes('/') ? chapterKey.substring(0, chapterKey.lastIndexOf('/') + 1) : '';
 
-      let chapTitle = "";
-      const titleMatch = rawHtml.match(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/i) || rawHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-      if (titleMatch) {
-        chapTitle = repairMojibake(titleMatch[1].replace(/<[^>]+>/g, '').trim());
+      let chapTitle = tocTitlesByKey.get(chapterKey) || "";
+      if (!chapTitle) {
+        const headingMatch = rawHtml.match(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/i);
+        const headTitleMatch = rawHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+        if (headingMatch) {
+          chapTitle = repairMojibake(headingMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim());
+        } else if (headTitleMatch) {
+          const candidate = repairMojibake(headTitleMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim());
+          if (candidate && (!packageBookTitle || candidate.toLowerCase() !== packageBookTitle.toLowerCase() || fileKeys.length === 1)) {
+            chapTitle = candidate;
+          }
+        }
       }
       if (!chapTitle || chapTitle.length < 2) {
         chapTitle = `Section ${fIdx + 1}`;
@@ -7569,6 +7661,13 @@ function repairSavedPages(pages) {
   }) : page));
 }
 
+function persistLoadedBook(signedIn, options = {}) {
+  requestPersistentStorage();
+  saveBookToShelf(currentDocName, bookPages, bookChapters, options);
+  if (signedIn) showFullAccessNotice();
+  else showTeaserAccessNotice();
+}
+
 // PRIMARY FILE IMPORT AND DOCUMENT LOADER
 async function loadDocumentFile(file) {
   if (!file) return;
@@ -7581,15 +7680,9 @@ async function loadDocumentFile(file) {
 
   try {
     const signedIn = await isUserSignedIn();
-    let result;
-
-    if (signedIn) {
-      // Authenticated: full document access
-      result = await processUploadedDocument(file);
-    } else {
-      // Unauthenticated: freemium teaser - only page 1
-      result = await processUploadedDocumentFreemium(file);
-    }
+    const result = signedIn
+      ? await processUploadedDocument(file)
+      : await processUploadedDocumentFreemium(file);
 
     bookPages = result.pages;
     bookChapters = result.chapters || [{ title: "Beginning", pageIndex: 0 }];
@@ -7620,16 +7713,7 @@ async function loadDocumentFile(file) {
 
     await refreshCurrentDocAnnotations();
     renderPage(0);
-
-    if (signedIn) {
-      requestPersistentStorage();
-      saveBookToShelf(currentDocName, bookPages, bookChapters, { originalPdf: pdfBuf });
-      showFullAccessNotice();
-    } else {
-      requestPersistentStorage();
-      saveBookToShelfFreemium(currentDocName, bookPages, bookChapters, { originalPdf: pdfBuf });
-      showTeaserAccessNotice();
-    }
+    persistLoadedBook(signedIn, { originalPdf: pdfBuf });
   } catch (err) {
     preloadStatus.textContent = "Error";
     alert(err.message);
@@ -7690,14 +7774,7 @@ async function importWebArticle(url) {
     renderPage(0);
 
     const signedIn = await isUserSignedIn();
-    requestPersistentStorage();
-    if (signedIn) {
-      saveBookToShelf(currentDocName, bookPages, bookChapters);
-      showFullAccessNotice();
-    } else {
-      saveBookToShelfFreemium(currentDocName, bookPages, bookChapters);
-      showTeaserAccessNotice();
-    }
+    persistLoadedBook(signedIn);
   } catch (err) {
     preloadStatus.textContent = 'Error';
     alert(err.message);
@@ -7781,62 +7858,31 @@ async function checkShareHandoff() {
 }
 
 // STARTUP PREFERENCES RESTORATION
-const savedTheme = localStorage.getItem('marginalia_theme') || 'parchment';
-document.documentElement.setAttribute('data-theme', savedTheme);
-optionThemeSelect.value = savedTheme;
-
-const savedFont = localStorage.getItem('marginalia_font_face') || 'serif';
-fontSelect.value = savedFont;
-applyFontFace(savedFont);
-
-const savedFontSize = localStorage.getItem('marginalia_font_size') || '1.15rem';
-fontSizeSelect.value = savedFontSize;
-document.documentElement.style.setProperty('--reader-font-size', savedFontSize);
-document.querySelectorAll('.book-content, .text-content').forEach((el) => {
-  el.style.lineHeight = '1.75';
+applyReaderPreferences({
+  theme: localStorage.getItem('marginalia_theme') || 'parchment',
+  font: localStorage.getItem('marginalia_font_face') || 'serif',
+  fontSize: localStorage.getItem('marginalia_font_size') || '1.15rem',
+  highlight: localStorage.getItem('marginalia_highlight_mode') || 'word',
+  bionic: localStorage.getItem('marginalia_bionic_mode') || 'off',
+  pacing: localStorage.getItem('marginalia_pacing_ruler') || 'off',
+  smartCleanup: localStorage.getItem('marginalia_smart_pdf_cleanup') !== 'off',
+  skipCode: localStorage.getItem('marginalia_skip_code_tables') || 'off',
+  calibration: localStorage.getItem('marginalia_sync_calibration') || undefined
 });
-
-const savedHighlight = localStorage.getItem('marginalia_highlight_mode') || 'word';
-highlightMode = savedHighlight;
-highlightModeSelect.value = savedHighlight;
-
-const savedBionic = localStorage.getItem('marginalia_bionic_mode') || 'off';
-bionicMode = savedBionic;
-if (bionicModeSelect) bionicModeSelect.value = savedBionic;
-
-const savedRuler = localStorage.getItem('marginalia_pacing_ruler') || 'off';
-pacingRulerMode = savedRuler;
-if (pacingRulerSelect) pacingRulerSelect.value = savedRuler;
-document.body.classList.toggle('pacing-ruler-active', pacingRulerMode === 'active');
-
-const savedPdfCleanup = localStorage.getItem('marginalia_smart_pdf_cleanup');
-smartPdfCleanup = savedPdfCleanup !== 'off';
-if (smartPdfCleanupSelect) smartPdfCleanupSelect.value = smartPdfCleanup ? 'on' : 'off';
-
-const savedSkipCode = localStorage.getItem('marginalia_skip_code_tables') || 'off';
-if (skipCodeTablesSelect) skipCodeTablesSelect.value = savedSkipCode;
-
-const savedCalibration = localStorage.getItem('marginalia_sync_calibration');
-if (savedCalibration) {
-  userManualCalibration = parseFloat(savedCalibration) || 1.0;
-  karaokeCalibrationSlider.value = userManualCalibration;
-  updateSyncCalibrationLabel(userManualCalibration);
-}
 
 // Bottom dock: restore the saved volume and prime the time display.
 volumeSlider.value = String(Math.round(playbackVolume * 100));
 volumeToggleBtn.textContent = playbackVolume === 0 ? '🔇' : '🔊';
 audioElement.volume = playbackVolume;
 
-initIndexedDB().then(() => {
-  refreshCurrentDocAnnotations().then(() => renderPage(0)).catch(() => renderPage(0));
-  checkShareHandoff();
-  checkSharedStudyPack();
-}).catch(() => {
-  renderPage(0);
-  checkShareHandoff();
-  checkSharedStudyPack();
-});
+initIndexedDB()
+  .then(() => refreshCurrentDocAnnotations().catch(() => {}))
+  .catch(() => {})
+  .finally(() => {
+    renderPage(0);
+    checkShareHandoff();
+    checkSharedStudyPack();
+  });
 populateVoices();
 updateAuthBadge();
 updateSleepTimerUI();

@@ -283,3 +283,32 @@ test('WASM audio engine applies speed in ONE place only and schedules back-to-ba
     'Buffers must be scheduled back-to-back on AudioContext.currentTime'
   );
 });
+
+test('encodeMonoWavBuffer and extractWavPcm round-trip 24000Hz Kokoro PCM cleanly', () => {
+  const encodeMonoWavBuffer = extractFunction('encodeMonoWavBuffer');
+  const extractWavPcm = extractFunction('extractWavPcm');
+
+  const samples = new Float32Array([0, 0.25, -0.5, 0.75, -0.9]);
+  const wav = encodeMonoWavBuffer(samples, 24000);
+  const decoded = extractWavPcm(wav);
+
+  assert.ok(decoded, 'extractWavPcm parses WAV buffer');
+  assert.equal(decoded.sampleRate, 24000, 'Preserves 24000Hz Kokoro sample rate');
+  assert.equal(decoded.pcmData.length, samples.length);
+  for (let i = 0; i < samples.length; i++) {
+    assert.ok(Math.abs(decoded.pcmData[i] - samples[i]) < 0.001, `Sample ${i} matches within 16-bit precision`);
+  }
+});
+
+test('Studio (On-Device) wires Kokoro-82M WASM voice mapping and multi-node session cancellation', () => {
+  const appSrc = readFileSync(fileURLToPath(new URL('../public/app.js', import.meta.url)), 'utf8');
+
+  assert.match(appSrc, /loadKokoroOnDeviceTts/, 'defines real Kokoro neural WASM loader');
+  assert.match(appSrc, /onnx-community\/Kokoro-82M-v1\.0-ONNX/, 'uses Kokoro-82M-v1.0-ONNX');
+  assert.match(appSrc, /heart:\s*'af_heart'/, 'maps heart to af_heart');
+  assert.match(appSrc, /michael:\s*'am_michael'/, 'maps michael to am_michael');
+  assert.match(appSrc, /emma:\s*'bf_emma'/, 'maps emma to bf_emma');
+  assert.match(appSrc, /wasmActiveSourceNodes\.forEach/, 'cancelAllSpeech stops all scheduled WASM nodes');
+  assert.match(appSrc, /wasmScheduledChunks\.clear\(\)/, 'cancelAllSpeech clears scheduled chunk map');
+  assert.match(appSrc, /wasmScheduledChunks\.get\(schedKey\)/, 'speakServerless adopts pre-scheduled chunks without double playback');
+});

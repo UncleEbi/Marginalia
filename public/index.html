@@ -212,6 +212,11 @@
         <span>My Shelf</span>
       </div>
 
+      <div class="drawer-nav-item" id="navChapters">
+        <span style="font-size:1.2rem;">📑</span>
+        <span>Chapters &amp; Pages</span>
+      </div>
+
       <div class="drawer-nav-item" id="navBookmarks">
         <span style="font-size:1.2rem;">🔖</span>
         <span>Bookmarks</span>
@@ -330,9 +335,16 @@
 
     <div class="reader-card">
       <div class="doc-meta">
-        <span id="docTitle" style="font-weight:600; max-width:65%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Marginalia Quickstart</span>
+        <div class="doc-meta-info">
+          <span id="docTitle" class="doc-meta-title">Marginalia Quickstart</span>
+          <button id="readerChapterBtn" type="button" class="doc-chapter-pill" title="Show and select chapters">
+            <span aria-hidden="true">📑</span>
+            <span id="readerChapterLabel">Chapter 1</span>
+            <span class="doc-chapter-caret" aria-hidden="true">▾</span>
+          </button>
+        </div>
 
-        <div style="display:flex; align-items:center; gap:0.4rem;">
+        <div class="doc-meta-actions" style="display:flex; align-items:center; gap:0.4rem;">
           <button id="audioDrillBtn" class="btn-audio-drill" style="padding:0.22rem 0.55rem; font-size:0.75rem; border-radius:5px; border:1px solid var(--border); background:var(--bg-main); color:var(--text-main); font-weight:600; cursor:pointer;" title="Hands-free Audio Drill (Active Recall)">🎧 Audio Drill</button>
           <button id="pageViewToggleBtn" class="btn-page-view" style="display:none; padding:0.22rem 0.55rem; font-size:0.75rem; border-radius:5px; border:1px solid var(--border); background:var(--bg-main); color:var(--text-main); font-weight:600; cursor:pointer;" title="View original PDF page diagrams and tables">📄 Page View</button>
           <button id="addBookmarkBtn" class="bookmark-ribbon-btn" title="Bookmark Sentence">🔖</button>
