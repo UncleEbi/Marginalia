@@ -122,6 +122,7 @@ test('registerMediaSessionHandlers binds play, pause, track skip, and seek handl
   const context = {
     navigator: { mediaSession: mockMediaSession },
     isPlaying: false,
+    isAudioDrillActive: false,
     activeEngine: 'neural',
     unlockAudioForIOS: () => {},
     playCurrentSentence: () => { context.isPlaying = true; },

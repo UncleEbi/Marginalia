@@ -1830,6 +1830,27 @@ const studyPackBannerMeta = document.getElementById('studyPackBannerMeta');
 const studyPackSaveBtn = document.getElementById('studyPackSaveBtn');
 let currentStudyKitTab = 'markdown';
 
+// Audio Drill Elements
+let isAudioDrillActive = false;
+let isAudioDrillPaused = false;
+const audioDrillBtn = document.getElementById('audioDrillBtn');
+const navAudioDrill = document.getElementById('navAudioDrill');
+const audioDrillModal = document.getElementById('audioDrillModal');
+const drillSourceSelect = document.getElementById('drillSourceSelect');
+const drillPauseSelect = document.getElementById('drillPauseSelect');
+const drillShuffleCheck = document.getElementById('drillShuffleCheck');
+const drillAvailableCount = document.getElementById('drillAvailableCount');
+const startAudioDrillBtn = document.getElementById('startAudioDrillBtn');
+const audioDrillHud = document.getElementById('audioDrillHud');
+const drillProgressText = document.getElementById('drillProgressText');
+const drillPromptText = document.getElementById('drillPromptText');
+const drillAnswerText = document.getElementById('drillAnswerText');
+const drillAnswerBox = document.getElementById('drillAnswerBox');
+const drillReviewBtn = document.getElementById('drillReviewBtn');
+const drillPauseToggleBtn = document.getElementById('drillPauseToggleBtn');
+const drillKnownBtn = document.getElementById('drillKnownBtn');
+const drillStopBtn = document.getElementById('drillStopBtn');
+
 // Cognitive Modes
 const bionicModeSelect = document.getElementById('bionicModeSelect');
 const pacingRulerSelect = document.getElementById('pacingRulerSelect');
@@ -2095,14 +2116,56 @@ function handleHandsfreeNextTrack() {
 (function registerMediaSessionHandlers() {
   if (!('mediaSession' in navigator)) return;
   const set = (action, fn) => { try { navigator.mediaSession.setActionHandler(action, fn); } catch (e) { } };
-  set('play', () => { if (!isPlaying) { if (activeEngine !== 'browser') unlockAudioForIOS(); isPlaying = true; playCurrentSentence(); } });
-  set('pause', () => stopAudio());
-  set('stop', () => stopAudio());
-  set('previoustrack', () => skipSentence(-1));
-  set('nexttrack', handleHandsfreeNextTrack);
+  set('play', () => {
+    if (typeof isAudioDrillActive !== 'undefined' && isAudioDrillActive) {
+      resumeAudioDrill();
+    } else {
+      if (!isPlaying) { if (activeEngine !== 'browser') unlockAudioForIOS(); isPlaying = true; playCurrentSentence(); }
+    }
+  });
+  set('pause', () => {
+    if (typeof isAudioDrillActive !== 'undefined' && isAudioDrillActive) {
+      pauseAudioDrill();
+    } else {
+      stopAudio();
+    }
+  });
+  set('stop', () => {
+    if (typeof isAudioDrillActive !== 'undefined' && isAudioDrillActive) {
+      stopAudioDrill();
+    } else {
+      stopAudio();
+    }
+  });
+  set('previoustrack', () => {
+    if (typeof isAudioDrillActive !== 'undefined' && isAudioDrillActive) {
+      rateDrillCard(false);
+    } else {
+      skipSentence(-1);
+    }
+  });
+  set('nexttrack', () => {
+    if (typeof isAudioDrillActive !== 'undefined' && isAudioDrillActive) {
+      rateDrillCard(true);
+    } else {
+      handleHandsfreeNextTrack();
+    }
+  });
   set('skipad', () => triggerHandsfreeBookmark());
-  set('seekbackward', (details) => skipSentence(-1));
-  set('seekforward', (details) => skipSentence(1));
+  set('seekbackward', (details) => {
+    if (typeof isAudioDrillActive !== 'undefined' && isAudioDrillActive) {
+      rateDrillCard(false);
+    } else {
+      skipSentence(-1);
+    }
+  });
+  set('seekforward', (details) => {
+    if (typeof isAudioDrillActive !== 'undefined' && isAudioDrillActive) {
+      rateDrillCard(true);
+    } else {
+      skipSentence(1);
+    }
+  });
 })();
 
 // --- TEXT SELECTION QUICK ACTIONS ---
@@ -3349,6 +3412,308 @@ if (navStudyKit) {
   navStudyKit.addEventListener('click', () => {
     closeDrawer();
     showStudyKitModal();
+  });
+}
+
+// --- HANDS-FREE AUDIO DRILL (ACTIVE RECALL) ---
+let drillCards = [];
+let drillIndex = 0;
+let drillReviewQueue = [];
+let drillKnownCount = 0;
+let drillTimer = null;
+let drillState = 'idle'; // 'prompt', 'thinking', 'reveal', 'rating'
+
+function speakDrillText(text) {
+  return new Promise((resolve) => {
+    if (!isAudioDrillActive) return resolve();
+    const spoken = normalizeForSpeech(text);
+    if (activeEngine === 'browser') {
+      browserSpeech.cancel();
+      const utter = new SpeechSynthesisUtterance(spoken);
+      utter.rate = playbackSpeed;
+      utter.volume = playbackVolume;
+      applyChosenVoice(utter);
+      utter.onend = () => resolve();
+      utter.onerror = () => resolve();
+      browserSpeech.speak(utter);
+    } else {
+      getNeuralAudioSrc(spoken).then((src) => {
+        if (!isAudioDrillActive) return resolve();
+        audioElement.src = src;
+        audioElement.playbackRate = playbackSpeed;
+        audioElement.volume = playbackVolume;
+        audioElement.onended = () => resolve();
+        audioElement.onerror = () => resolve();
+        audioElement.play().catch(() => resolve());
+      }).catch(() => {
+        browserSpeech.cancel();
+        const utter = new SpeechSynthesisUtterance(spoken);
+        utter.onend = () => resolve();
+        utter.onerror = () => resolve();
+        browserSpeech.speak(utter);
+      });
+    }
+  });
+}
+
+function cancelDrillSpeech() {
+  if (browserSpeech) browserSpeech.cancel();
+  try { audioElement.pause(); } catch (e) {}
+}
+
+async function collectDrillCards(source) {
+  const cards = [];
+
+  // Vocabulary
+  if (source === 'all' || source === 'vocab') {
+    const vocabList = await getVocabFromDB(currentDocName);
+    for (const v of vocabList) {
+      if (v.word && v.definition) {
+        cards.push({
+          type: 'vocab',
+          prompt: `Vocabulary term: ${v.word}. What is the definition?`,
+          answer: `${v.word}: ${v.definition}`,
+          snippet: v.word
+        });
+      }
+    }
+  }
+
+  // Margin Notes & Bookmarks
+  if (source === 'all' || source === 'notes') {
+    const notes = (currentDocAnnotations || []).filter(a => a.noteText && a.noteText.trim().length > 0);
+    for (const n of notes) {
+      cards.push({
+        type: 'note',
+        prompt: `Quote: "${n.quoteText || 'Margin Note'}". What was your note?`,
+        answer: `Note: ${n.noteText}`,
+        snippet: (n.quoteText || n.noteText).slice(0, 30)
+      });
+    }
+
+    const marks = bookmarks || [];
+    for (const b of marks) {
+      if (b.snippet) {
+        cards.push({
+          type: 'bookmark',
+          prompt: `Bookmark on Page ${b.page + 1}: "${b.snippet}". What is the key takeaway?`,
+          answer: `Bookmarked quote: "${b.snippet}"`,
+          snippet: b.snippet.slice(0, 30)
+        });
+      }
+    }
+  }
+
+  return cards;
+}
+
+async function openAudioDrillModal() {
+  const cards = await collectDrillCards(drillSourceSelect ? drillSourceSelect.value : 'all');
+  if (drillAvailableCount) {
+    drillAvailableCount.textContent = `${cards.length} card${cards.length === 1 ? '' : 's'} available`;
+  }
+  if (audioDrillModal) audioDrillModal.style.display = 'flex';
+}
+
+if (audioDrillBtn) {
+  audioDrillBtn.addEventListener('click', () => {
+    openAudioDrillModal();
+  });
+}
+
+if (navAudioDrill) {
+  navAudioDrill.addEventListener('click', () => {
+    closeDrawer();
+    openAudioDrillModal();
+  });
+}
+
+if (drillSourceSelect) {
+  drillSourceSelect.addEventListener('change', async () => {
+    const cards = await collectDrillCards(drillSourceSelect.value);
+    if (drillAvailableCount) {
+      drillAvailableCount.textContent = `${cards.length} card${cards.length === 1 ? '' : 's'} available`;
+    }
+  });
+}
+
+async function startAudioDrill() {
+  const source = drillSourceSelect ? drillSourceSelect.value : 'all';
+  let cards = await collectDrillCards(source);
+
+  if (!cards || cards.length === 0) {
+    showToast('⚠️ No cards found. Add margin notes, bookmarks, or vocabulary first!');
+    return;
+  }
+
+  if (drillShuffleCheck && drillShuffleCheck.checked) {
+    cards.sort(() => Math.random() - 0.5);
+  }
+
+  stopAudio();
+  if (audioDrillModal) audioDrillModal.style.display = 'none';
+
+  drillCards = cards;
+  drillIndex = 0;
+  drillReviewQueue = [];
+  drillKnownCount = 0;
+  isAudioDrillActive = true;
+  isAudioDrillPaused = false;
+
+  if (audioDrillHud) audioDrillHud.style.display = 'flex';
+  syncMediaSessionState(true);
+
+  if ('mediaSession' in navigator && typeof MediaMetadata !== 'undefined') {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: `Audio Drill · ${currentDocName}`,
+      artist: 'Marginalia Active Recall',
+      album: currentDocName,
+      artwork: [
+        { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
+        { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' }
+      ]
+    });
+  }
+
+  runDrillCard(0);
+}
+
+async function runDrillCard(idx) {
+  if (!isAudioDrillActive || isAudioDrillPaused) return;
+
+  if (idx >= drillCards.length) {
+    if (drillReviewQueue.length > 0) {
+      drillCards = [...drillReviewQueue];
+      drillReviewQueue = [];
+      drillIndex = 0;
+      await speakDrillText(`Review round starting for ${drillCards.length} cards.`);
+      if (!isAudioDrillActive || isAudioDrillPaused) return;
+      runDrillCard(0);
+    } else {
+      await finishAudioDrill();
+    }
+    return;
+  }
+
+  drillIndex = idx;
+  const card = drillCards[idx];
+
+  // State 1: Prompt
+  drillState = 'prompt';
+  if (drillProgressText) drillProgressText.textContent = `Card ${drillIndex + 1} of ${drillCards.length}`;
+  if (drillPromptText) drillPromptText.textContent = card.prompt;
+  if (drillAnswerText) drillAnswerText.textContent = 'Thinking...';
+  if (drillAnswerBox) drillAnswerBox.style.opacity = '0.5';
+
+  await speakDrillText(`Card ${drillIndex + 1} of ${drillCards.length}. ${card.prompt}`);
+  if (!isAudioDrillActive || isAudioDrillPaused) return;
+
+  // State 2: Thinking Pause
+  drillState = 'thinking';
+  const pauseSec = parseInt(drillPauseSelect ? drillPauseSelect.value : '5', 10) || 5;
+  for (let s = pauseSec; s > 0; s--) {
+    if (!isAudioDrillActive || isAudioDrillPaused) return;
+    if (drillAnswerText) drillAnswerText.textContent = `Thinking... (${s}s)`;
+    playBookmarkChime();
+    await new Promise(r => { drillTimer = setTimeout(r, 1000); });
+  }
+  if (!isAudioDrillActive || isAudioDrillPaused) return;
+
+  // State 3: Reveal
+  drillState = 'reveal';
+  if (drillAnswerBox) drillAnswerBox.style.opacity = '1';
+  if (drillAnswerText) drillAnswerText.textContent = card.answer;
+  await speakDrillText(`Answer: ${card.answer}`);
+  if (!isAudioDrillActive || isAudioDrillPaused) return;
+
+  // State 4: Rating window (5s window for Bluetooth headset input or click)
+  drillState = 'rating';
+  if (drillAnswerText) drillAnswerText.textContent = `${card.answer} (Press Next for Known, Back for Review)`;
+  await new Promise(r => { drillTimer = setTimeout(r, 5000); });
+  if (!isAudioDrillActive || isAudioDrillPaused) return;
+
+  // Default auto-advance as Known if time elapses without review press
+  rateDrillCard(true);
+}
+
+function rateDrillCard(known) {
+  if (!isAudioDrillActive) return;
+  if (drillTimer) { clearTimeout(drillTimer); drillTimer = null; }
+  cancelDrillSpeech();
+
+  const card = drillCards[drillIndex];
+  if (card) {
+    if (known) {
+      drillKnownCount++;
+      showToast(`✓ Mastered: ${card.snippet || 'Card'}`);
+    } else {
+      drillReviewQueue.push(card);
+      showToast(`↺ Queued for review: ${card.snippet || 'Card'}`);
+    }
+  }
+
+  runDrillCard(drillIndex + 1);
+}
+
+function pauseAudioDrill() {
+  if (!isAudioDrillActive) return;
+  isAudioDrillPaused = true;
+  if (drillTimer) { clearTimeout(drillTimer); drillTimer = null; }
+  cancelDrillSpeech();
+  if (drillPauseToggleBtn) drillPauseToggleBtn.textContent = '▶ Resume';
+  syncMediaSessionState(false);
+  showToast('Audio drill paused.');
+}
+
+function resumeAudioDrill() {
+  if (!isAudioDrillActive || !isAudioDrillPaused) return;
+  isAudioDrillPaused = false;
+  if (drillPauseToggleBtn) drillPauseToggleBtn.textContent = '⏸ Pause';
+  syncMediaSessionState(true);
+  showToast('Audio drill resumed.');
+  runDrillCard(drillIndex);
+}
+
+async function finishAudioDrill() {
+  await speakDrillText(`Drill complete! You mastered ${drillKnownCount} cards.`);
+  showToast(`🎉 Drill complete! ${drillKnownCount} cards mastered.`);
+  stopAudioDrill();
+}
+
+function stopAudioDrill() {
+  isAudioDrillActive = false;
+  isAudioDrillPaused = false;
+  if (drillTimer) { clearTimeout(drillTimer); drillTimer = null; }
+  cancelDrillSpeech();
+  if (audioDrillHud) audioDrillHud.style.display = 'none';
+  syncMediaSessionState(false);
+  updateMediaMetadata();
+}
+
+if (startAudioDrillBtn) {
+  startAudioDrillBtn.addEventListener('click', () => {
+    startAudioDrill();
+  });
+}
+
+if (drillKnownBtn) {
+  drillKnownBtn.addEventListener('click', () => rateDrillCard(true));
+}
+
+if (drillReviewBtn) {
+  drillReviewBtn.addEventListener('click', () => rateDrillCard(false));
+}
+
+if (drillPauseToggleBtn) {
+  drillPauseToggleBtn.addEventListener('click', () => {
+    if (isAudioDrillPaused) resumeAudioDrill();
+    else pauseAudioDrill();
+  });
+}
+
+if (drillStopBtn) {
+  drillStopBtn.addEventListener('click', () => {
+    stopAudioDrill();
   });
 }
 
