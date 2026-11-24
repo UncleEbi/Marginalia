@@ -1727,7 +1727,7 @@ let bookPages = [
     "Select any word or passage while reading to reveal quick actions: Speak, Define, Highlight, Note, Ask AI, or Copy.",
     "Tapping Define looks up the definition and saves a vocabulary flashcard for this book, while Highlight and Note let you color-code Amber, Mint, or Rose annotations in the margin.",
     "Tap Summary in the header to generate a concise section overview, document-wide key takeaways, audio export (.mp3), or AI explanations for embedded figures.",
-    "Tap Companion (or Ask AI on any selection) to open the AI Reading Companion drawer with Explain Simply, Socratic Questions, Key Terms, and custom follow-up chat."
+    "Tap Companion (or select text and tap Ask AI) to open the AI Reading Companion drawer with Explain Simply, Socratic Questions, Key Terms, and custom follow-up chat—powered by your AI credits or personal OpenAI key in Options."
   ],
   [
     "Tap Audio Drill in the header to turn your saved vocabulary, margin notes, and bookmarks into a hands-free active recall quiz.",

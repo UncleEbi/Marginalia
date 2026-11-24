@@ -54,6 +54,7 @@ test('all AI Reading Companion DOM elements exist in index.html', () => {
   for (const id of requiredCompanionIds) {
     assert.ok(html.includes(`id="${id}"`), `element id="${id}" must exist in index.html`);
   }
+  assert.match(html, /Reads the highlighted selection or active sentence/, 'companion welcome clarifies passage source and AI credits/BYOK');
 });
 
 test('api/summarize handles companion modes: simplify, socratic, explain_terms, ask', async () => {
