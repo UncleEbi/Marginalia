@@ -1724,8 +1724,10 @@ let currentStudyKitTab = 'markdown';
 // Cognitive Modes
 const bionicModeSelect = document.getElementById('bionicModeSelect');
 const pacingRulerSelect = document.getElementById('pacingRulerSelect');
+const smartPdfCleanupSelect = document.getElementById('smartPdfCleanupSelect');
 let bionicMode = localStorage.getItem('marginalia_bionic_mode') || 'off';
 let pacingRulerMode = localStorage.getItem('marginalia_pacing_ruler') || 'off';
+let smartPdfCleanup = localStorage.getItem('marginalia_smart_pdf_cleanup') !== 'off';
 const optionsModal = document.getElementById('optionsModal');
 const aboutModal = document.getElementById('aboutModal');
 const summaryModal = document.getElementById('summaryModal');
@@ -2913,6 +2915,7 @@ function openOptionsModal() {
   highlightModeSelect.value = highlightMode;
   if (bionicModeSelect) bionicModeSelect.value = bionicMode;
   if (pacingRulerSelect) pacingRulerSelect.value = pacingRulerMode;
+  if (smartPdfCleanupSelect) smartPdfCleanupSelect.value = smartPdfCleanup ? 'on' : 'off';
   karaokeCalibrationContainer.style.display = highlightMode === 'word' ? 'block' : 'none';
   customOpenAiKeyInput.value = localStorage.getItem('marginalia_byok_openai') || '';
   customElevenKeyInput.value = localStorage.getItem('marginalia_byok_eleven') || '';
@@ -3015,6 +3018,10 @@ saveOptionsBtn.addEventListener('click', () => {
     pacingRulerMode = pacingRulerSelect.value;
     localStorage.setItem('marginalia_pacing_ruler', pacingRulerMode);
     document.body.classList.toggle('pacing-ruler-active', pacingRulerMode === 'active');
+  }
+  if (smartPdfCleanupSelect) {
+    smartPdfCleanup = smartPdfCleanupSelect.value !== 'off';
+    localStorage.setItem('marginalia_smart_pdf_cleanup', smartPdfCleanup ? 'on' : 'off');
   }
 
   applyFontFace(selectedFont);
@@ -6428,6 +6435,10 @@ const savedRuler = localStorage.getItem('marginalia_pacing_ruler') || 'off';
 pacingRulerMode = savedRuler;
 if (pacingRulerSelect) pacingRulerSelect.value = savedRuler;
 document.body.classList.toggle('pacing-ruler-active', pacingRulerMode === 'active');
+
+const savedPdfCleanup = localStorage.getItem('marginalia_smart_pdf_cleanup');
+smartPdfCleanup = savedPdfCleanup !== 'off';
+if (smartPdfCleanupSelect) smartPdfCleanupSelect.value = smartPdfCleanup ? 'on' : 'off';
 
 const savedCalibration = localStorage.getItem('marginalia_sync_calibration');
 if (savedCalibration) {

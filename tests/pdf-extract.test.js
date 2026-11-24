@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 
-import { extractPdfTexts, processPageItems } from '../public/pdf-extract.js';
+import { extractPdfTexts, processPageItems, cleanInlineNoise } from '../public/pdf-extract.js';
 import { makePdf } from './helpers/make-pdf.mjs';
 
 test('extracts text from a single-page PDF', async () => {
@@ -155,4 +155,85 @@ test('processPageItems handles spanning title, two columns, and line de-hyphenat
   const leftIdx = text.indexOf('multimodal tasks.');
   const rightIdx = text.indexOf('Our experiments demonstrate');
   assert.ok(leftIdx < rightIdx, 'Left column should be ordered before right column');
+});
+
+test('cleanInlineNoise strips raw URLs, numeric citation brackets, and joins hyphenated words', () => {
+  const dirty = 'Recent advances in elec- trical engineering [1] and neural computing [12, 14] as described at https://arxiv.org/abs/2301.0001.';
+  const cleaned = cleanInlineNoise(dirty);
+  assert.equal(cleaned, 'Recent advances in electrical engineering and neural computing as described at');
+
+  const dirtyWithCitationPunct = 'Engineering [1] . Next topic [2], more details.';
+  assert.equal(cleanInlineNoise(dirtyWithCitationPunct), 'Engineering. Next topic, more details.');
+});
+
+test('processPageItems prunes standalone page numbers (- 12 -, Page 12 of 40, [ 12 ]) in margin bands', () => {
+  const items = [
+    { str: '- 12 -', transform: [1, 0, 0, 1, 280, 750], width: 40, height: 10 }, // Top 8%
+    { str: 'Valid paragraph text here.', transform: [1, 0, 0, 1, 72, 500], width: 200, height: 12 },
+    { str: 'Page 12 of 40', transform: [1, 0, 0, 1, 280, 30], width: 60, height: 10 } // Bottom 8%
+  ];
+
+  const text = processPageItems(items, { width: 612, height: 792 });
+  assert.equal(text, 'Valid paragraph text here.');
+});
+
+test('extractPdfTexts removes template headers repeating across more than 50% of pages', async () => {
+  // 3-page document where header repeats on all 3 pages with changing page number
+  const pagesData = [
+    {
+      rawOps: [
+        'BT /F1 10 Tf 50 750 Td (Journal of Machine Learning - Page 1) Tj ET',
+        'BT /F1 12 Tf 72 500 Td (Content on first page.) Tj ET'
+      ].join('\n')
+    },
+    {
+      rawOps: [
+        'BT /F1 10 Tf 50 750 Td (Journal of Machine Learning - Page 2) Tj ET',
+        'BT /F1 12 Tf 72 500 Td (Content on second page.) Tj ET'
+      ].join('\n')
+    },
+    {
+      rawOps: [
+        'BT /F1 10 Tf 50 750 Td (Journal of Machine Learning - Page 3) Tj ET',
+        'BT /F1 12 Tf 72 500 Td (Content on third page.) Tj ET'
+      ].join('\n')
+    }
+  ];
+
+  const pdfData = makePdf(pagesData);
+  const pages = await extractPdfTexts(pdfjsLib, pdfData);
+
+  assert.equal(pages.length, 3);
+  for (const page of pages) {
+    assert.ok(!page.text.includes('Journal of Machine Learning'), 'Repeating template header must be stripped');
+    assert.ok(page.text.includes('Content on'), 'Body content must be preserved');
+  }
+});
+
+test('non-destructive fallback keeps all text when layout has irregular geometry', () => {
+  // Staggered items that do not cluster cleanly into two columns
+  const items = [
+    { str: 'Line A at left', transform: [1, 0, 0, 1, 50, 700], width: 100, height: 12 },
+    { str: 'Line B in middle', transform: [1, 0, 0, 1, 200, 680], width: 100, height: 12 },
+    { str: 'Line C at right', transform: [1, 0, 0, 1, 400, 660], width: 100, height: 12 },
+    { str: 'Line D overlapping', transform: [1, 0, 0, 1, 150, 640], width: 300, height: 12 }
+  ];
+
+  const text = processPageItems(items, { width: 612, height: 792 });
+  assert.ok(text.includes('Line A at left'));
+  assert.ok(text.includes('Line B in middle'));
+  assert.ok(text.includes('Line C at right'));
+  assert.ok(text.includes('Line D overlapping'));
+});
+
+test('smartPdfCleanupSelect exists in index.html and app.js initializes it', async () => {
+  const fs = await import('node:fs');
+  const url = await import('node:url');
+  const html = fs.readFileSync(url.fileURLToPath(new URL('../public/index.html', import.meta.url)), 'utf8');
+  const appJs = fs.readFileSync(url.fileURLToPath(new URL('../public/app.js', import.meta.url)), 'utf8');
+
+  assert.ok(html.includes('id="smartPdfCleanupSelect"'), 'smartPdfCleanupSelect must exist in index.html');
+  assert.ok(html.includes('Smart PDF Cleanup'), 'Smart PDF Cleanup label must exist');
+  assert.ok(appJs.includes('smartPdfCleanupSelect'), 'app.js must reference smartPdfCleanupSelect');
+  assert.ok(appJs.includes('marginalia_smart_pdf_cleanup'), 'app.js must persist smart PDF cleanup option');
 });

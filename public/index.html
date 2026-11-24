@@ -134,7 +134,10 @@
       // Standard font data lets pdf.js measure PDFs that use the built-in fonts instead of
       // embedding them; without it their extracted text can be garbled.
       window.extractPdfTexts = (lib, data) =>
-        pdfExtract.extractPdfTexts(lib, data, { standardFontDataUrl: `${PDFJS_BASE}/standard_fonts/` });
+        pdfExtract.extractPdfTexts(lib, data, {
+          standardFontDataUrl: `${PDFJS_BASE}/standard_fonts/`,
+          smartCleanup: localStorage.getItem('marginalia_smart_pdf_cleanup') !== 'off'
+        });
       // Flat image scans have no text layer, so app.js falls back to rendering each page as an
       // image for the OCR endpoint. Same pinned font data as extraction.
       window.renderPdfPages = (lib, data, onPage, options) =>
@@ -710,6 +713,14 @@
           <select id="pacingRulerSelect" style="width:100%; padding:0.45rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:16px;">
             <option value="off" selected>Off (Full page visible)</option>
             <option value="active">Active Sentence Spotlight</option>
+          </select>
+        </div>
+
+        <div>
+          <label style="font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:0.35rem;">Smart PDF Cleanup</label>
+          <select id="smartPdfCleanupSelect" style="width:100%; padding:0.45rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:16px;">
+            <option value="on" selected>On (Clean Columns, De-Clutter & Citations)</option>
+            <option value="off">Off (Raw text extraction)</option>
           </select>
         </div>
 

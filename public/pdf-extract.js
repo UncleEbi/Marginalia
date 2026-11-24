@@ -103,22 +103,80 @@ function renderLines(lines) {
   return fullText.replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * Normalizes a header or footer string by masking digits to '#'
+ * and collapsing whitespace, so template headers across pages like:
+ * "Proceedings of IEEE - Page 12" and "Proceedings of IEEE - Page 13"
+ * match as repeating template headers.
+ */
+function normalizeHeaderFooterCandidate(str) {
+  if (!str || typeof str !== 'string') return '';
+  return str
+    .trim()
+    .toLowerCase()
+    .replace(/\d+/g, '#')
+    .replace(/\s+/g, ' ');
+}
+
+/**
+ * Checks if a string is a standalone page number like "12", "Page 12 of 40",
+ * "- 12 -", "[ 12 ]", "~ 12 ~", or roman numerals ("iv", "xii").
+ */
+function isStandalonePageNumber(str) {
+  if (!str || typeof str !== 'string') return false;
+  const s = str.trim();
+  return /^\s*(?:page\s+)?(?:-?\s*\d+\s*-?|\[\s*\d+\s*\]|~\s*\d+\s*~|[ivxlcdm]+)(?:\s+of\s+\d+)?\s*$/i.test(s);
+}
+
+/**
+ * Cleans inline reading noise when Smart PDF Cleanup is enabled:
+ * - Fixes hyphenated line-break word splits ("elec-\ntrical" or "elec- trical" -> "electrical")
+ * - Strips raw URLs (https://... or http://...)
+ * - Strips inline numeric citation brackets ([1], [12], [1, 2], [12, 14], [1-3], [12–15])
+ */
+export function cleanInlineNoise(text) {
+  if (!text || typeof text !== 'string') return '';
+  let cleaned = text;
+
+  // 1. Fix hyphenated line-break word splits: "elec-\ntrical" or "elec- trical" -> "electrical"
+  cleaned = cleaned.replace(/(\b[a-zA-Z]+)-\s+([a-zA-Z]+\b)/g, '$1$2');
+
+  // 2. Strip raw URLs (http:// or https://)
+  cleaned = cleaned.replace(/https?:\/\/[^\s)<>"]+/gi, '');
+
+  // 3. Strip inline numeric citation brackets like [1], [12], [1, 2], [12, 14], [1-3], [12–15]
+  cleaned = cleaned.replace(/\[\s*\d+(?:\s*[,–-]\s*\d+)*\s*\]/g, '');
+
+  // 4. Clean up spaces before punctuation from stripped citations (e.g. "engineering [1] ." -> "engineering.")
+  cleaned = cleaned.replace(/\s+([.,;:!?])/g, '$1');
+
+  // 5. Collapse runs of whitespace
+  return cleaned.replace(/\s+/g, ' ').trim();
+}
+
 export function processPageItems(rawItems, viewport, options = {}) {
-  const { layoutAware = true, removeHeaders = true } = options;
+  const {
+    layoutAware = true,
+    removeHeaders = true,
+    smartCleanup = true,
+    repeatingPatterns = null
+  } = options;
   if (!rawItems || rawItems.length === 0) return '';
 
   if (!layoutAware) {
-    return rawItems
+    const rawJoined = rawItems
       .map((item) => (typeof item?.str === 'string' ? item.str : ''))
       .join(' ')
       .replace(/\s+/g, ' ')
       .trim();
+    return smartCleanup ? cleanInlineNoise(rawJoined) : rawJoined;
   }
 
   const pageWidth = viewport && viewport.width ? viewport.width : 612;
   const pageHeight = viewport && viewport.height ? viewport.height : 792;
-  const yTopCutoff = pageHeight * 0.94;
-  const yBottomCutoff = pageHeight * 0.06;
+  // Top 8% and bottom 8% Y-bands
+  const yTopCutoff = pageHeight * 0.92;
+  const yBottomCutoff = pageHeight * 0.08;
 
   const validItems = [];
   for (const item of rawItems) {
@@ -141,51 +199,93 @@ export function processPageItems(rawItems, viewport, options = {}) {
 
   if (validItems.length === 0) return '';
 
-  // Header and footer pruning
+  // Repeating header, footer & page number removal in the top 8% and bottom 8% Y-bands
   let bodyItems = validItems;
   if (removeHeaders) {
     bodyItems = validItems.filter((item) => {
-      if (item.y >= yTopCutoff) {
-        if (/^\s*(page\s+)?(\d+|[ivxlcdm]+)(\s+of\s+\d+)?\s*$/i.test(item.str)) return false;
+      const inTopBand = item.y >= yTopCutoff;
+      const inBottomBand = item.y <= yBottomCutoff;
+
+      if (inTopBand || inBottomBand) {
+        // Strip standalone page numbers (e.g. 12, Page 12 of 40, - 12 -, [ 12 ], ~ 12 ~)
+        if (isStandalonePageNumber(item.str)) return false;
+
+        // Strip repeating headers/footers confirmed across >50% of pages
+        if (repeatingPatterns && repeatingPatterns.has(normalizeHeaderFooterCandidate(item.str))) {
+          return false;
+        }
+      }
+
+      if (inTopBand) {
+        // Single-page fallback patterns in header band
         if (item.str.length < 120 && item.y > pageHeight * 0.955) return false;
       }
-      if (item.y <= yBottomCutoff) {
-        if (/^\s*(page\s+)?(-?\s*\d+\s*-?|[ivxlcdm]+)(\s+of\s+\d+)?\s*$/i.test(item.str)) return false;
+
+      if (inBottomBand) {
+        // Single-page fallback patterns in footer band
         if (/(©|\(c\)|copyright|doi:|issn|rights reserved)/i.test(item.str)) return false;
         if (item.str.length < 100 && item.y < pageHeight * 0.045) return false;
       }
+
       return true;
     });
     if (bodyItems.length === 0) bodyItems = validItems;
   }
 
   if (bodyItems.length < 6) {
-    return renderLines(groupIntoLines(bodyItems));
+    const text = renderLines(groupIntoLines(bodyItems));
+    return smartCleanup ? cleanInlineNoise(text) : text;
   }
 
+  // Two-Column Layout Detection
   const minX = Math.min(...bodyItems.map((it) => it.x));
   const maxX = Math.max(...bodyItems.map((it) => it.right));
   const contentWidth = maxX - minX;
-  const midX = minX + contentWidth / 2;
+  // Midpoint based on page width or content bounds
+  const midX = (pageWidth && pageWidth > 0) ? pageWidth / 2 : (minX + contentWidth / 2);
 
   const leftCol = [];
   const rightCol = [];
   const spanning = [];
 
+  // Gutter margin around the horizontal midpoint
+  const gutterMargin = Math.max(12, contentWidth * 0.03);
+
   for (const item of bodyItems) {
-    if (item.width > contentWidth * 0.65 || (item.x < midX - 25 && item.right > midX + 25)) {
+    const itemCenter = (item.x + item.right) / 2;
+    // Spanning items: wider than 60% of content or crossing well over the midpoint
+    if (item.width > contentWidth * 0.60 || (item.x < midX - gutterMargin && item.right > midX + gutterMargin)) {
       spanning.push(item);
-    } else if ((item.x + item.right) / 2 < midX) {
+    } else if (item.right <= midX + gutterMargin * 0.5 && itemCenter < midX) {
       leftCol.push(item);
-    } else {
+    } else if (item.x >= midX - gutterMargin * 0.5 && itemCenter > midX) {
       rightCol.push(item);
+    } else {
+      if (itemCenter < midX) leftCol.push(item);
+      else rightCol.push(item);
     }
   }
 
-  const isTwoColumn = leftCol.length >= 3 && rightCol.length >= 3 && (leftCol.length + rightCol.length) > spanning.length;
+  // Check consistent vertical gutter gap
+  let hasConsistentGutter = false;
+  if (leftCol.length >= 3 && rightCol.length >= 3) {
+    const maxLeftX = Math.max(...leftCol.map((i) => i.right));
+    const minRightX = Math.min(...rightCol.map((i) => i.x));
+    // Clear separation between columns (positive gutter width or minimal font overhang)
+    if (minRightX - maxLeftX >= -5) {
+      hasConsistentGutter = true;
+    }
+  }
+
+  const isTwoColumn = hasConsistentGutter &&
+    leftCol.length >= 3 &&
+    rightCol.length >= 3 &&
+    (leftCol.length + rightCol.length) > spanning.length;
 
   if (!isTwoColumn) {
-    return renderLines(groupIntoLines(bodyItems));
+    // Non-destructive fallback: cleanly sort Y-then-X without dropping text
+    const text = renderLines(groupIntoLines(bodyItems));
+    return smartCleanup ? cleanInlineNoise(text) : text;
   }
 
   const colTopY = Math.max(
@@ -205,6 +305,7 @@ export function processPageItems(rawItems, viewport, options = {}) {
   if (topSpanning.length) sections.push(renderLines(groupIntoLines(topSpanning)));
 
   if (midSpanning.length === 0) {
+    // Entire left column top-to-bottom first, followed by entire right column top-to-bottom
     sections.push(renderLines(groupIntoLines(leftCol)));
     sections.push(renderLines(groupIntoLines(rightCol)));
   } else {
@@ -223,7 +324,8 @@ export function processPageItems(rawItems, viewport, options = {}) {
 
   if (bottomSpanning.length) sections.push(renderLines(groupIntoLines(bottomSpanning)));
 
-  return sections.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+  const resultText = sections.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+  return smartCleanup ? cleanInlineNoise(resultText) : resultText;
 }
 
 export async function extractPdfTexts(libOrData, dataOrOptions, maybeOptions) {
@@ -246,6 +348,7 @@ export async function extractPdfTexts(libOrData, dataOrOptions, maybeOptions) {
   const {
     layoutAware = true,
     removeHeaders = true,
+    smartCleanup = true,
     ...getDocumentOptions
   } = options;
 
@@ -254,12 +357,57 @@ export async function extractPdfTexts(libOrData, dataOrOptions, maybeOptions) {
   const pages = [];
 
   try {
+    // Pass 1: Scan top 8% and bottom 8% Y-bands across all pages to detect repeating headers/footers (> 50% of pages)
+    const headerFooterCounts = new Map();
+    const rawPagesData = [];
+
     for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
       const page = await doc.getPage(pageNumber);
       const viewport = page.getViewport ? page.getViewport({ scale: 1 }) : { width: 612, height: 792 };
       const content = await page.getTextContent();
-      const text = processPageItems(content.items, viewport, { layoutAware, removeHeaders });
-      if (text) pages.push({ pageNumber, text });
+      rawPagesData.push({ pageNumber, viewport, items: content.items });
+
+      if (removeHeaders && doc.numPages > 1) {
+        const pageHeight = viewport.height || 792;
+        const yTop = pageHeight * 0.92;
+        const yBottom = pageHeight * 0.08;
+        const seenOnThisPage = new Set();
+
+        for (const it of content.items) {
+          if (!it || typeof it.str !== 'string') continue;
+          const ty = Array.isArray(it.transform) ? it.transform[5] : 0;
+          if (ty >= yTop || ty <= yBottom) {
+            const norm = normalizeHeaderFooterCandidate(it.str);
+            if (norm && norm.length >= 3) {
+              seenOnThisPage.add(norm);
+            }
+          }
+        }
+
+        for (const candidate of seenOnThisPage) {
+          headerFooterCounts.set(candidate, (headerFooterCounts.get(candidate) || 0) + 1);
+        }
+      }
+    }
+
+    // Lines repeating on > 50% of pages are repeating headers/footers
+    const repeatingPatterns = new Set();
+    const threshold = doc.numPages * 0.5;
+    for (const [candidate, count] of headerFooterCounts.entries()) {
+      if (count > threshold) {
+        repeatingPatterns.add(candidate);
+      }
+    }
+
+    // Pass 2: Extract and de-clutter each page
+    for (const pageData of rawPagesData) {
+      const text = processPageItems(pageData.items, pageData.viewport, {
+        layoutAware,
+        removeHeaders,
+        smartCleanup,
+        repeatingPatterns
+      });
+      if (text) pages.push({ pageNumber: pageData.pageNumber, text });
     }
   } finally {
     if (typeof doc.destroy === 'function') {
