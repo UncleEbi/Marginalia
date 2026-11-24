@@ -9,6 +9,7 @@ const SHELL = [
   './style.css',
   './app.js',
   './pdf-extract.js',
+  './tts-worker.js',
   './manifest.webmanifest',
   './icons/apple-touch-icon.png',
   './icons/icon-192.png',
@@ -16,7 +17,7 @@ const SHELL = [
   './icons/icon-maskable-512.png'
 ];
 // Same-origin files that must revalidate on every load (navigation requests match by mode).
-const NETWORK_FIRST_PATHS = new Set(['/', '/index.html', '/style.css', '/app.js', '/pdf-extract.js']);
+const NETWORK_FIRST_PATHS = new Set(['/', '/index.html', '/style.css', '/app.js', '/pdf-extract.js', '/tts-worker.js']);
 const CDN_HOSTS = ['cdnjs.cloudflare.com', 'cdn.jsdelivr.net'];
 
 self.addEventListener('install', (e) => {

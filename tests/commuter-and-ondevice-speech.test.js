@@ -312,3 +312,14 @@ test('Studio (On-Device) wires Kokoro-82M WASM voice mapping and multi-node sess
   assert.match(appSrc, /wasmScheduledChunks\.clear\(\)/, 'cancelAllSpeech clears scheduled chunk map');
   assert.match(appSrc, /wasmScheduledChunks\.get\(schedKey\)/, 'speakServerless adopts pre-scheduled chunks without double playback');
 });
+
+test('Studio (On-Device) offloads synthesis to public/tts-worker.js without blocking main thread', () => {
+  const workerSrc = readFileSync(fileURLToPath(new URL('../public/tts-worker.js', import.meta.url)), 'utf8');
+  const appSrc = readFileSync(fileURLToPath(new URL('../public/app.js', import.meta.url)), 'utf8');
+
+  assert.match(workerSrc, /KokoroTTS/, 'tts-worker imports KokoroTTS');
+  assert.match(workerSrc, /splitLongText/, 'tts-worker splits long clauses cleanly');
+  assert.match(workerSrc, /\[pcm\.buffer\]/, 'tts-worker transfers PCM buffer zero-copy');
+  assert.match(appSrc, /new Worker\('tts-worker\.js'/, 'app.js launches tts-worker.js module worker');
+  assert.match(appSrc, /if \(!standalone && activeEngine !== 'wasm'\) preloadUpcoming\(myToken\)/, 'wasm skips 3-way preload burst on start');
+});

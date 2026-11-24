@@ -1055,7 +1055,7 @@
         Study your flashcards, vocabulary, and notes completely eyes-free. Marginalia reads questions, gives you time to think, reveals the answer, and listens for Bluetooth headset taps.
       </p>
 
-      <div style="display:flex; flex-direction:column; gap:0.65rem; margin-bottom:1rem;">
+      <div style="display:flex; flex-direction:column; gap:0.65rem; margin-bottom:0.85rem;">
         <div>
           <label style="font-size:0.82rem; color:var(--text-muted); display:block; margin-bottom:0.3rem;">Card Source</label>
           <select id="drillSourceSelect" style="width:100%; padding:0.45rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); font-size:16px;">
@@ -1081,7 +1081,21 @@
         </div>
       </div>
 
-      <div style="display:flex; justify-content:space-between; align-items:center;">
+      <div id="drillControlsNote" style="font-size:0.78rem; color:var(--text-muted); background:var(--bg-main); border:1px solid var(--border); border-radius:8px; padding:0.55rem 0.7rem; line-height:1.45; margin-bottom:0.85rem;">
+        <strong style="color:var(--text-main);">Controls:</strong> Headset or on-screen <strong>Next = Known</strong> (mastered) · <strong>Back = Review</strong> (repeats at end of round).
+      </div>
+
+      <div id="drillEmptyGuide" style="display:none; background:rgba(99,102,241,0.08); border:1px dashed var(--accent); border-radius:10px; padding:0.75rem 0.85rem; margin-bottom:0.9rem;">
+        <div style="font-size:0.84rem; font-weight:700; color:var(--text-main); margin-bottom:0.35rem;">How to add cards for this document</div>
+        <ul style="margin:0 0 0.65rem 1.1rem; padding:0; font-size:0.78rem; color:var(--text-muted); line-height:1.5; display:flex; flex-direction:column; gap:0.2rem;">
+          <li><strong>📖 Define:</strong> Highlight any word while reading and tap <em>Define</em> to save a vocabulary card.</li>
+          <li><strong>📝 Margin Note:</strong> Select a phrase and tap <em>Note</em> to turn key ideas into Q&amp;A cards.</li>
+          <li><strong>🔖 Bookmark:</strong> Tap the ribbon icon (or double-tap <em>Next</em> on headphones) to save key quotes.</li>
+        </ul>
+        <button id="trySampleDrillBtn" type="button" style="width:100%; padding:0.48rem 0.85rem; border-radius:7px; background:var(--bg-card); color:var(--accent); border:1px solid var(--accent); font-weight:600; font-size:0.82rem; cursor:pointer;">✨ Try a 2-card sample drill</button>
+      </div>
+
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:0.5rem;">
         <span id="drillAvailableCount" style="font-size:0.78rem; color:var(--text-muted);">Ready to drill</span>
         <div style="display:flex; gap:0.5rem;">
           <button data-close="audioDrillModal" type="button" style="padding:0.4rem 0.85rem; border-radius:6px; border:1px solid var(--border); background:var(--bg-main); color:var(--text-main); cursor:pointer;">Cancel</button>

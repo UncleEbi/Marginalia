@@ -1706,14 +1706,49 @@ async function refreshCurrentDocAnnotations() {
 let currentDocName = "Marginalia Quickstart";
 let bookPages = [
   [
-    "Welcome to Marginalia Mobile Reader.",
-    "Tap the Open button above to import any EPUB, PDF, Word, or text file.",
-    "Select any phrase in the book to immediately define, speak, or copy it.",
-    "Lock your phone screen while reading and enjoy uninterrupted background voice narration."
+    "Welcome to Marginalia, your interactive read-along and study companion.",
+    "Tap Open in the top bar (or open the Menu for Import New Document) to load EPUB, PDF, DOCX, TXT, Markdown, or HTML files directly on your device—with automatic OCR for scanned image PDFs.",
+    "You can also paste any web article link via Import New Document, or send files and URLs straight into Marginalia from your phone's Share menu.",
+    "Every book is stored offline in My Shelf with JSON backup and restore, and signing in syncs your reading position and bookmarks across devices."
+  ],
+  [
+    "Tap Play in the bottom dock to listen with synchronized word-by-word karaoke highlighting.",
+    "Tap the floating Voice Pill above the page (or open Options) to switch between Browser Native voices, Studio (On-Device) Kokoro neural voices running in the background, or cloud ElevenLabs and OpenAI Audio with your quota or personal API keys.",
+    "Cached neural audio replays with zero extra credits, and the player dock lets you adjust speed (0.8x to 2.0x), jump 15 seconds forward or back, control volume, or set a Sleep Timer by minutes or end of chapter.",
+    "Lock your screen or use Bluetooth headphones: single-tap Next or Previous skips sentences, and double-tap Next to drop a bookmark at your exact sentence."
+  ],
+  [
+    "Tap any sentence in the reader to jump playback straight to that line, or tap the magnifying glass to search across the entire document.",
+    "Use the chapter pill next to the document title (or tap the elapsed timestamp in the dock) to switch chapters, slide to any page, or export the active chapter as an MP3 for offline listening.",
+    "When reading PDFs, Smart PDF Cleanup automatically fixes two-column reading order, removes repeating headers, footers, and page numbers, and repairs line-break hyphenation.",
+    "Tap Page View on any PDF to inspect original diagrams, equations, and tables in a synced high-DPI drawer with zoom and auto-follow without pausing audio."
+  ],
+  [
+    "Select any word or passage while reading to reveal quick actions: Speak, Define, Highlight, Note, Ask AI, or Copy.",
+    "Tapping Define looks up the definition and saves a vocabulary flashcard for this book, while Highlight and Note let you color-code Amber, Mint, or Rose annotations in the margin.",
+    "Tap Summary in the header to generate a concise section overview, document-wide key takeaways, audio export (.mp3), or AI explanations for embedded figures.",
+    "Tap Companion (or Ask AI on any selection) to open the AI Reading Companion drawer with Explain Simply, Socratic Questions, Key Terms, and custom follow-up chat."
+  ],
+  [
+    "Tap Audio Drill in the header to turn your saved vocabulary, margin notes, and bookmarks into a hands-free active recall quiz.",
+    "Marginalia reads each prompt, gives you a customizable thinking countdown, speaks the answer, and listens for controls: Next marks a card Known, and Back queues it to review again.",
+    "New here without cards yet? Open Audio Drill anyway and tap Try a 2-card sample drill to experience how active recall works.",
+    "Open Export Study Kit from the left menu to copy or download your highlights, notes, and vocabulary for Markdown/Obsidian or Anki Flashcards, or share a read-only Study Pack link."
+  ],
+  [
+    "Open Options in the left menu to tailor reading comfort: choose from five color themes (including Warm Parchment, Nord Dark, and OLED), multiple fonts and sizes, Bionic Reading fixation bolding, or the Pacing Focus Ruler.",
+    "Fine-tune Word Karaoke timing with the Karaoke Sync Adjustment slider, or switch between word highlighting, sentence focus, or clean reading.",
+    "Reading technical papers? Turn on Skip Code & Raw Tables to bypass dense syntax blocks aloud, rely on automatic STEM unit expansion (like Eq., Fig., kWh, MHz, and ohms), and add course acronyms to your custom Pronunciation Dictionary.",
+    "Marginalia adapts seamlessly when you rotate your phone between portrait and landscape—tap Open above whenever you are ready to load your first book or article."
   ]
 ];
 let bookChapters = [
-  { title: "Introduction", pageIndex: 0 }
+  { title: "1. Welcome & Importing", pageIndex: 0 },
+  { title: "2. Voices & Lock-Screen Audio", pageIndex: 1 },
+  { title: "3. Chapters, Search & PDF View", pageIndex: 2 },
+  { title: "4. Notes, Summary & AI Companion", pageIndex: 3 },
+  { title: "5. Audio Drill & Study Kit", pageIndex: 4 },
+  { title: "6. STEM Rules & Display Options", pageIndex: 5 }
 ];
 
 let originalBookPages = null;
@@ -1856,6 +1891,8 @@ const audioDrillModal = document.getElementById('audioDrillModal');
 const drillSourceSelect = document.getElementById('drillSourceSelect');
 const drillPauseSelect = document.getElementById('drillPauseSelect');
 const drillShuffleCheck = document.getElementById('drillShuffleCheck');
+const drillEmptyGuide = document.getElementById('drillEmptyGuide');
+const trySampleDrillBtn = document.getElementById('trySampleDrillBtn');
 const drillAvailableCount = document.getElementById('drillAvailableCount');
 const startAudioDrillBtn = document.getElementById('startAudioDrillBtn');
 const audioDrillHud = document.getElementById('audioDrillHud');
@@ -1970,6 +2007,9 @@ function cancelAllSpeech() {
   }
   if (typeof wasmScheduledChunks !== 'undefined') wasmScheduledChunks.clear();
   if (typeof wasmScheduledEndTime !== 'undefined') wasmScheduledEndTime = 0;
+  if (typeof wasmTtsWorker !== 'undefined' && wasmTtsWorker) {
+    try { wasmTtsWorker.postMessage({ type: 'cancel', sessionId: wasmSessionId }); } catch (e) {}
+  }
   cancelWordAnimation();
 }
 
@@ -3513,7 +3553,13 @@ async function collectDrillCards(source) {
       });
     }
 
-    const marks = bookmarks || [];
+    let marks = [];
+    if (typeof bookmarks !== 'undefined' && Array.isArray(bookmarks)) {
+      marks = bookmarks;
+    } else if (typeof getBookmarksFromDB === 'function') {
+      const allMarks = await getBookmarksFromDB();
+      marks = (allMarks || []).filter(b => !b.bookTitle || b.bookTitle === currentDocName);
+    }
     for (const b of marks) {
       if (b.snippet) {
         cards.push({
@@ -3530,11 +3576,44 @@ async function collectDrillCards(source) {
 }
 
 async function openAudioDrillModal() {
-  const cards = await collectDrillCards(drillSourceSelect ? drillSourceSelect.value : 'all');
-  if (drillAvailableCount) {
-    drillAvailableCount.textContent = `${cards.length} card${cards.length === 1 ? '' : 's'} available`;
-  }
   if (audioDrillModal) audioDrillModal.style.display = 'flex';
+  await refreshAudioDrillModalState();
+}
+
+const SAMPLE_DRILL_CARDS = [
+  {
+    type: 'sample',
+    prompt: 'Sample Card 1: How do you add vocabulary cards to your Audio Drill deck?',
+    answer: 'Highlight any word while reading and tap Define in the popup menu.',
+    snippet: 'Sample · Add Vocabulary'
+  },
+  {
+    type: 'sample',
+    prompt: 'Sample Card 2: Which controls mark a card as Known or queue it for Review?',
+    answer: 'Press Next for Known, or press Back to review the card again later.',
+    snippet: 'Sample · Drill Controls'
+  }
+];
+
+async function refreshAudioDrillModalState() {
+  const source = drillSourceSelect ? drillSourceSelect.value : 'all';
+  const cards = await collectDrillCards(source);
+  const isEmpty = cards.length === 0;
+
+  if (drillAvailableCount) {
+    drillAvailableCount.textContent = isEmpty
+      ? '0 cards in this deck'
+      : `${cards.length} card${cards.length === 1 ? '' : 's'} available`;
+  }
+  if (drillEmptyGuide) {
+    drillEmptyGuide.style.display = isEmpty ? 'block' : 'none';
+  }
+  if (startAudioDrillBtn) {
+    startAudioDrillBtn.disabled = isEmpty;
+    startAudioDrillBtn.style.opacity = isEmpty ? '0.5' : '1';
+    startAudioDrillBtn.style.cursor = isEmpty ? 'not-allowed' : 'pointer';
+  }
+  return cards;
 }
 
 if (audioDrillBtn) {
@@ -3551,31 +3630,21 @@ if (navAudioDrill) {
 }
 
 if (drillSourceSelect) {
-  drillSourceSelect.addEventListener('change', async () => {
-    const cards = await collectDrillCards(drillSourceSelect.value);
-    if (drillAvailableCount) {
-      drillAvailableCount.textContent = `${cards.length} card${cards.length === 1 ? '' : 's'} available`;
-    }
+  drillSourceSelect.addEventListener('change', () => {
+    refreshAudioDrillModalState();
   });
 }
 
-async function startAudioDrill() {
-  const source = drillSourceSelect ? drillSourceSelect.value : 'all';
-  let cards = await collectDrillCards(source);
-
-  if (!cards || cards.length === 0) {
-    showToast('⚠️ No cards found. Add margin notes, bookmarks, or vocabulary first!');
-    return;
-  }
-
-  if (drillShuffleCheck && drillShuffleCheck.checked) {
-    cards.sort(() => Math.random() - 0.5);
+function launchAudioDrillSession(cards, { albumTitle = currentDocName, shuffle = true } = {}) {
+  const sessionCards = [...cards];
+  if (shuffle && drillShuffleCheck && drillShuffleCheck.checked) {
+    sessionCards.sort(() => Math.random() - 0.5);
   }
 
   stopAudio();
   if (audioDrillModal) audioDrillModal.style.display = 'none';
 
-  drillCards = cards;
+  drillCards = sessionCards;
   drillIndex = 0;
   drillReviewQueue = [];
   drillKnownCount = 0;
@@ -3587,9 +3656,9 @@ async function startAudioDrill() {
 
   if ('mediaSession' in navigator && typeof MediaMetadata !== 'undefined') {
     navigator.mediaSession.metadata = new MediaMetadata({
-      title: `Audio Drill · ${currentDocName}`,
+      title: `Audio Drill · ${albumTitle}`,
       artist: 'Marginalia Active Recall',
-      album: currentDocName,
+      album: albumTitle,
       artwork: [
         { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
         { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' }
@@ -3598,6 +3667,25 @@ async function startAudioDrill() {
   }
 
   runDrillCard(0);
+}
+
+async function startAudioDrill() {
+  const source = drillSourceSelect ? drillSourceSelect.value : 'all';
+  const cards = await collectDrillCards(source);
+
+  if (!cards || cards.length === 0) {
+    showToast('⚠️ No cards found. Add margin notes, bookmarks, or vocabulary — or try the sample drill!');
+    return;
+  }
+
+  launchAudioDrillSession(cards);
+}
+
+function startSampleAudioDrill() {
+  launchAudioDrillSession(SAMPLE_DRILL_CARDS, {
+    albumTitle: '2-Card Sample Drill',
+    shuffle: false
+  });
 }
 
 async function runDrillCard(idx) {
@@ -3715,6 +3803,12 @@ function stopAudioDrill() {
 if (startAudioDrillBtn) {
   startAudioDrillBtn.addEventListener('click', () => {
     startAudioDrill();
+  });
+}
+
+if (trySampleDrillBtn) {
+  trySampleDrillBtn.addEventListener('click', () => {
+    startSampleAudioDrill();
   });
 }
 
@@ -5489,6 +5583,80 @@ const KOKORO_VOICE_MAP = {
   emma: 'bf_emma'
 };
 let kokoroTtsPromise = null;
+let wasmTtsWorker = null;
+let wasmWorkerJobId = 0;
+const wasmWorkerPending = new Map();
+let wasmMainThreadQueue = Promise.resolve();
+
+function getWasmTtsWorker() {
+  if (typeof Worker === 'undefined' || typeof window === 'undefined') return null;
+  if (!wasmTtsWorker) {
+    try {
+      wasmTtsWorker = new Worker('tts-worker.js', { type: 'module' });
+      wasmTtsWorker.onmessage = (e) => {
+        const msg = e.data || {};
+        if (msg.type === 'progress') {
+          if (activeEngine === 'wasm' && preloadStatus) {
+            if (msg.stage === 'downloading') {
+              preloadStatus.textContent = typeof msg.pct === 'number'
+                ? `Downloading voice… ${msg.pct}%`
+                : 'Downloading voice...';
+            } else if (msg.stage === 'preparing') {
+              preloadStatus.textContent = 'Preparing voice...';
+            } else if (msg.stage === 'synthesizing') {
+              preloadStatus.textContent = 'Synthesizing...';
+            }
+          }
+          return;
+        }
+
+        const pending = wasmWorkerPending.get(msg.id);
+        if (!pending) return;
+        wasmWorkerPending.delete(msg.id);
+
+        if (msg.type === 'result') {
+          pending.resolve({
+            pcmData: new Float32Array(msg.pcmBuffer),
+            sampleRate: msg.sampleRate || 24000
+          });
+        } else if (msg.type === 'cancelled') {
+          const err = new Error('Synthesis cancelled.');
+          err.name = 'AbortError';
+          pending.reject(err);
+        } else {
+          pending.reject(new Error(msg.message || 'On-device synthesis failed.'));
+        }
+      };
+      wasmTtsWorker.onerror = () => {
+        // Fallback to main thread if module Worker fails to start (e.g. restricted origin/CSP)
+        wasmWorkerPending.forEach((p) => p.reject(new Error('WASM worker failed')));
+        wasmWorkerPending.clear();
+        try { wasmTtsWorker.terminate(); } catch {}
+        wasmTtsWorker = null;
+      };
+    } catch {
+      wasmTtsWorker = null;
+    }
+  }
+  return wasmTtsWorker;
+}
+
+function synthInWasmWorker(text, voice, priority = 'high') {
+  const worker = getWasmTtsWorker();
+  if (!worker) return null;
+  const id = ++wasmWorkerJobId;
+  return new Promise((resolve, reject) => {
+    wasmWorkerPending.set(id, { resolve, reject });
+    worker.postMessage({
+      type: 'synthesize',
+      id,
+      text,
+      voice,
+      sessionId: wasmSessionId,
+      priority
+    });
+  });
+}
 
 async function loadKokoroOnDeviceTts() {
   if (!kokoroTtsPromise) {
@@ -5564,8 +5732,10 @@ function createWasmAudioBuffer(audioCtx, pcmData, rate = modelSampleRate) {
  * and a deterministic self-contained 22050Hz PCM WAV generator in headless Node unit tests.
  */
 async function synthOnDeviceSpeech(text, voiceId = 'heart') {
+  const opts = (arguments.length > 2 && arguments[2]) || {};
   const trimmedText = String(text || '').trim().replace(/\s+/g, ' ');
   if (!trimmedText && typeof document !== 'undefined') return '';
+  const priority = opts.priority || 'high';
 
   const finalizePcmAndEncode = (rawFloatSamples, sampleRate) => {
     const padSamples = Math.round(sampleRate * 0.05); // 50ms silence padding to prevent phoneme clipping
@@ -5612,25 +5782,55 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
   };
 
   if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof loadKokoroOnDeviceTts === 'function') {
-    let tts;
-    try {
-      tts = await loadKokoroOnDeviceTts();
-    } catch (err) {
-      throw new Error(
-        'Studio (On-Device) voice needs an internet connection once to download the model (~85 MB). Switch to Native Voice for offline reading right now.'
-      );
-    }
     const kokoroVoice = KOKORO_VOICE_MAP[voiceId] || KOKORO_VOICE_MAP.heart;
-    if (activeEngine === 'wasm' && preloadStatus) {
-      preloadStatus.textContent = 'Synthesizing...';
+
+    // 1. Prefer dedicated Web Worker so neural inference never freezes the UI thread
+    if (typeof synthInWasmWorker === 'function') {
+      const workerPromise = synthInWasmWorker(trimmedText, kokoroVoice, priority);
+      if (workerPromise) {
+        try {
+          const { pcmData, sampleRate } = await workerPromise;
+          if (!pcmData || !pcmData.length) {
+            throw new Error('On-device voice returned empty audio for this sentence.');
+          }
+          return finalizePcmAndEncode(pcmData, sampleRate || 24000);
+        } catch (err) {
+          if (err && err.name === 'AbortError') throw err;
+          if (!String(err?.message || '').includes('WASM worker failed')) {
+            throw new Error(
+              'Studio (On-Device) voice needs an internet connection once to download the model (~85 MB). Switch to Native Voice for offline reading right now.'
+            );
+          }
+        }
+      }
     }
-    const generated = await tts.generate(trimmedText, { voice: kokoroVoice, speed: 1 });
-    const rawPcm = generated && (generated.audio || generated.data);
-    if (!rawPcm || !rawPcm.length) {
-      throw new Error('On-device voice returned empty audio for this sentence.');
-    }
-    const outRate = (generated && generated.sampling_rate) || 24000;
-    return finalizePcmAndEncode(rawPcm, outRate);
+
+    // 2. Fallback: serialized main-thread execution (never overlapping multiple ORT runs)
+    const runSerialized = async () => {
+      await new Promise((r) => setTimeout(r, 0));
+      let tts;
+      try {
+        tts = await loadKokoroOnDeviceTts();
+      } catch (err) {
+        throw new Error(
+          'Studio (On-Device) voice needs an internet connection once to download the model (~85 MB). Switch to Native Voice for offline reading right now.'
+        );
+      }
+      if (activeEngine === 'wasm' && preloadStatus) {
+        preloadStatus.textContent = 'Synthesizing...';
+      }
+      const generated = await tts.generate(trimmedText, { voice: kokoroVoice, speed: 1 });
+      const rawPcm = generated && (generated.audio || generated.data);
+      if (!rawPcm || !rawPcm.length) {
+        throw new Error('On-device voice returned empty audio for this sentence.');
+      }
+      const outRate = (generated && generated.sampling_rate) || 24000;
+      return finalizePcmAndEncode(rawPcm, outRate);
+    };
+
+    const nextJob = wasmMainThreadQueue.then(runSerialized, runSerialized);
+    wasmMainThreadQueue = nextJob.catch(() => {});
+    return nextJob;
   }
 
   // Headless Node unit-test path (deterministic 22050Hz PCM WAV with 50ms silence boundaries)
@@ -5659,6 +5859,7 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
 }
 
 async function getNeuralAudioSrc(text) {
+  const opts = (arguments.length > 1 && arguments[1]) || {};
   const spokenText = normalizeForSpeech(text);
   const key = neuralCacheKey(spokenText);
   const hit = audioPreloadCache.get(key);
@@ -5705,7 +5906,7 @@ async function getNeuralAudioSrc(text) {
 
   if (engine === 'wasm') {
     const job = (async () => {
-      const src = await synthOnDeviceSpeech(spokenText, voiceId);
+      const src = await synthOnDeviceSpeech(spokenText, voiceId, { priority: opts.priority || 'high' });
       try {
         if (src.startsWith('blob:') || src.startsWith('data:')) {
           const resp = await fetch(src);
@@ -6057,8 +6258,8 @@ async function speakServerless(text, opts = {}) {
 
       preloadStatus.textContent = activeEngine === 'wasm' ? "Synthesizing..." : "Connecting...";
       try {
-        const pending = getNeuralAudioSrc(text);    // start this sentence first...
-        if (!standalone) preloadUpcoming(myToken);  // ...and right away start the next ones too
+        const pending = getNeuralAudioSrc(text, { priority: 'high' }); // start this sentence first...
+        if (!standalone && activeEngine !== 'wasm') preloadUpcoming(myToken); // ...cloud voices can preload 3 in parallel; WASM synthesizes 1-ahead after start
         audioSrc = await pending;
       } catch (e) {
         if (e && e.status === 401) {
@@ -6211,7 +6412,7 @@ async function scheduleNextWasmChunkBackToBack(audioCtx, sessionAtStart) {
   const key = neuralCacheKey(nextPos.text);
   let nextSrc = audioPreloadCache.get(key)?.src;
   if (!nextSrc) {
-    nextSrc = await getNeuralAudioSrc(nextPos.text).catch(() => null);
+    nextSrc = await getNeuralAudioSrc(nextPos.text, { priority: 'normal' }).catch(() => null);
   }
   if (!nextSrc || sessionAtStart !== wasmSessionId || !isPlaying) return;
   if (wasmScheduledChunks.has(schedKey)) return;
