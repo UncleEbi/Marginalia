@@ -4446,182 +4446,198 @@ function createWasmAudioBuffer(audioCtx, pcmData, rate = modelSampleRate) {
   return audioBuffer;
 }
 
-/**
- * Synthesizes speech locally in-browser to a PCM 16-bit WAV Blob URL.
- * Enables zero-cost, offline, lockscreen-compatible audio via Web Audio API and <audio id="neuralAudio">.
- * Lightweight parametric formant synthesizer with letter-group acoustic modeling.
- */
-async function synthOnDeviceSpeech(text, voiceId = 'heart') {
-  const modelSampleRate = 22050; // Native model output sample rate
-  const sampleRate = modelSampleRate;
+// --- STUDIO (ON-DEVICE) PIPER VOICE ------------------------------------------
+// A real Piper/VITS voice runs locally. The eSpeak-NG phonemizer and the ONNX model are shipped in
+// this repo (public/vendor, public/models), so synthesis never leaves the device. The engine still
+// returns a WAV blob URL and keeps the PCM for the Web Audio scheduler below, like the placeholder
+// synth it replaces.
+const PIPER_MODEL = 'models/en_US-lessac-medium.onnx';
+const PIPER_MODEL_CONFIG = 'models/en_US-lessac-medium.onnx.json';
+const PIPER_PHONEMIZER = 'vendor/piper/piper_phonemize.js';
+const PIPER_PHONEMIZER_ASSETS = 'vendor/piper/';
+const PIPER_RUNTIME = 'vendor/ort/ort.wasm.bundle.min.mjs';
+// Uncompressed size of the vendored voice. Progress counts decoded bytes, so the percentage holds
+// whether the host serves the .onnx raw or gzip-encoded.
+const PIPER_MODEL_BYTES = 63201294;
 
-  // Voice acoustic profiles: fundamental pitch F0, vocal tract formant scaling, intonation, and timing
-  const profiles = {
-    heart:   { baseFreq: 215, formantScale: 1.15, vibratoRate: 5.2, vibratoDepth: 1.8, durScale: 1.00, gain: 0.38 },
-    michael: { baseFreq: 118, formantScale: 0.95, vibratoRate: 4.5, vibratoDepth: 1.2, durScale: 1.08, gain: 0.42 },
-    emma:    { baseFreq: 195, formantScale: 1.10, vibratoRate: 5.0, vibratoDepth: 1.5, durScale: 0.95, gain: 0.38 }
+function vendoredAsset(path) {
+  return new URL(path, document.baseURI).href;
+}
+
+function piperProgressLabel(loaded, total) {
+  const pct = Math.min(99, Math.max(0, Math.floor((Number(loaded) || 0) / (total || 1) * 100)));
+  return `Downloading voice… ${pct}%`;
+}
+
+// The status line is shared with figure/scan work, so only claim it for on-device playback.
+function reportPiperProgress(text) {
+  if (activeEngine === 'wasm' && preloadStatus) preloadStatus.textContent = text;
+}
+
+let piperConfigPromise = null;
+let piperRuntimePromise = null;
+let piperVoicePromise = null;
+let piperPhonemizerFactoryPromise = null;
+let piperPhonemizerModulePromise = null;
+let piperPhonemizeQueue = Promise.resolve();
+
+function loadPiperConfig() {
+  if (!piperConfigPromise) {
+    piperConfigPromise = fetch(vendoredAsset(PIPER_MODEL_CONFIG)).then((res) => {
+      if (!res.ok) throw new Error('The on-device voice config did not load (' + res.status + ').');
+      return res.json();
+    });
+    piperConfigPromise.catch(() => { piperConfigPromise = null; }); // a later sentence may retry
+  }
+  return piperConfigPromise;
+}
+
+function loadPiperRuntime() {
+  if (!piperRuntimePromise) {
+    // onnxruntime-web's WASM backend, pinned to this origin: no CDN anywhere in the audio path.
+    piperRuntimePromise = import(vendoredAsset(PIPER_RUNTIME)).then((ort) => {
+      ort.env.wasm.wasmPaths = vendoredAsset('vendor/ort/');
+      // Pages are served without COOP/COEP, so SharedArrayBuffer (and therefore threads) is out.
+      ort.env.wasm.numThreads = 1;
+      ort.env.logLevel = 'error';
+      return ort;
+    });
+    piperRuntimePromise.catch(() => { piperRuntimePromise = null; });
+  }
+  return piperRuntimePromise;
+}
+
+// Streaming the model ourselves (instead of handing its URL to ORT) is what makes real download
+// progress possible on the first play: 63 MB over a phone connection is otherwise a long silence.
+async function fetchPiperModel() {
+  const res = await fetch(vendoredAsset(PIPER_MODEL));
+  if (!res.ok) throw new Error('The on-device voice did not load (' + res.status + ').');
+
+  let lastLabel = '';
+  const report = (loaded) => {
+    const label = piperProgressLabel(loaded, PIPER_MODEL_BYTES);
+    if (label === lastLabel) return;
+    lastLabel = label;
+    reportPiperProgress(label);
   };
-  const prof = profiles[voiceId] || profiles.heart;
+  report(0);
 
-  function charToAcoustic(ch, nextCh = '') {
-    const pair = ch + nextCh;
-    if (/^(th|sh|ch|ph)/.test(pair)) return { type: 'fricative', freq: 3200, dur: 0.08, skip: 2 };
-    if (/^(ee|ea)/.test(pair)) return { type: 'vowel', f1: 280, f2: 2250, dur: 0.12, skip: 2 };
-    if (/^(oo|ou)/.test(pair)) return { type: 'vowel', f1: 320, f2: 900,  dur: 0.12, skip: 2 };
-    if (/^(ai|ay)/.test(pair)) return { type: 'vowel', f1: 480, f2: 1950, dur: 0.12, skip: 2 };
-    if (/^(ar|er|or|ur|ir)/.test(pair)) return { type: 'vowel', f1: 490, f2: 1350, dur: 0.12, skip: 2 };
-
-    switch (ch) {
-      case 'a': return { type: 'vowel', f1: 700, f2: 1400, dur: 0.11, skip: 1 };
-      case 'e': return { type: 'vowel', f1: 530, f2: 1800, dur: 0.09, skip: 1 };
-      case 'i': return { type: 'vowel', f1: 350, f2: 2100, dur: 0.09, skip: 1 };
-      case 'o': return { type: 'vowel', f1: 480, f2: 950,  dur: 0.11, skip: 1 };
-      case 'u': return { type: 'vowel', f1: 350, f2: 900,  dur: 0.09, skip: 1 };
-      case 'y': return { type: 'vowel', f1: 320, f2: 2000, dur: 0.09, skip: 1 };
-      case 's': case 'z': case 'x': return { type: 'fricative', freq: 5500, dur: 0.07, skip: 1 };
-      case 'f': case 'v': return { type: 'fricative', freq: 3000, dur: 0.06, skip: 1 };
-      case 'h': return { type: 'fricative', freq: 1800, dur: 0.05, skip: 1 };
-      case 'p': case 'b': return { type: 'plosive', freq: 1000, gap: 0.02, dur: 0.015, skip: 1 };
-      case 't': case 'd': return { type: 'plosive', freq: 4500, gap: 0.02, dur: 0.015, skip: 1 };
-      case 'k': case 'g': case 'q': return { type: 'plosive', freq: 2200, gap: 0.02, dur: 0.018, skip: 1 };
-      case 'm': case 'n': return { type: 'nasal', f1: 260, f2: 1200, dur: 0.07, skip: 1 };
-      case 'l': case 'r': case 'w': return { type: 'liquid', f1: 380, f2: 1200, dur: 0.07, skip: 1 };
-      default: return { type: 'vowel', f1: 500, f2: 1500, dur: 0.07, skip: 1 };
-    }
+  if (!res.body || typeof res.body.getReader !== 'function') {
+    return new Uint8Array(await res.arrayBuffer()); // no streaming support: no percentage, but still loads
   }
 
-  // Preserve natural punctuation (. , ? !) for prosody; trim excessive whitespace without stripping punctuation
-  const trimmedText = String(text || '').trim().replace(/\s+/g, ' ');
-  const tokens = trimmedText.match(/\S+/g) || ['...'];
-  const segments = [];
-
-  for (let t = 0; t < tokens.length; t++) {
-    const token = tokens[t];
-    const isQuestion = token.includes('?');
-    const isPeriod = /[.!?]/.test(token);
-    const isComma = /[,;:]/.test(token);
-    const clean = token.toLowerCase().replace(/[^a-z]/g, '');
-
-    const units = [];
-    for (let i = 0; i < clean.length;) {
-      const u = charToAcoustic(clean[i], clean[i + 1] || '');
-      units.push(u);
-      i += u.skip || 1;
-    }
-    if (units.length === 0) units.push({ type: 'vowel', f1: 500, f2: 1500, dur: 0.09 });
-
-    segments.push({ type: 'word', units, isQuestion, isPeriod });
-    if (isPeriod) segments.push({ type: 'pause', dur: 0.28 });
-    else if (isComma) segments.push({ type: 'pause', dur: 0.14 });
-    else if (t < tokens.length - 1) segments.push({ type: 'pause', dur: 0.05 });
+  // Collect into a Blob rather than a growing JS array: the pieces then sit in the browser's blob
+  // storage instead of doubling a 63 MB buffer on the JS heap.
+  const reader = res.body.getReader();
+  const parts = [];
+  let loaded = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value || !value.byteLength) continue;
+    parts.push(value);
+    loaded += value.byteLength;
+    report(loaded);
   }
+  return new Uint8Array(await new Blob(parts).arrayBuffer());
+}
 
-  function filterRes(f, bw, x, state) {
-    const r = Math.exp(-Math.PI * bw / sampleRate);
-    const theta = 2 * Math.PI * f / sampleRate;
-    const a1 = 2 * r * Math.cos(theta);
-    const a2 = -r * r;
-    const b0 = 1 - r;
-    const out = b0 * x + a1 * state[0] + a2 * state[1];
-    state[1] = state[0];
-    state[0] = out;
-    return out;
+function loadPiperVoice() {
+  if (!piperVoicePromise) {
+    piperVoicePromise = Promise.all([loadPiperRuntime(), loadPiperConfig()])
+      .then(async ([ort]) => {
+        const model = await fetchPiperModel();
+        reportPiperProgress('Preparing voice…'); // compiling the model into the WASM session
+        return ort.InferenceSession.create(model, { executionProviders: ['wasm'] });
+      });
+    piperVoicePromise.catch(() => { piperVoicePromise = null; });
   }
+  return piperVoicePromise;
+}
 
-  let nX1 = 0, nX2 = 0, nY1 = 0, nY2 = 0;
-  function filterNoise(f, x) {
-    const w0 = 2 * Math.PI * f / sampleRate;
-    const alpha = Math.sin(w0) / 4;
-    const a0 = 1 + alpha;
-    const out = (alpha * (x - nX2) + 2 * Math.cos(w0) * nY1 - (1 - alpha) * nY2) / a0;
-    nX2 = nX1; nX1 = x; nY2 = nY1; nY1 = out;
-    return out;
+function loadPiperPhonemizer() {
+  if (!piperPhonemizerFactoryPromise) {
+    piperPhonemizerFactoryPromise = new Promise((resolve, reject) => {
+      if (typeof window.createPiperPhonemize === 'function') return resolve(window.createPiperPhonemize);
+      const script = document.createElement('script');
+      script.src = vendoredAsset(PIPER_PHONEMIZER);
+      script.onload = () => (typeof window.createPiperPhonemize === 'function'
+        ? resolve(window.createPiperPhonemize)
+        : reject(new Error('The on-device phonemizer did not initialise.')));
+      script.onerror = () => reject(new Error('The on-device phonemizer failed to load.'));
+      document.head.appendChild(script);
+    });
+    piperPhonemizerFactoryPromise.catch(() => { piperPhonemizerFactoryPromise = null; });
   }
+  return piperPhonemizerFactoryPromise;
+}
 
-  const rawSamples = [];
-
-  // Add 40-60ms (50ms) of zero-padded silence at start so first phoneme does not clip
-  const padSamples = Math.round(sampleRate * 0.05);
-  for (let i = 0; i < padSamples; i++) rawSamples.push(0);
-
-  let glottalPhase = 0;
-  let tGlobal = 0;
-  const res1 = [0, 0];
-  const res2 = [0, 0];
-
-  for (const seg of segments) {
-    if (seg.type === 'pause') {
-      const pauseCount = Math.floor(seg.dur * sampleRate);
-      for (let i = 0; i < pauseCount; i++) rawSamples.push(0);
-      continue;
+// One Emscripten instance serves every sentence: a fresh instance would reload the 18 MB eSpeak
+// dictionary each time. Its stdout is one shared pipe, so calls are serialised through a queue.
+function phonemizeOnDevice(text, voice) {
+  const run = async () => {
+    if (!piperPhonemizerModulePromise) {
+      piperPhonemizerModulePromise = (async () => {
+        reportPiperProgress('Preparing voice…'); // the 18 MB eSpeak dictionary loads at this step
+        const createPiperPhonemize = await loadPiperPhonemizer();
+        let pending = null;
+        const module = await createPiperPhonemize({
+          print: (line) => {
+            const resolve = pending;
+            pending = null;
+            if (!resolve) return;
+            try { resolve(JSON.parse(line).phoneme_ids || []); } catch (e) { resolve([]); }
+          },
+          printErr: () => {},
+          locateFile: (name) => vendoredAsset(PIPER_PHONEMIZER_ASSETS + name)
+        });
+        return { module, setPending: (resolve) => { pending = resolve; } };
+      })();
+      piperPhonemizerModulePromise.catch(() => { piperPhonemizerModulePromise = null; });
     }
 
-    for (const u of seg.units) {
-      if (u.gap) {
-        const gapCount = Math.floor(u.gap * prof.durScale * sampleRate);
-        for (let i = 0; i < gapCount; i++) rawSamples.push(0);
+    const phonemizer = await piperPhonemizerModulePromise;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        phonemizer.setPending(null);
+        reject(new Error('The on-device phonemizer timed out.'));
+      }, 20000);
+      phonemizer.setPending((ids) => { clearTimeout(timer); resolve(ids); });
+      try {
+        phonemizer.module.callMain(['-l', voice, '--input', JSON.stringify([{ text }]), '--espeak_data', '/espeak-ng-data']);
+      } catch (err) {
+        clearTimeout(timer);
+        phonemizer.setPending(null);
+        reject(err);
       }
+    });
+  };
 
-      // Normal 1.0x synthesis: playback speed is applied in ONE place only (via playbackRate)
-      const pCount = Math.floor(u.dur * prof.durScale * sampleRate);
-      const curF1 = (u.f1 || 500) * prof.formantScale;
-      const curF2 = (u.f2 || 1500) * prof.formantScale;
+  const result = piperPhonemizeQueue.then(run, run);
+  piperPhonemizeQueue = result.catch(() => {});
+  return result;
+}
 
-      for (let i = 0; i < pCount; i++) {
-        const prog = i / pCount;
+// VITS feeds: phoneme ids, their length, and the three inference scales, in the tensors the model
+// declares. A single-speaker voice has no `sid` input, so it is only added when the model has one.
+function piperFeeds(ort, phonemeIds, config, speakerId) {
+  const int64 = (values, dims) => new ort.Tensor('int64', BigInt64Array.from(values, (v) => BigInt(v)), dims);
+  const inference = config.inference || {};
+  const feeds = {
+    input: int64(phonemeIds, [1, phonemeIds.length]),
+    input_lengths: int64([phonemeIds.length], [1]),
+    scales: new ort.Tensor('float32', Float32Array.from([
+      inference.noise_scale == null ? 0.667 : inference.noise_scale,
+      inference.length_scale == null ? 1 : inference.length_scale,
+      inference.noise_w == null ? 0.8 : inference.noise_w
+    ]), [3])
+  };
+  if (speakerId !== undefined) feeds.sid = int64([speakerId], [1]);
+  return feeds;
+}
 
-        // Pitch with prosody intonation and vibrato
-        let pitch = prof.baseFreq;
-        if (seg.isQuestion) pitch *= 1.0 + 0.18 * prog;
-        else if (seg.isPeriod) pitch *= 1.0 - 0.14 * prog;
-        pitch += Math.sin(2 * Math.PI * prof.vibratoRate * tGlobal) * prof.vibratoDepth;
-
-        // Glottal excitation
-        glottalPhase += pitch / sampleRate;
-        if (glottalPhase >= 1) glottalPhase -= 1;
-        const glottalPulse = glottalPhase < 0.4 ? Math.sin(Math.PI * glottalPhase / 0.4) : 0;
-
-        let sampleVal = 0;
-        if (u.type === 'vowel' || u.type === 'liquid') {
-          const v1 = filterRes(curF1, 80, glottalPulse, res1);
-          const v2 = filterRes(curF2, 110, glottalPulse, res2);
-          sampleVal = v1 * 1.0 + v2 * 0.5;
-        } else if (u.type === 'nasal') {
-          const v1 = filterRes(curF1, 60, glottalPulse, res1);
-          const v2 = filterRes(curF2, 150, glottalPulse, res2);
-          sampleVal = v1 * 1.2 + v2 * 0.15;
-        } else {
-          const rawNoise = Math.random() * 2 - 1;
-          const filtered = filterNoise(u.freq || 3500, rawNoise);
-          sampleVal = filtered * 0.45;
-        }
-
-        let env = 1.0;
-        if (prog < 0.12) env = prog / 0.12;
-        else if (prog > 0.85) env = (1.0 - prog) / 0.15;
-
-        rawSamples.push(sampleVal * env * prof.gain);
-        tGlobal += 1 / sampleRate;
-      }
-    }
-  }
-
-  // Add 40-60ms (50ms) of zero-padded silence at end so last phoneme does not clip
-  for (let i = 0; i < padSamples; i++) rawSamples.push(0);
-
-  // Normalize and clamp Float32Array samples to [-1.0, 1.0] to prevent digital clipping
-  const totalSamples = rawSamples.length;
-  const pcmData = new Float32Array(totalSamples);
-  let maxAmp = 0;
-  for (let i = 0; i < totalSamples; i++) {
-    const a = Math.abs(rawSamples[i]);
-    if (a > maxAmp) maxAmp = a;
-  }
-  const normFactor = maxAmp > 1.0 ? 0.98 / maxAmp : 1.0;
-  for (let i = 0; i < totalSamples; i++) {
-    pcmData[i] = Math.max(-1.0, Math.min(1.0, rawSamples[i] * normFactor));
-  }
-
+function encodeMonoWav(pcmData, sampleRate) {
+  const totalSamples = pcmData.length;
   const buffer = new ArrayBuffer(44 + totalSamples * 2);
   const view = new DataView(buffer);
   const writeStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
@@ -4633,31 +4649,44 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
   view.setUint32(16, 16, true);
   view.setUint16(20, 1, true);
   view.setUint16(22, 1, true);
-  view.setUint32(24, modelSampleRate, true);
-  view.setUint32(28, modelSampleRate * 2, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
   view.setUint16(32, 2, true);
   view.setUint16(34, 16, true);
   writeStr(36, 'data');
   view.setUint32(40, totalSamples * 2, true);
 
   for (let i = 0; i < totalSamples; i++) {
-    const s = pcmData[i];
+    const raw = pcmData[i];
+    const s = Number.isFinite(raw) ? Math.max(-1, Math.min(1, raw)) : 0;
     view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
   }
 
-  let srcUrl = '';
-  if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
-    const blob = new Blob([buffer], { type: 'audio/wav' });
-    srcUrl = URL.createObjectURL(blob);
-  } else if (typeof Buffer !== 'undefined') {
-    srcUrl = 'data:audio/wav;base64,' + Buffer.from(buffer).toString('base64');
+  return buffer;
+}
+
+async function synthOnDeviceSpeech(text, voiceId = 'heart') {
+  // The picker offers the one vendored Piper voice, so a saved 'michael' or 'emma' choice from an
+  // older build keeps playing (everything maps to the same model) instead of failing.
+  const trimmedText = String(text || '').trim().replace(/\s+/g, ' ');
+  if (!trimmedText) return '';
+
+  const [ort, session, config] = await Promise.all([loadPiperRuntime(), loadPiperVoice(), loadPiperConfig()]);
+  const speechRate = (config.audio && config.audio.sample_rate) || modelSampleRate;
+  const espeakVoice = (config.espeak && config.espeak.voice) || 'en-us';
+
+  const phonemeIds = await phonemizeOnDevice(trimmedText, espeakVoice);
+  if (!Array.isArray(phonemeIds) || phonemeIds.length === 0) {
+    throw new Error('The on-device voice could not pronounce that sentence.');
   }
 
-  // Stash pcmData for instant synchronous Web Audio buffer creation
-  if (srcUrl && typeof srcUrl === 'string') {
-    try { synthPcmCache.set(srcUrl, pcmData); } catch (e) {}
-  }
+  const feeds = piperFeeds(ort, phonemeIds, config, session.inputNames.includes('sid') ? 0 : undefined);
+  const results = await session.run(feeds);
+  // Copy out of the ORT tensor: the scheduler keeps this PCM while later sentences are synthesised.
+  const pcmData = Float32Array.from(results[session.outputNames[0]].data);
 
+  const srcUrl = URL.createObjectURL(new Blob([encodeMonoWav(pcmData, speechRate)], { type: 'audio/wav' }));
+  synthPcmCache.set(srcUrl, pcmData);
   return srcUrl;
 }
 
@@ -5558,10 +5587,10 @@ document.addEventListener('keydown', (e) => {
 // --- VOICES & ENGINES ---
 const voicePresets = {
   browser: [],
+  // One vendored model, one entry: the old list advertised three voices that were never there.
+  // The id stays 'heart' so saved choices and the cadence key keep working.
   wasm: [
-    { id: 'heart', name: 'Heart (Expressive Female · On-Device)' },
-    { id: 'michael', name: 'Michael (Narrator Male · On-Device)' },
-    { id: 'emma', name: 'Emma (British Academic · On-Device)' }
+    { id: 'heart', name: 'Lessac (Natural Female · On-Device)' }
   ],
   elevenlabs: [
     { id: '21m00Tcm4TlvDq8ikWAM', name: 'Rachel (Calm & Natural)' },
