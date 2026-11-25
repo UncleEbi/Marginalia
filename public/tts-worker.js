@@ -5,6 +5,10 @@
 
 const KOKORO_CDN_URL = 'https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/+esm';
 const KOKORO_MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
+// Exactly the specifier kokoro-js@1.2.1 imports internally (see its dependency
+// on @huggingface/transformers@^3.5.1). Importing the same URL resolves to the
+// same module instance, so mutating its env is what onnxruntime actually reads.
+const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1/+esm';
 
 let ttsPromise = null;
 let activeSessionId = 0;
@@ -56,32 +60,37 @@ function splitLongText(text, maxLen = 180) {
 // (COOP/COEP on the document). Without isolation onnxruntime stays
 // single-threaded whatever we ask for, so report what actually happens instead
 // of assuming the headers worked.
-function configureThreads(env) {
+async function configureThreads() {
   const isolated = !!self.crossOriginIsolated && typeof SharedArrayBuffer !== 'undefined';
   const requested = Math.max(1, Math.min(4, navigator.hardwareConcurrency || 1));
   const threads = isolated ? requested : 1;
-  let applied = null;
-  let error = null;
-  try {
-    const wasm = env && env.backends && env.backends.onnx && env.backends.onnx.wasm;
-    if (wasm) {
-      wasm.numThreads = threads;
-      applied = wasm.numThreads;
-    } else {
-      error = 'env.backends.onnx.wasm unavailable';
-    }
-  } catch (err) {
-    error = String(err && err.message || err);
-  }
   const diag = {
     stage: 'configured',
     isolated,
     requested,
-    applied,
+    threads,
+    applied: null,
+    envSource: null,
+    wasmKeys: null,
     hasSAB: typeof SharedArrayBuffer !== 'undefined',
     hardwareConcurrency: navigator.hardwareConcurrency || null,
-    error
+    error: null
   };
+  try {
+    const mod = await import(TRANSFORMERS_URL);
+    const wasm = mod && mod.env && mod.env.backends && mod.env.backends.onnx && mod.env.backends.onnx.wasm;
+    if (wasm) {
+      wasm.numThreads = threads;
+      diag.applied = wasm.numThreads;
+      diag.wasmKeys = Object.keys(wasm);
+      diag.envSource = 'transformers';
+      self.__ortWasmEnv = wasm;
+    } else {
+      diag.error = 'env.backends.onnx.wasm unavailable';
+    }
+  } catch (err) {
+    diag.error = String((err && err.message) || err);
+  }
   console.log('[tts-worker] threads', JSON.stringify(diag));
   self.postMessage({ type: 'diag', ...diag });
   return diag;
@@ -91,8 +100,8 @@ async function getTts() {
   if (!ttsPromise) {
     ttsPromise = (async () => {
       self.postMessage({ type: 'progress', stage: 'downloading', pct: 0 });
-      const { KokoroTTS, env } = await import(KOKORO_CDN_URL);
-      configureThreads(env);
+      const { KokoroTTS } = await import(KOKORO_CDN_URL);
+      await configureThreads();
       const fileProgress = new Map();
 
       const tts = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
@@ -117,7 +126,8 @@ async function getTts() {
       self.postMessage({
         type: 'diag',
         stage: 'ready',
-        numThreads: (env && env.backends && env.backends.onnx && env.backends.onnx.wasm && env.backends.onnx.wasm.numThreads) || null,
+        numThreads: (self.__ortWasmEnv && self.__ortWasmEnv.numThreads) || null,
+        wasmKeys: self.__ortWasmEnv ? Object.keys(self.__ortWasmEnv) : null,
         isolated: !!self.crossOriginIsolated
       });
       return tts;
