@@ -319,7 +319,8 @@ test('Studio (On-Device) offloads synthesis to public/tts-worker.js without bloc
 
   assert.match(workerSrc, /KokoroTTS/, 'tts-worker imports KokoroTTS');
   assert.match(workerSrc, /splitLongText/, 'tts-worker splits long clauses cleanly');
-  assert.match(workerSrc, /\[pcm\.buffer\]/, 'tts-worker transfers PCM buffer zero-copy');
+  assert.match(workerSrc, /\[out\.pcm\.buffer\]/, 'tts-worker transfers PCM buffer zero-copy');
+  assert.match(workerSrc, /\[copy\.buffer\]/, 'tts-worker transfers each streamed clause zero-copy');
   assert.match(appSrc, /new Worker\('tts-worker\.js'/, 'app.js launches tts-worker.js module worker');
   assert.match(appSrc, /if \(!standalone && activeEngine !== 'wasm'\) preloadUpcoming\(myToken\)/, 'wasm skips 3-way preload burst on start');
 });

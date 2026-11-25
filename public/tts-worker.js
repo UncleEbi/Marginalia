@@ -19,15 +19,17 @@ const WEBGPU_BACKEND = { device: 'webgpu', dtype: 'fp16' };
 const MIN_GPU_DOWNLINK_MBPS = 3;
 const SLOW_EFFECTIVE_TYPES = new Set(['slow-2g', '2g', '3g']);
 
-function connectionCanAffordGpu() {
+// Why the GPU path was skipped, or null when the connection can afford it. The string is reported
+// with the backend so a reader can see which gate fired without opening DevTools' network tab.
+function connectionLimit() {
   const connection = typeof navigator !== 'undefined' ? navigator.connection : null;
   // No Network Information API (Safari, older Firefox): keep the GPU path rather than guess.
-  if (!connection) return true;
-  if (connection.saveData) return false;
-  if (SLOW_EFFECTIVE_TYPES.has(connection.effectiveType)) return false;
+  if (!connection) return null;
+  if (connection.saveData) return 'data-saver';
+  if (SLOW_EFFECTIVE_TYPES.has(connection.effectiveType)) return `slow-${connection.effectiveType}`;
   if (typeof connection.downlink === 'number' && connection.downlink > 0
-    && connection.downlink < MIN_GPU_DOWNLINK_MBPS) return false;
-  return true;
+    && connection.downlink < MIN_GPU_DOWNLINK_MBPS) return `slow-${connection.downlink}Mbps`;
+  return null;
 }
 
 let activeBackend = WASM_BACKEND;
@@ -97,14 +99,18 @@ function reportProgress(info) {
 
 // A worker can reach WebGPU too, so the whole pipeline stays off the UI thread.
 async function chooseBackend() {
-  if (typeof navigator === 'undefined' || !navigator.gpu) return WASM_BACKEND;
-  if (!connectionCanAffordGpu()) return WASM_BACKEND;
+  if (typeof navigator === 'undefined' || !navigator.gpu) {
+    return { backend: WASM_BACKEND, reason: 'no-webgpu' };
+  }
+  const limit = connectionLimit();
+  if (limit) return { backend: WASM_BACKEND, reason: limit };
   try {
     const adapter = await navigator.gpu.requestAdapter();
-    if (!adapter || !adapter.features.has('shader-f16')) return WASM_BACKEND;
-    return WEBGPU_BACKEND;
+    if (!adapter) return { backend: WASM_BACKEND, reason: 'no-gpu-adapter' };
+    if (!adapter.features.has('shader-f16')) return { backend: WASM_BACKEND, reason: 'no-shader-f16' };
+    return { backend: WEBGPU_BACKEND, reason: 'webgpu-ready' };
   } catch (err) {
-    return WASM_BACKEND;
+    return { backend: WASM_BACKEND, reason: 'adapter-error' };
   }
 }
 
@@ -120,8 +126,9 @@ async function getTts() {
         progress_callback: reportProgress
       });
 
-      const preferred = await chooseBackend();
+      const { backend: preferred, reason } = await chooseBackend();
       let tts;
+      let backendReason = reason;
       try {
         tts = await load(preferred);
         activeBackend = preferred;
@@ -131,8 +138,14 @@ async function getTts() {
         if (preferred.device !== 'webgpu') throw err;
         tts = await load(WASM_BACKEND);
         activeBackend = WASM_BACKEND;
+        backendReason = 'webgpu-init-failed';
       }
-      self.postMessage({ type: 'backend', device: activeBackend.device, dtype: activeBackend.dtype });
+      self.postMessage({
+        type: 'backend',
+        device: activeBackend.device,
+        dtype: activeBackend.dtype,
+        reason: backendReason
+      });
       return tts;
     })().catch((err) => {
       ttsPromise = null;
@@ -142,7 +155,12 @@ async function getTts() {
   return ttsPromise;
 }
 
-async function synthesizeSegments(tts, text, voice) {
+// A long sentence is split into clauses and each one is handed to `emit` as soon as it is
+// synthesized, so the reader hears the first clause while the rest is still being generated. The
+// clause's inter-sentence pause is carried inside its samples (except for the last one) so the
+// player can schedule the chunks back to back without knowing about gaps. Only multi-clause text
+// streams: a single-clause sentence is returned merged, exactly as before.
+async function synthesizeSegments(tts, text, voice, emit, isCancelled) {
   const parts = splitLongText(text, 180);
   if (parts.length === 0) return { pcm: new Float32Array(0), sampleRate: 24000 };
 
@@ -155,31 +173,31 @@ async function synthesizeSegments(tts, text, voice) {
     };
   }
 
-  const arrays = [];
   let sampleRate = 24000;
-  let totalLen = 0;
-  const gapSamples = Math.round(sampleRate * 0.08);
-
   for (let i = 0; i < parts.length; i++) {
+    if (isCancelled()) return { cancelled: true };
     const out = await tts.generate(parts[i], { voice, speed: 1 });
-    const raw = out && (out.audio || out.data);
     if (out && out.sampling_rate) sampleRate = out.sampling_rate;
-    if (raw && raw.length) {
-      const f = Float32Array.from(raw);
-      arrays.push(f);
-      totalLen += f.length;
-      if (i < parts.length - 1) totalLen += gapSamples;
+    // Synthesizing can outlive the request that asked for it: stop before emitting stale audio.
+    if (isCancelled()) return { cancelled: true };
+    const raw = out && (out.audio || out.data);
+    let pcm = raw && raw.length ? Float32Array.from(raw) : new Float32Array(0);
+    if (pcm.length && i < parts.length - 1) {
+      const gapSamples = Math.round(sampleRate * 0.08);
+      const padded = new Float32Array(pcm.length + gapSamples);
+      padded.set(pcm);
+      pcm = padded;
     }
+    emit({
+      index: i,
+      count: parts.length,
+      text: parts[i],
+      pcm,
+      sampleRate,
+      final: i === parts.length - 1
+    });
   }
-
-  const merged = new Float32Array(totalLen);
-  let offset = 0;
-  for (let i = 0; i < arrays.length; i++) {
-    merged.set(arrays[i], offset);
-    offset += arrays[i].length;
-    if (i < arrays.length - 1) offset += gapSamples;
-  }
-  return { pcm: merged, sampleRate };
+  return { streamed: true, sampleRate };
 }
 
 async function drainQueue() {
@@ -213,10 +231,41 @@ async function drainQueue() {
         }
 
         self.postMessage({ type: 'progress', stage: 'synthesizing' });
-        const { pcm, sampleRate } = await synthesizeSegments(tts, job.text, job.voice);
+        const out = await synthesizeSegments(
+          tts,
+          job.text,
+          job.voice,
+          (chunk) => {
+            // The merge buffer is not built for streamed jobs, so hand over a copy and keep the
+            // original intact for the (single-clause) merged path below.
+            const copy = chunk.pcm.slice();
+            self.postMessage(
+              {
+                type: 'chunk',
+                id: job.id,
+                index: chunk.index,
+                count: chunk.count,
+                text: chunk.text,
+                pcmBuffer: copy.buffer,
+                sampleRate: chunk.sampleRate,
+                final: chunk.final
+              },
+              [copy.buffer]
+            );
+          },
+          () => job.sessionId != null && job.sessionId < activeSessionId
+        );
+        if (out.cancelled) {
+          self.postMessage({ type: 'cancelled', id: job.id });
+          continue;
+        }
+        if (out.streamed) {
+          self.postMessage({ type: 'result', id: job.id, streamed: true, sampleRate: out.sampleRate });
+          continue;
+        }
         self.postMessage(
-          { type: 'result', id: job.id, pcmBuffer: pcm.buffer, sampleRate },
-          [pcm.buffer]
+          { type: 'result', id: job.id, pcmBuffer: out.pcm.buffer, sampleRate: out.sampleRate },
+          [out.pcm.buffer]
         );
       } catch (err) {
         self.postMessage({

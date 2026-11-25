@@ -2007,6 +2007,10 @@ function cancelAllSpeech() {
   }
   if (typeof wasmScheduledChunks !== 'undefined') wasmScheduledChunks.clear();
   if (typeof wasmScheduledEndTime !== 'undefined') wasmScheduledEndTime = 0;
+  if (typeof wasmClauseStreams !== 'undefined') {
+    // Detach this session's schedulers; the already-received clauses stay for a replay.
+    wasmClauseStreams.forEach((stream) => { stream.onChunk = null; stream.nextIndex = 1; });
+  }
   if (typeof wasmTtsWorker !== 'undefined' && wasmTtsWorker) {
     try { wasmTtsWorker.postMessage({ type: 'cancel', sessionId: wasmSessionId }); } catch (e) {}
   }
@@ -5610,9 +5614,11 @@ function getWasmTtsWorker() {
           return;
         }
 
-        // Which backend the worker actually settled on (WebGPU, or WASM when the GPU is unusable).
+        // Which backend the worker actually settled on (WebGPU, or WASM when the GPU is unusable),
+        // and why it did not take the GPU path when that was on the table.
         if (msg.type === 'backend') {
-          console.info(`[Studio voice] ${msg.device} backend (${msg.dtype})`);
+          const why = msg.reason && msg.reason !== 'webgpu-ready' ? ` — ${msg.reason}` : '';
+          console.info(`[Studio voice] ${msg.device} backend (${msg.dtype})${why}`);
           return;
         }
         // Warm-up finished: the model is in memory, so the next Play only has to synthesize.
@@ -5626,9 +5632,50 @@ function getWasmTtsWorker() {
           return;
         }
 
+        // A clause of a long sentence: the first one unblocks playback, the rest are scheduled
+        // behind it while the sentence is still being synthesized.
+        if (msg.type === 'chunk') {
+          const entry = wasmWorkerPending.get(msg.id);
+          if (!entry) return;
+          const chunk = {
+            index: msg.index,
+            count: msg.count,
+            text: msg.text || '',
+            pcm: new Float32Array(msg.pcmBuffer),
+            sampleRate: msg.sampleRate || 24000,
+            final: Boolean(msg.final)
+          };
+          if (!entry.stream) entry.stream = { chunks: [], done: false, onChunk: null, nextIndex: 1 };
+          entry.stream.chunks.push(chunk);
+          if (!entry.settled) {
+            entry.settled = true;
+            entry.resolve({ pcmData: chunk.pcm, sampleRate: chunk.sampleRate, stream: entry.stream });
+          } else if (entry.stream.onChunk) {
+            entry.stream.onChunk();
+          }
+          return;
+        }
+
         const pending = wasmWorkerPending.get(msg.id);
         if (!pending) return;
+
+        // A streamed job's final result carries no audio: the clauses already played or are queued.
+        if (msg.type === 'result' && pending.stream) {
+          pending.stream.done = true;
+          wasmWorkerPending.delete(msg.id);
+          if (pending.stream.onChunk) pending.stream.onChunk();
+          return;
+        }
+
         wasmWorkerPending.delete(msg.id);
+
+        if (pending.settled) {
+          if (pending.stream) {
+            pending.stream.done = true;
+            if (pending.stream.onChunk) pending.stream.onChunk();
+          }
+          return;
+        }
 
         if (msg.type === 'result') {
           pending.resolve({
@@ -5726,6 +5773,8 @@ async function loadKokoroOnDeviceTts() {
 }
 
 const synthPcmCache = new Map();
+// Sentences long enough for the worker to split are delivered clause by clause, keyed by cache key.
+const wasmClauseStreams = new Map();
 let wasmAudioCtx = null;
 let wasmGainNode = null;
 let wasmScheduledEndTime = 0;
@@ -5820,11 +5869,24 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
       const workerPromise = synthInWasmWorker(trimmedText, kokoroVoice, priority);
       if (workerPromise) {
         try {
-          const { pcmData, sampleRate } = await workerPromise;
+          const { pcmData, sampleRate, stream } = await workerPromise;
           if (!pcmData || !pcmData.length) {
             throw new Error('On-device voice returned empty audio for this sentence.');
           }
-          return finalizePcmAndEncode(pcmData, sampleRate || 24000);
+          const src = finalizePcmAndEncode(pcmData, sampleRate || 24000);
+          if (stream) {
+            // Keep the clause run next to the first clause's clip so the player can pick up the
+            // remaining clauses as the worker finishes them (and replay from memory afterwards).
+            stream.src = src;
+            const streamKey = neuralCacheKey(trimmedText);
+            wasmClauseStreams.set(streamKey, stream);
+            while (wasmClauseStreams.size > 8) {
+              const oldest = wasmClauseStreams.keys().next().value;
+              if (oldest === streamKey) break;
+              wasmClauseStreams.delete(oldest);
+            }
+          }
+          return src;
         } catch (err) {
           if (err && err.name === 'AbortError') throw err;
           if (!String(err?.message || '').includes('WASM worker failed')) {
@@ -5895,6 +5957,10 @@ async function getNeuralAudioSrc(text) {
   const key = neuralCacheKey(spokenText);
   const hit = audioPreloadCache.get(key);
   if (hit && hit.src) return hit.src;
+  // A streamed sentence's first clause is already encoded; replaying it must not re-synthesize
+  // the whole sentence just because the merged clip was never cached.
+  const streamHit = wasmClauseStreams.get(key);
+  if (streamHit && streamHit.src) return streamHit.src;
   if (audioInflight.has(key)) return audioInflight.get(key);
 
   const engine = activeEngine;
@@ -5938,14 +6004,17 @@ async function getNeuralAudioSrc(text) {
   if (engine === 'wasm') {
     const job = (async () => {
       const src = await synthOnDeviceSpeech(spokenText, voiceId, { priority: opts.priority || 'high' });
-      try {
-        if (src.startsWith('blob:') || src.startsWith('data:')) {
-          const resp = await fetch(src);
-          const b = await resp.blob();
-          saveAudioToIdbCache(cacheKey, b).catch(() => { });
-        }
-      } catch { }
-      cacheAudio(key, src);
+      // A streamed clip is only the first clause: caching it would replay half a sentence.
+      if (!wasmClauseStreams.has(key)) {
+        try {
+          if (src.startsWith('blob:') || src.startsWith('data:')) {
+            const resp = await fetch(src);
+            const b = await resp.blob();
+            saveAudioToIdbCache(cacheKey, b).catch(() => { });
+          }
+        } catch { }
+        cacheAudio(key, src);
+      }
       return src;
     })();
     audioInflight.set(key, job);
@@ -6318,6 +6387,9 @@ async function speakServerless(text, opts = {}) {
     if (activeEngine === 'wasm' && audioCtx && pcmData) {
       const schedKey = `${currentPage}:${currentSentenceIdx}:${sessionAtStart}`;
       const existingChunk = !standalone ? wasmScheduledChunks.get(schedKey) : null;
+      // A long sentence arrives clause by clause: chunk 0 is the clip about to play here, and the
+      // remaining clauses are scheduled behind it as the worker finishes them.
+      const clauseStream = wasmClauseStreams.get(neuralCacheKey(text)) || null;
 
       let startTime = 0;
       let bufferDuration = 0;
@@ -6351,6 +6423,8 @@ async function speakServerless(text, opts = {}) {
         sourceNode.onended = () => {
           wasmActiveSourceNodes.delete(sourceNode);
           cancelWordAnimation();
+          // With a clause stream the last clause advances the sentence, not this first clause.
+          if (clauseStream) return;
           if (sessionAtStart !== wasmSessionId || standalone || !isPlaying) return;
           currentSentenceIdx++;
           playCurrentSentence();
@@ -6358,12 +6432,34 @@ async function speakServerless(text, opts = {}) {
       }
 
       const wordsArr = text.trim().split(/\s+/).filter(w => w.length > 0);
-      const timeline = computeWordTimeline(wordsArr, playbackSpeed, bufferDuration).timeline;
+      let timeline = computeWordTimeline(wordsArr, playbackSpeed, bufferDuration).timeline;
+      // The karaoke run grows with the stream: each clause contributes its own words and duration.
+      let karaokeEnd = bufferDuration;
+
+      if (clauseStream && !existingChunk) {
+        const streamTimeline = [];
+        const pushChunkTimeline = (chunkText, duration, offsetSec) => {
+          karaokeEnd = Math.max(karaokeEnd, offsetSec + duration);
+          const chunkWords = String(chunkText || '').trim().split(/\s+/).filter(Boolean);
+          if (!chunkWords.length || !(duration > 0)) return;
+          computeWordTimeline(chunkWords, playbackSpeed, duration).timeline.forEach((t) => {
+            streamTimeline.push({ start: t.start + offsetSec, end: t.end + offsetSec });
+          });
+        };
+        pushChunkTimeline(clauseStream.chunks[0] ? clauseStream.chunks[0].text : text, bufferDuration, 0);
+        scheduleWasmClauseStream(audioCtx, clauseStream, {
+          sessionAtStart,
+          standalone,
+          firstStartTime: startTime,
+          pushTimeline: pushChunkTimeline
+        });
+        timeline = streamTimeline;
+      }
 
       startWordKaraokeLoop(
         () => (audioCtx.currentTime - startTime) * playbackSpeed,
         () => timeline,
-        () => myToken === speakToken && isPlaying && (audioCtx.currentTime - startTime) * playbackSpeed <= bufferDuration + 0.5
+        () => myToken === speakToken && isPlaying && (audioCtx.currentTime - startTime) * playbackSpeed <= karaokeEnd + 0.5
       );
 
       // 4. Smooth Buffer Scheduling: Pre-synthesize the NEXT sentence chunk while the current chunk is playing
@@ -6438,6 +6534,9 @@ async function scheduleNextWasmChunkBackToBack(audioCtx, sessionAtStart) {
 
   const schedKey = `${nextPos.page}:${nextPos.sentenceIdx}:${sessionAtStart}`;
   if (wasmScheduledChunks.has(schedKey)) return;
+  // A streamed sentence owns its own clause scheduling; pre-scheduling its first clause here would
+  // strand the rest of the sentence on the worker's queue.
+  if (wasmClauseStreams.has(neuralCacheKey(nextPos.text))) return;
 
   // Pre-synthesize the next chunk in background while current chunk is playing
   const key = neuralCacheKey(nextPos.text);
@@ -6447,6 +6546,7 @@ async function scheduleNextWasmChunkBackToBack(audioCtx, sessionAtStart) {
   }
   if (!nextSrc || sessionAtStart !== wasmSessionId || !isPlaying) return;
   if (wasmScheduledChunks.has(schedKey)) return;
+  if (wasmClauseStreams.has(neuralCacheKey(nextPos.text))) return;
 
   const nextEntry = synthPcmCache.get(nextSrc);
   const nextPcm = nextEntry ? (nextEntry.pcmData || nextEntry) : null;
@@ -6478,6 +6578,61 @@ async function scheduleNextWasmChunkBackToBack(audioCtx, sessionAtStart) {
     currentSentenceIdx++;
     playCurrentSentence();
   };
+}
+
+// Plays the remaining clauses of a streamed Studio sentence back to back. Chunk 0 is already
+// scheduled by the caller; each later clause lands where the previous one ends, and the final
+// clause carries the advance to the next sentence.
+function scheduleWasmClauseStream(audioCtx, stream, opts) {
+  const { sessionAtStart, standalone, firstStartTime, pushTimeline } = opts;
+  let lastSource = null;
+
+  const advance = () => {
+    cancelWordAnimation();
+    if (sessionAtStart !== wasmSessionId || standalone || !isPlaying) return;
+    currentSentenceIdx++;
+    playCurrentSentence();
+  };
+
+  const flush = () => {
+    if (sessionAtStart !== wasmSessionId || activeEngine !== 'wasm') return;
+    for (let i = stream.nextIndex || 1; i < stream.chunks.length; i++) {
+      const chunk = stream.chunks[i];
+      if (!chunk) break;
+      stream.nextIndex = i + 1;
+      if (!chunk.pcm || !chunk.pcm.length) {
+        // Silence-only clause: nothing to schedule, but it can still be the one that ends the run.
+        if (chunk.final && lastSource) lastSource.onended = advance;
+        continue;
+      }
+      const audioBuffer = createWasmAudioBuffer(audioCtx, chunk.pcm, chunk.sampleRate);
+      if (!audioBuffer) continue;
+      const source = audioCtx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.playbackRate.value = playbackSpeed;
+      source.connect(wasmGainNode || audioCtx.destination);
+      const startAt = Math.max(audioCtx.currentTime + 0.005, wasmScheduledEndTime);
+      wasmActiveSourceNodes.add(source);
+      source.start(startAt);
+      wasmScheduledEndTime = startAt + audioBuffer.duration / playbackSpeed;
+      if (pushTimeline) {
+        pushTimeline(chunk.text, audioBuffer.duration, Math.max(0, (startAt - firstStartTime) * playbackSpeed));
+      }
+      lastSource = source;
+      if (chunk.final) {
+        source.onended = () => {
+          wasmActiveSourceNodes.delete(source);
+          advance();
+        };
+      } else {
+        source.onended = () => { wasmActiveSourceNodes.delete(source); };
+      }
+    }
+  };
+
+  stream.nextIndex = 1;
+  stream.onChunk = flush;
+  flush();
 }
 
 function stopAudio() {
