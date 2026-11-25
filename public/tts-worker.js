@@ -8,10 +8,27 @@ const KOKORO_MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
 
 // WebGPU runs Kokoro far faster than WASM, but it needs a half-precision build: model_fp16.onnx is
 // 155.7 MiB against the 88.1 MiB q8 WASM one, and its runtime wasm binary is 20.6 MiB against
-// 10.6 MiB. So only take the GPU path when the adapter can actually run f16 shaders; otherwise stay
-// on the q8 WASM build rather than fall back to the 310.5 MiB fp32 model.
+// 10.6 MiB. So only take the GPU path when the adapter can actually run f16 shaders and the
+// connection can afford the extra download; otherwise stay on the q8 WASM build rather than fall
+// back to the 310.5 MiB fp32 model.
 const WASM_BACKEND = { device: 'wasm', dtype: 'q8' };
 const WEBGPU_BACKEND = { device: 'webgpu', dtype: 'fp16' };
+
+// The fp16 build is ~78 MiB heavier than the q8 one, so a metered or slow link gets the q8 build
+// even on a capable GPU. `downlink` is in Mbps and only trusted when the browser reports one.
+const MIN_GPU_DOWNLINK_MBPS = 3;
+const SLOW_EFFECTIVE_TYPES = new Set(['slow-2g', '2g', '3g']);
+
+function connectionCanAffordGpu() {
+  const connection = typeof navigator !== 'undefined' ? navigator.connection : null;
+  // No Network Information API (Safari, older Firefox): keep the GPU path rather than guess.
+  if (!connection) return true;
+  if (connection.saveData) return false;
+  if (SLOW_EFFECTIVE_TYPES.has(connection.effectiveType)) return false;
+  if (typeof connection.downlink === 'number' && connection.downlink > 0
+    && connection.downlink < MIN_GPU_DOWNLINK_MBPS) return false;
+  return true;
+}
 
 let activeBackend = WASM_BACKEND;
 let ttsPromise = null;
@@ -81,6 +98,7 @@ function reportProgress(info) {
 // A worker can reach WebGPU too, so the whole pipeline stays off the UI thread.
 async function chooseBackend() {
   if (typeof navigator === 'undefined' || !navigator.gpu) return WASM_BACKEND;
+  if (!connectionCanAffordGpu()) return WASM_BACKEND;
   try {
     const adapter = await navigator.gpu.requestAdapter();
     if (!adapter || !adapter.features.has('shader-f16')) return WASM_BACKEND;
