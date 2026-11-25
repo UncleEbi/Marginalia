@@ -52,11 +52,47 @@ function splitLongText(text, maxLen = 180) {
   return finalChunks;
 }
 
+// WASM threads need SharedArrayBuffer, which needs a cross-origin isolated page
+// (COOP/COEP on the document). Without isolation onnxruntime stays
+// single-threaded whatever we ask for, so report what actually happens instead
+// of assuming the headers worked.
+function configureThreads(env) {
+  const isolated = !!self.crossOriginIsolated && typeof SharedArrayBuffer !== 'undefined';
+  const requested = Math.max(1, Math.min(4, navigator.hardwareConcurrency || 1));
+  const threads = isolated ? requested : 1;
+  let applied = null;
+  let error = null;
+  try {
+    const wasm = env && env.backends && env.backends.onnx && env.backends.onnx.wasm;
+    if (wasm) {
+      wasm.numThreads = threads;
+      applied = wasm.numThreads;
+    } else {
+      error = 'env.backends.onnx.wasm unavailable';
+    }
+  } catch (err) {
+    error = String(err && err.message || err);
+  }
+  const diag = {
+    stage: 'configured',
+    isolated,
+    requested,
+    applied,
+    hasSAB: typeof SharedArrayBuffer !== 'undefined',
+    hardwareConcurrency: navigator.hardwareConcurrency || null,
+    error
+  };
+  console.log('[tts-worker] threads', JSON.stringify(diag));
+  self.postMessage({ type: 'diag', ...diag });
+  return diag;
+}
+
 async function getTts() {
   if (!ttsPromise) {
     ttsPromise = (async () => {
       self.postMessage({ type: 'progress', stage: 'downloading', pct: 0 });
-      const { KokoroTTS } = await import(KOKORO_CDN_URL);
+      const { KokoroTTS, env } = await import(KOKORO_CDN_URL);
+      configureThreads(env);
       const fileProgress = new Map();
 
       const tts = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
@@ -77,6 +113,12 @@ async function getTts() {
             self.postMessage({ type: 'progress', stage: 'preparing' });
           }
         }
+      });
+      self.postMessage({
+        type: 'diag',
+        stage: 'ready',
+        numThreads: (env && env.backends && env.backends.onnx && env.backends.onnx.wasm && env.backends.onnx.wasm.numThreads) || null,
+        isolated: !!self.crossOriginIsolated
       });
       return tts;
     })().catch((err) => {
