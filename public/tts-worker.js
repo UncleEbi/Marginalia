@@ -6,6 +6,14 @@
 const KOKORO_CDN_URL = 'https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/+esm';
 const KOKORO_MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
 
+// WebGPU runs Kokoro far faster than WASM, but it needs a half-precision build: model_fp16.onnx is
+// 155.7 MiB against the 88.1 MiB q8 WASM one, and its runtime wasm binary is 20.6 MiB against
+// 10.6 MiB. So only take the GPU path when the adapter can actually run f16 shaders; otherwise stay
+// on the q8 WASM build rather than fall back to the 310.5 MiB fp32 model.
+const WASM_BACKEND = { device: 'wasm', dtype: 'q8' };
+const WEBGPU_BACKEND = { device: 'webgpu', dtype: 'fp16' };
+
+let activeBackend = WASM_BACKEND;
 let ttsPromise = null;
 let activeSessionId = 0;
 let running = false;
@@ -52,32 +60,61 @@ function splitLongText(text, maxLen = 180) {
   return finalChunks;
 }
 
+const downloadProgress = new Map();
+
+function reportProgress(info) {
+  if (!info) return;
+  if (info.status === 'progress' && info.file) {
+    downloadProgress.set(info.file, { loaded: info.loaded || 0, total: info.total || 0 });
+    let loadedSum = 0;
+    let totalSum = 0;
+    downloadProgress.forEach((v) => { loadedSum += v.loaded; totalSum += v.total; });
+    if (totalSum > 0) {
+      const pct = Math.min(99, Math.floor((loadedSum / totalSum) * 100));
+      self.postMessage({ type: 'progress', stage: 'downloading', pct });
+    }
+  } else if (info.status === 'ready' || info.status === 'done') {
+    self.postMessage({ type: 'progress', stage: 'preparing' });
+  }
+}
+
+// A worker can reach WebGPU too, so the whole pipeline stays off the UI thread.
+async function chooseBackend() {
+  if (typeof navigator === 'undefined' || !navigator.gpu) return WASM_BACKEND;
+  try {
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter || !adapter.features.has('shader-f16')) return WASM_BACKEND;
+    return WEBGPU_BACKEND;
+  } catch (err) {
+    return WASM_BACKEND;
+  }
+}
+
 async function getTts() {
   if (!ttsPromise) {
     ttsPromise = (async () => {
       self.postMessage({ type: 'progress', stage: 'downloading', pct: 0 });
+      downloadProgress.clear(); // a failed GPU start must not leave stale byte counts behind
       const { KokoroTTS } = await import(KOKORO_CDN_URL);
-      const fileProgress = new Map();
-
-      const tts = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
-        dtype: 'q8',
-        device: 'wasm',
-        progress_callback: (info) => {
-          if (!info) return;
-          if (info.status === 'progress' && info.file) {
-            fileProgress.set(info.file, { loaded: info.loaded || 0, total: info.total || 0 });
-            let loadedSum = 0;
-            let totalSum = 0;
-            fileProgress.forEach((v) => { loadedSum += v.loaded; totalSum += v.total; });
-            if (totalSum > 0) {
-              const pct = Math.min(99, Math.floor((loadedSum / totalSum) * 100));
-              self.postMessage({ type: 'progress', stage: 'downloading', pct });
-            }
-          } else if (info.status === 'ready' || info.status === 'done') {
-            self.postMessage({ type: 'progress', stage: 'preparing' });
-          }
-        }
+      const load = (backend) => KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
+        device: backend.device,
+        dtype: backend.dtype,
+        progress_callback: reportProgress
       });
+
+      const preferred = await chooseBackend();
+      let tts;
+      try {
+        tts = await load(preferred);
+        activeBackend = preferred;
+      } catch (err) {
+        // A machine can advertise WebGPU and still fail to build the session; the WASM build is
+        // always available, so a failed GPU start never costs the reader their voice.
+        if (preferred.device !== 'webgpu') throw err;
+        tts = await load(WASM_BACKEND);
+        activeBackend = WASM_BACKEND;
+      }
+      self.postMessage({ type: 'backend', device: activeBackend.device, dtype: activeBackend.dtype });
       return tts;
     })().catch((err) => {
       ttsPromise = null;
@@ -145,6 +182,18 @@ async function drainQueue() {
           self.postMessage({ type: 'cancelled', id: job.id });
           continue;
         }
+        if (job.type === 'warmup') {
+          // Load the model and compile/allocate now, so the first Play only has to synthesize. The
+          // throwaway utterance is skipped when a real job is already waiting behind this warmup.
+          if (queue.length === 0) {
+            try {
+              await tts.generate('Ready.', { voice: job.voice, speed: 1 });
+            } catch (err) {}
+          }
+          self.postMessage({ type: 'warmed' });
+          continue;
+        }
+
         self.postMessage({ type: 'progress', stage: 'synthesizing' });
         const { pcm, sampleRate } = await synthesizeSegments(tts, job.text, job.voice);
         self.postMessage(
@@ -178,6 +227,17 @@ self.addEventListener('message', (e) => {
         self.postMessage({ type: 'cancelled', id: job.id });
       }
     }
+    return;
+  }
+
+  if (msg.type === 'warmup') {
+    queue.push({
+      id: null,
+      type: 'warmup',
+      voice: msg.voice || 'af_heart',
+      sessionId: activeSessionId
+    });
+    drainQueue();
     return;
   }
 

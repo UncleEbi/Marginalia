@@ -5610,6 +5610,22 @@ function getWasmTtsWorker() {
           return;
         }
 
+        // Which backend the worker actually settled on (WebGPU, or WASM when the GPU is unusable).
+        if (msg.type === 'backend') {
+          console.info(`[Studio voice] ${msg.device} backend (${msg.dtype})`);
+          return;
+        }
+        // Warm-up finished: the model is in memory, so the next Play only has to synthesize.
+        if (msg.type === 'warmed') {
+          if (activeEngine === 'wasm' && preloadStatus && !isPlaying) preloadStatus.textContent = 'Ready';
+          return;
+        }
+        // A warm-up failed before it ever became a job, so nothing is waiting to report it.
+        if (msg.type === 'error' && (msg.id == null)) {
+          if (preloadStatus) preloadStatus.textContent = 'Ready';
+          return;
+        }
+
         const pending = wasmWorkerPending.get(msg.id);
         if (!pending) return;
         wasmWorkerPending.delete(msg.id);
@@ -5656,6 +5672,21 @@ function synthInWasmWorker(text, voice, priority = 'high') {
       priority
     });
   });
+}
+
+// Load the model when Studio is chosen rather than on first Play: the download, session creation
+// and first-inference cost all happen while the reader is still picking a voice.
+const wasmWarmedVoices = new Set();
+function warmWasmTtsWorker() {
+  if (activeEngine !== 'wasm') return;
+  const worker = getWasmTtsWorker();
+  if (!worker) return;
+  const picked = (typeof voicePicker !== 'undefined' && voicePicker) ? voicePicker.value : '';
+  const kokoroVoice = KOKORO_VOICE_MAP[picked] || KOKORO_VOICE_MAP.heart;
+  if (wasmWarmedVoices.has(kokoroVoice)) return;
+  wasmWarmedVoices.add(kokoroVoice);
+  if (preloadStatus) preloadStatus.textContent = 'Preparing voice...';
+  worker.postMessage({ type: 'warmup', voice: kokoroVoice });
 }
 
 async function loadKokoroOnDeviceTts() {
@@ -6991,6 +7022,12 @@ if (savedEngine && voicePresets[savedEngine] && savedEngine !== activeEngine) {
   document.querySelectorAll('.engine-tab').forEach(t => t.classList.toggle('active', t.dataset.engine === savedEngine));
 }
 
+if (activeEngine === 'wasm' && typeof window !== 'undefined') {
+  // A returning Studio reader already opted in, but don't start the model download on a passive
+  // page load: wait for the first tap. By then the model is usually already cached.
+  window.addEventListener('pointerdown', () => warmWasmTtsWorker(), { once: true });
+}
+
 function populateVoices() {
   const prevChoice = voicePicker.value;
   voicePicker.innerHTML = '';
@@ -7102,6 +7139,7 @@ voicePicker.addEventListener('change', () => {
   const selectedOption = voicePicker.options[voicePicker.selectedIndex];
   const badgeIcon = (activeEngine === 'browser' || activeEngine === 'wasm') ? '🎙️' : '⚡';
   activeVoiceBadge.textContent = `${badgeIcon} ${selectedOption ? selectedOption.text.split('(')[0].trim() : 'Voice'}`;
+  warmWasmTtsWorker(); // a different Studio voice carries its own embeddings: fetch them now
 
   if (isPlaying) {
     stopAudio();
@@ -7120,6 +7158,7 @@ document.querySelectorAll('.engine-tab').forEach(tab => {
     clearAudioCache();
     learnedCadenceMultiplier = cadenceByVoice.get(voiceCadenceKey()) || 1.0;
     populateVoices();
+    warmWasmTtsWorker(); // Studio was just chosen: load the model now, not on the first Play
     if (isPlaying) {
       stopAudio();
       if (activeEngine !== 'browser') unlockAudioForIOS();
