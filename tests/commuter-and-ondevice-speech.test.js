@@ -315,6 +315,7 @@ test('Studio (On-Device) wires Kokoro-82M WASM voice mapping and multi-node sess
   assert.match(appSrc, /wasmActiveSourceNodes\.forEach/, 'cancelAllSpeech stops all scheduled WASM nodes');
   assert.match(appSrc, /wasmScheduledChunks\.clear\(\)/, 'cancelAllSpeech clears scheduled chunk map');
   assert.match(appSrc, /wasmScheduledChunks\.get\(schedKey\)/, 'speakServerless adopts pre-scheduled chunks without double playback');
+  assert.match(appSrc, /stitchWasmClauseStream\(pending\.stream, pending\.text\)\s*\.catch\(/, 'a stitching failure cannot surface as an unhandled rejection');
 });
 
 test('a finished clause stream is stitched into one cached clip so replay does not re-synthesize it', async () => {
@@ -377,6 +378,40 @@ test('a finished clause stream is stitched into one cached clip so replay does n
     // Stitching twice must not rebuild or re-cache the clip.
     assert.equal(await stitchWasmClauseStream(stream, text), src);
     assert.equal(encoded.length, 1, 'an already stitched stream is left alone');
+  } finally {
+    Object.assign(globalThis, saved);
+  }
+});
+
+test('a stitched stream drops its per-clause PCM once the sentence has played', () => {
+  const releaseWasmClauseStreamPcm = extractFunction('releaseWasmClauseStreamPcm');
+  const released = [];
+  const saved = {
+    releaseAudioSrc: globalThis.releaseAudioSrc
+  };
+  globalThis.releaseAudioSrc = (src) => { released.push(src); };
+
+  try {
+    const stream = {
+      src: 'blob:clause-0',
+      nextIndex: 2,
+      chunks: [
+        { index: 0, pcm: new Float32Array([0.1, 0.2]), final: false },
+        { index: 1, pcm: new Float32Array([0.3]), final: true }
+      ]
+    };
+
+    // Still streaming: a replay and the scheduler need those clauses.
+    releaseWasmClauseStreamPcm(stream);
+    assert.ok(stream.chunks[0].pcm && stream.chunks[1].pcm, 'an unstitched stream keeps its clauses');
+    assert.deepEqual(released, []);
+
+    stream.mergedSrc = 'blob:stitched-1';
+    releaseWasmClauseStreamPcm(stream);
+    assert.deepEqual(stream.chunks.map((c) => c.pcm), [null, null], 'the per-clause PCM is dropped');
+    assert.deepEqual(released, ['blob:clause-0'], "chunk 0's own clip is released too");
+    assert.equal(stream.mergedSrc, 'blob:stitched-1', 'the whole-sentence clip stays cached for replay');
+    assert.equal(stream.nextIndex, 1, 'a released stream would replay from its first clause');
   } finally {
     Object.assign(globalThis, saved);
   }
