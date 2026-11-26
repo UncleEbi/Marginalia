@@ -324,6 +324,7 @@ test('a finished clause stream is stitched into one cached clip so replay does n
   const encoded = [];
   const cached = [];
   const savedIdb = [];
+  const released = [];
   const saved = {
     encodeWasmPcmToBlobUrl: globalThis.encodeWasmPcmToBlobUrl,
     cacheAudio: globalThis.cacheAudio,
@@ -331,11 +332,13 @@ test('a finished clause stream is stitched into one cached clip so replay does n
     wasmCacheVoiceId: globalThis.wasmCacheVoiceId,
     computeAudioCacheKey: globalThis.computeAudioCacheKey,
     saveAudioToIdbCache: globalThis.saveAudioToIdbCache,
+    releaseAudioSrc: globalThis.releaseAudioSrc,
     fetch: globalThis.fetch,
     modelSampleRate: globalThis.modelSampleRate
   };
 
   globalThis.modelSampleRate = 24000;
+  globalThis.releaseAudioSrc = (src) => { released.push(src); };
   globalThis.encodeWasmPcmToBlobUrl = (pcm, rate) => {
     encoded.push({ samples: Array.from(pcm), rate });
     return `blob:stitched-${encoded.length}`;
@@ -352,11 +355,13 @@ test('a finished clause stream is stitched into one cached clip so replay does n
       index, count: 2, text: `clause ${index}`, pcm: new Float32Array(samples), sampleRate: 24000, final
     });
     const text = 'First clause, second clause.';
-    const stream = { chunks: [chunk(0, [0.1, 0.2]), chunk(1, [0.3], true)], done: true, onChunk: null, nextIndex: 1 };
+    const stream = { src: 'blob:clause-0', chunks: [chunk(0, [0.1, 0.2]), chunk(1, [0.3], true)], done: true, onChunk: null, nextIndex: 1 };
 
     // The worker is still synthesizing the sentence: there is nothing whole to store yet.
     assert.equal(await stitchWasmClauseStream({ ...stream, done: false }, text), null);
     assert.equal(encoded.length, 0);
+    assert.ok(stream.chunks[0].pcm && stream.chunks[1].pcm, 'an unstitched stream keeps its clauses');
+    assert.deepEqual(released, []);
 
     const src = await stitchWasmClauseStream(stream, text);
     assert.equal(src, 'blob:stitched-1');
@@ -378,40 +383,9 @@ test('a finished clause stream is stitched into one cached clip so replay does n
     // Stitching twice must not rebuild or re-cache the clip.
     assert.equal(await stitchWasmClauseStream(stream, text), src);
     assert.equal(encoded.length, 1, 'an already stitched stream is left alone');
-  } finally {
-    Object.assign(globalThis, saved);
-  }
-});
-
-test('a stitched stream drops its per-clause PCM once the sentence has played', () => {
-  const releaseWasmClauseStreamPcm = extractFunction('releaseWasmClauseStreamPcm');
-  const released = [];
-  const saved = {
-    releaseAudioSrc: globalThis.releaseAudioSrc
-  };
-  globalThis.releaseAudioSrc = (src) => { released.push(src); };
-
-  try {
-    const stream = {
-      src: 'blob:clause-0',
-      nextIndex: 2,
-      chunks: [
-        { index: 0, pcm: new Float32Array([0.1, 0.2]), final: false },
-        { index: 1, pcm: new Float32Array([0.3]), final: true }
-      ]
-    };
-
-    // Still streaming: a replay and the scheduler need those clauses.
-    releaseWasmClauseStreamPcm(stream);
-    assert.ok(stream.chunks[0].pcm && stream.chunks[1].pcm, 'an unstitched stream keeps its clauses');
-    assert.deepEqual(released, []);
-
-    stream.mergedSrc = 'blob:stitched-1';
-    releaseWasmClauseStreamPcm(stream);
     assert.deepEqual(stream.chunks.map((c) => c.pcm), [null, null], 'the per-clause PCM is dropped');
     assert.deepEqual(released, ['blob:clause-0'], "chunk 0's own clip is released too");
-    assert.equal(stream.mergedSrc, 'blob:stitched-1', 'the whole-sentence clip stays cached for replay');
-    assert.equal(stream.nextIndex, 1, 'a released stream would replay from its first clause');
+    assert.equal(stream.mergedSrc, src, 'the whole-sentence clip is what remains cached');
   } finally {
     Object.assign(globalThis, saved);
   }

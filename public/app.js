@@ -5785,6 +5785,10 @@ async function stitchWasmClauseStream(stream, text) {
   if (!src) return null;
   stream.mergedSrc = src;
   cacheAudio(neuralCacheKey(text), src);
+  // The stitched clip is the sentence's only copy from here: with mergedSrc set nothing schedules
+  // or replays the clauses, so their PCM and chunk 0's own clip are just a second copy.
+  chunks.forEach((c) => { if (c) c.pcm = null; });
+  if (stream.src) releaseAudioSrc(stream.src);
 
   try {
     const cacheKey = await computeAudioCacheKey('wasm_kokoro_v1', wasmCacheVoiceId(), 1, text);
@@ -5795,15 +5799,6 @@ async function stitchWasmClauseStream(stream, text) {
   } catch (e) { }
 
   return src;
-}
-
-// A stitched clip is the whole sentence, so the clauses it was streamed as are only a second copy:
-// drop their PCM (and chunk 0's own clip) once the sentence has finished playing.
-function releaseWasmClauseStreamPcm(stream) {
-  if (!stream || !stream.mergedSrc) return;
-  (stream.chunks || []).forEach((chunk) => { if (chunk) chunk.pcm = null; });
-  if (stream.src && typeof releaseAudioSrc === 'function') releaseAudioSrc(stream.src);
-  stream.nextIndex = 1;
 }
 
 // Load the model when Studio is chosen rather than on first Play: the download, session creation
@@ -6515,8 +6510,6 @@ async function speakServerless(text, opts = {}) {
         sourceNode.onended = () => {
           wasmActiveSourceNodes.delete(sourceNode);
           cancelWordAnimation();
-          // A sentence that was stitched before it played is one clip now; the clauses are extra.
-          releaseWasmClauseStreamPcm(readyStream);
           // With a clause stream the last clause advances the sentence, not this first clause.
           if (clauseStream) return;
           if (sessionAtStart !== wasmSessionId || standalone || !isPlaying) return;
@@ -6671,7 +6664,6 @@ async function scheduleNextWasmChunkBackToBack(audioCtx, sessionAtStart) {
   nextSource.onended = () => {
     wasmActiveSourceNodes.delete(nextSource);
     cancelWordAnimation();
-    releaseWasmClauseStreamPcm(streamingNext);
     if (sessionAtStart !== wasmSessionId || !isPlaying) return;
     currentSentenceIdx++;
     playCurrentSentence();
@@ -6700,14 +6692,7 @@ function scheduleWasmClauseStream(audioCtx, stream, opts) {
       stream.nextIndex = i + 1;
       if (!chunk.pcm || !chunk.pcm.length) {
         // Silence-only clause: nothing to schedule, but it can still be the one that ends the run.
-        if (chunk.final && lastSource) {
-          const ended = lastSource;
-          ended.onended = () => {
-            wasmActiveSourceNodes.delete(ended);
-            releaseWasmClauseStreamPcm(stream);
-            advance();
-          };
-        }
+        if (chunk.final && lastSource) lastSource.onended = advance;
         continue;
       }
       const audioBuffer = createWasmAudioBuffer(audioCtx, chunk.pcm, chunk.sampleRate);
@@ -6727,8 +6712,6 @@ function scheduleWasmClauseStream(audioCtx, stream, opts) {
       if (chunk.final) {
         source.onended = () => {
           wasmActiveSourceNodes.delete(source);
-          // The sentence is one stitched clip now, so holding the clauses would double it.
-          releaseWasmClauseStreamPcm(stream);
           advance();
         };
       } else {
