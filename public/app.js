@@ -2014,6 +2014,7 @@ function cancelAllSpeech() {
   if (typeof wasmTtsWorker !== 'undefined' && wasmTtsWorker) {
     try { wasmTtsWorker.postMessage({ type: 'cancel', sessionId: wasmSessionId }); } catch (e) {}
   }
+  abortCloudPrefetch();
   cancelWordAnimation();
 }
 
@@ -5598,6 +5599,7 @@ function cacheAudio(key, src) {
 function clearAudioCache() {
   audioPreloadCache.forEach(v => releaseAudioSrc(v.src));
   audioPreloadCache.clear();
+  abortCloudPrefetch();
 }
 
 // Fallback for a server that still answers with base64 JSON
@@ -6121,7 +6123,8 @@ async function getNeuralAudioSrc(text) {
     const res = await fetch('/api/tts', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ text: spokenText, voiceId, engine, speed })
+      body: JSON.stringify({ text: spokenText, voiceId, engine, speed }),
+      signal: opts.signal
     });
     let src = '';
     let remaining = res.headers.get('X-Remaining-Chars');
@@ -6144,7 +6147,9 @@ async function getNeuralAudioSrc(text) {
         // Carry the status and the server's wait so the play path can answer 403/429 properly.
         const err = new Error(data.error || `Error ${res.status}`);
         err.status = res.status;
-        err.code = data.error || '';
+        // Prefer the server's machine code (e.g. OPENAI_TTS_RETIRED) over the human message, which
+        // older servers send without a code at all.
+        err.code = data.code || data.error || '';
         err.retryAfter = retryAfterSeconds(res, data);
         throw err;
       }
@@ -6359,12 +6364,29 @@ function upcomingNeuralTexts(limit) {
   return out;
 }
 
+// Speculative cloud fetches, keyed by the sentence they carry. Pausing, skipping or switching
+// engines cancels them: audio nobody will hear should not be paid for.
+const cloudPrefetchAborts = new Map();
+
+function abortCloudPrefetch() {
+  cloudPrefetchAborts.forEach((ctrl) => { try { ctrl.abort(); } catch (e) { } });
+  cloudPrefetchAborts.clear();
+}
+
 function preloadUpcoming(myToken) {
   if (activeEngine === 'browser') return;
   upcomingNeuralTexts(PRELOAD_AHEAD).forEach(t => {
     if (myToken !== speakToken) return; // user paused/skipped
-    if (audioPreloadCache.has(neuralCacheKey(t))) return;
-    getNeuralAudioSrc(t).catch(() => { }); // best effort; the real play path reports errors
+    const key = neuralCacheKey(t);
+    if (audioPreloadCache.has(key)) return;
+    if (audioInflight.has(key)) return; // already on the wire; the play path will adopt it
+    const ctrl = new AbortController();
+    cloudPrefetchAborts.set(key, ctrl);
+    getNeuralAudioSrc(t, { signal: ctrl.signal })
+      .catch(() => { }) // best effort; the real play path reports errors
+      .finally(() => {
+        if (cloudPrefetchAborts.get(key) === ctrl) cloudPrefetchAborts.delete(key);
+      });
   });
 }
 
@@ -6406,6 +6428,27 @@ function startWordKaraokeLoop(getElapsedSec, getTimeline, shouldContinue) {
     wordAnimFrameId = requestAnimationFrame(renderFrame);
   }
   wordAnimFrameId = requestAnimationFrame(renderFrame);
+}
+
+// A reader must never lose a sentence to a provider decision. When the cloud voice they picked is
+// gone (retired model, provider shutdown), Studio is always available, so move them onto it and
+// keep reading instead of leaving them parked on a dead engine.
+let didFallBackToStudio = false;
+function switchToStudioVoice() {
+  activeEngine = 'wasm';
+  localStorage.setItem('marginalia_active_engine', 'wasm');
+  document.querySelectorAll('.engine-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.engine === 'wasm');
+  });
+  clearAudioCache();
+  populateVoices();
+  warmWasmTtsWorker(); // loads (or reuses) the on-device model now, so the next sentence can start
+  if (!didFallBackToStudio) {
+    didFallBackToStudio = true;
+    showToast('That cloud voice has been retired — switched to Studio (on-device) voice.');
+  }
+  isPlaying = true;
+  playCurrentSentence();
 }
 
 async function speakServerless(text, opts = {}) {
@@ -6606,6 +6649,14 @@ async function speakServerless(text, opts = {}) {
     } else if (err && explainAiRefusal(err.status, err.code, err.retryAfter,
       () => showToast('AI reading is available again — press play to continue.'))) {
       // stopAudio() above already paused playback; the notice carries the countdown and next step.
+    } else if (err && err.code === 'OPENAI_TTS_RETIRED' && activeEngine !== 'wasm') {
+      if (standalone) {
+        // A tap-to-hear selection stays on the voice the reader picked; only reading continues.
+        showToast('That cloud voice has been retired. Pick Studio (on-device) to hear this sentence.');
+      } else {
+        // Continuous reading must never lose a sentence to a provider decision.
+        switchToStudioVoice();
+      }
     } else if (activeEngine === 'wasm') {
       showToast(err.message || 'Could not start Studio on-device voice.');
     } else {

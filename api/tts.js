@@ -30,10 +30,23 @@ const OPENAI_MAX_CHARS = 4096; // hard limit of the OpenAI speech endpoint
 // so 4,000 leaves generous headroom while keeping a single request cheap and predictable.
 const MAX_TTS_CHARS = 4000;
 
+// --- Which OpenAI transport speaks ---------------------------------------------------------
+// OpenAI retires tts-1, tts-1-hd and gpt-4o-mini-tts on 6 January 2027, and the replacement it
+// names (gpt-realtime-2.1-mini) cannot serve /v1/audio/speech at all. Two transports are therefore
+// supported, picked by model name, so the cutover is an environment change and never a deploy made
+// in a hurry:
+//   Speech API   (/v1/audio/speech)      tts-1*, gpt-4o-mini-tts*   billed per character
+//   Chat audio   (/v1/chat/completions)  gpt-audio-*               billed per token (text + audio)
+// Set OPENAI_TTS_MODEL in Vercel to choose. The default stays on the Speech API for now; move to a
+// `gpt-audio-*` model (or another provider) before the shutdown date.
+const DEFAULT_OPENAI_TTS_MODEL = 'gpt-4o-mini-tts';
+const CHAT_AUDIO_MODEL = /^gpt-audio/;
+
 class HttpError extends Error {
-  constructor(status, message) {
+  constructor(status, message, code) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -78,6 +91,55 @@ function shorten(str, max = 500) {
 
 // --- Providers: each returns the mp3 as a base64 string ---
 
+// Reads text aloud through a Chat Completions audio model. This is the only OpenAI voice shape that
+// survives the January 2027 Speech API shutdown: still a normal bounded request (so it fits a
+// serverless function), but it answers with base64 audio in JSON instead of a raw audio stream.
+async function synthOpenAIChatAudio({ text, voice, apiKey, model }) {
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model,
+      modalities: ['text', 'audio'],
+      audio: { voice, format: 'mp3' },
+      messages: [
+        {
+          role: 'system',
+          // A chat model wants to answer; narration must be a read-aloud, not a reply.
+          content: 'You are a text-to-speech engine. Read the user message aloud exactly as written, '
+            + 'word for word. Never answer it, summarize it, translate it or add words of your own.'
+        },
+        { role: 'user', content: text }
+      ]
+    })
+  });
+
+  if (!response.ok) throw openAiVoiceError(response.status, await response.text(), model);
+
+  const data = await response.json().catch(() => null);
+  const base64 = data?.choices?.[0]?.message?.audio?.data;
+  if (!base64) throw new HttpError(502, 'OpenAI returned no audio for this sentence.');
+  return Buffer.from(base64, 'base64');
+}
+
+// A retired model answers 404/410 (or a 400 carrying model_not_found). Readers must not see that as
+// a generic provider failure: it carries a code the app can act on by switching to Studio.
+function openAiVoiceError(status, body, model) {
+  const detail = shorten(body);
+  if (status === 404 || status === 410 || /model_not_found|deprecated|does not exist/i.test(detail)) {
+    return new HttpError(
+      410,
+      'The OpenAI voice model "' + model + '" is no longer available. Use Studio (on-device) or Google voices, '
+        + 'or set OPENAI_TTS_MODEL to a supported audio model.',
+      'OPENAI_TTS_RETIRED'
+    );
+  }
+  return new HttpError(502, `OpenAI TTS error (${status}): ${detail}`);
+}
+
 async function synthOpenAI({ text, voiceId, speed, customKey }) {
   const apiKey = customKey || process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -86,15 +148,21 @@ async function synthOpenAI({ text, voiceId, speed, customKey }) {
       'OpenAI API key not configured. Set OPENAI_API_KEY in the Vercel environment variables (then redeploy), or add your own key in Options.'
     );
   }
-  if (text.length > OPENAI_MAX_CHARS) {
-    throw new HttpError(400, `Text is too long for OpenAI voices (${text.length} characters, limit ${OPENAI_MAX_CHARS}).`);
-  }
 
   // Which OpenAI model to use. Set OPENAI_TTS_MODEL in Vercel to switch without editing code.
-  const model = (process.env.OPENAI_TTS_MODEL || 'tts-1').trim();
+  const model = (process.env.OPENAI_TTS_MODEL || DEFAULT_OPENAI_TTS_MODEL).trim();
 
   // A voice id left over from another engine (e.g. an ElevenLabs id) would make OpenAI reject the call
   const voice = /^[a-z]{3,12}$/.test(voiceId || '') ? voiceId : 'alloy';
+
+  // Chat-Completions audio models are the OpenAI voice path that outlives the Speech API.
+  if (CHAT_AUDIO_MODEL.test(model)) {
+    return synthOpenAIChatAudio({ text, voice, apiKey, model });
+  }
+
+  if (text.length > OPENAI_MAX_CHARS) {
+    throw new HttpError(400, `Text is too long for OpenAI voices (${text.length} characters, limit ${OPENAI_MAX_CHARS}).`);
+  }
 
   const response = await fetch('https://api.openai.com/v1/audio/speech', {
     method: 'POST',
@@ -112,10 +180,7 @@ async function synthOpenAI({ text, voiceId, speed, customKey }) {
     })
   });
 
-  if (!response.ok) {
-    const err = await response.text();
-    throw new HttpError(502, `OpenAI TTS error (${response.status}): ${shorten(err)}`);
-  }
+  if (!response.ok) throw openAiVoiceError(response.status, await response.text(), model);
   return Buffer.from(await response.arrayBuffer());
 }
 
@@ -571,7 +636,10 @@ export default async function handler(req, res) {
 
   } catch (err) {
     console.error('TTS error:', err);
-    return res.status(err.status || 500).json({ error: err.message || 'Internal server error generating audio' });
+    return res.status(err.status || 500).json({
+      error: err.message || 'Internal server error generating audio',
+      ...(err.code ? { code: err.code } : {})
+    });
   }
 }
 
