@@ -4979,6 +4979,29 @@ exitSummaryBtn.addEventListener('click', () => {
 });
 
 // --- CADENCE TIMELINE ENGINE ---
+// Karaoke run for a clause stream: each clause contributes its own words, its own duration and the
+// point where its audio starts, so the highlight crosses clause boundaries with no gap. Clause text
+// is the normalized spoken sentence, so a unit expansion ("kWh" -> "kilowatt hours") can add words
+// and push every later index off its word. When the clauses do not cover exactly the words on
+// screen, the visible words are scaled across the audio scheduled so far instead: that timing is
+// an estimate, but every index stays on its own word.
+function buildClauseKaraokeTimeline(clauseRuns, visibleWords, playbackSpeed) {
+  const timeline = [];
+  let covered = 0;
+  let end = 0;
+  (clauseRuns || []).forEach((run) => {
+    if (!run || !run.words || !run.words.length || !(run.duration > 0)) return;
+    const offset = run.offset || 0;
+    covered += run.words.length;
+    end = Math.max(end, offset + run.duration);
+    computeWordTimeline(run.words, playbackSpeed, run.duration).timeline.forEach((t) => {
+      timeline.push({ start: t.start + offset, end: t.end + offset });
+    });
+  });
+  if (covered === visibleWords.length) return timeline;
+  return computeWordTimeline(visibleWords, playbackSpeed, end > 0 ? end : null).timeline;
+}
+
 function computeWordTimeline(words, speed, totalDuration = null) {
   const effectiveCadenceFactor = learnedCadenceMultiplier * userManualCalibration;
   const timeline = [];
@@ -5550,6 +5573,14 @@ function neuralCacheKey(text) {
   return `${activeEngine}_${voicePicker.value}_${normalized}`;
 }
 
+// The Studio voice a clip was synthesized with: a leftover cloud voice id in the picker falls back
+// to heart, exactly as getNeuralAudioSrc decides which cache entry it is looking for.
+function wasmCacheVoiceId() {
+  return (!voicePicker.value || !['heart', 'michael', 'emma'].includes(voicePicker.value))
+    ? 'heart'
+    : voicePicker.value;
+}
+
 function releaseAudioSrc(src) {
   if (src && src.startsWith('blob:')) { try { URL.revokeObjectURL(src); } catch (e) { } }
   if (src && typeof synthPcmCache !== 'undefined') { try { synthPcmCache.delete(src); } catch (e) { } }
@@ -5663,6 +5694,8 @@ function getWasmTtsWorker() {
         if (msg.type === 'result' && pending.stream) {
           pending.stream.done = true;
           wasmWorkerPending.delete(msg.id);
+          // The whole sentence has arrived: join the clauses and cache the full clip for replay.
+          stitchWasmClauseStream(pending.stream, pending.text);
           if (pending.stream.onChunk) pending.stream.onChunk();
           return;
         }
@@ -5709,7 +5742,7 @@ function synthInWasmWorker(text, voice, priority = 'high') {
   if (!worker) return null;
   const id = ++wasmWorkerJobId;
   return new Promise((resolve, reject) => {
-    wasmWorkerPending.set(id, { resolve, reject });
+    wasmWorkerPending.set(id, { resolve, reject, text });
     worker.postMessage({
       type: 'synthesize',
       id,
@@ -5719,6 +5752,47 @@ function synthInWasmWorker(text, voice, priority = 'high') {
       priority
     });
   });
+}
+
+// The last clause finishes the sentence, which until then only exists as separate clause buffers.
+// Join them into the clip the un-split path would have produced (one normalization pass, 50 ms of
+// silence at each end) and store it under the sentence's cache key, so a replay plays the sentence
+// from memory instead of synthesizing it clause by clause again.
+async function stitchWasmClauseStream(stream, text) {
+  if (!stream || !stream.done) return null;
+  if (stream.mergedSrc) return stream.mergedSrc;
+  const chunks = stream.chunks || [];
+  if (chunks.length < 2) return null;
+  const last = chunks[chunks.length - 1];
+  if (!last || !last.final) return null;
+
+  const sampleRate = chunks[0].sampleRate || modelSampleRate;
+  let total = 0;
+  chunks.forEach((c) => { total += (c && c.pcm) ? c.pcm.length : 0; });
+  if (!total) return null;
+
+  const joined = new Float32Array(total);
+  let at = 0;
+  chunks.forEach((c) => {
+    if (!c || !c.pcm || !c.pcm.length) return;
+    joined.set(c.pcm, at);
+    at += c.pcm.length;
+  });
+
+  const src = encodeWasmPcmToBlobUrl(joined, sampleRate);
+  if (!src) return null;
+  stream.mergedSrc = src;
+  cacheAudio(neuralCacheKey(text), src);
+
+  try {
+    const cacheKey = await computeAudioCacheKey('wasm_kokoro_v1', wasmCacheVoiceId(), 1, text);
+    if (src.startsWith('blob:')) {
+      const blob = await (await fetch(src)).blob();
+      if (blob && blob.size) saveAudioToIdbCache(cacheKey, blob).catch(() => { });
+    }
+  } catch (e) { }
+
+  return src;
 }
 
 // Load the model when Studio is chosen rather than on first Play: the download, session creation
@@ -5806,6 +5880,52 @@ function createWasmAudioBuffer(audioCtx, pcmData, rate = modelSampleRate) {
   return audioBuffer;
 }
 
+// Encodes Studio PCM into a 16-bit WAV blob URL with 50 ms of silence at each end so phonemes are
+// not clipped, and keeps the samples beside the URL so playback can schedule them without decoding.
+function encodeWasmPcmToBlobUrl(rawFloatSamples, sampleRate) {
+  const padSamples = Math.round(sampleRate * 0.05); // 50ms silence padding to prevent phoneme clipping
+  const totalSamples = padSamples + rawFloatSamples.length + padSamples;
+  const pcmData = new Float32Array(totalSamples);
+
+  let maxAmp = 0;
+  for (let i = 0; i < rawFloatSamples.length; i++) {
+    const a = Math.abs(rawFloatSamples[i]);
+    if (a > maxAmp) maxAmp = a;
+  }
+  const normFactor = maxAmp > 1.0 ? 0.98 / maxAmp : 1.0;
+  for (let i = 0; i < rawFloatSamples.length; i++) {
+    pcmData[padSamples + i] = Math.max(-1.0, Math.min(1.0, rawFloatSamples[i] * normFactor));
+  }
+
+  const buffer = (typeof encodeMonoWavBuffer === 'function')
+    ? encodeMonoWavBuffer(pcmData, sampleRate)
+    : (() => {
+        const b = new ArrayBuffer(44 + totalSamples * 2);
+        const v = new DataView(b);
+        const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+        w(0, 'RIFF'); v.setUint32(4, 36 + totalSamples * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+        v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+        v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true);
+        v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, totalSamples * 2, true);
+        for (let i = 0; i < totalSamples; i++) {
+          const s = pcmData[i];
+          v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+        }
+        return b;
+      })();
+
+  let srcUrl = '';
+  if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+    srcUrl = URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
+  } else if (typeof Buffer !== 'undefined') {
+    srcUrl = 'data:audio/wav;base64,' + Buffer.from(buffer).toString('base64');
+  }
+  if (srcUrl && typeof synthPcmCache !== 'undefined') {
+    try { synthPcmCache.set(srcUrl, { pcmData, sampleRate }); } catch (e) {}
+  }
+  return srcUrl;
+}
+
 /**
  * Synthesizes speech locally in-browser to a 16-bit PCM WAV Blob URL.
  * Uses Kokoro-82M WebAssembly neural TTS in browser runtimes (cached locally after first download),
@@ -5817,49 +5937,7 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
   if (!trimmedText && typeof document !== 'undefined') return '';
   const priority = opts.priority || 'high';
 
-  const finalizePcmAndEncode = (rawFloatSamples, sampleRate) => {
-    const padSamples = Math.round(sampleRate * 0.05); // 50ms silence padding to prevent phoneme clipping
-    const totalSamples = padSamples + rawFloatSamples.length + padSamples;
-    const pcmData = new Float32Array(totalSamples);
-
-    let maxAmp = 0;
-    for (let i = 0; i < rawFloatSamples.length; i++) {
-      const a = Math.abs(rawFloatSamples[i]);
-      if (a > maxAmp) maxAmp = a;
-    }
-    const normFactor = maxAmp > 1.0 ? 0.98 / maxAmp : 1.0;
-    for (let i = 0; i < rawFloatSamples.length; i++) {
-      pcmData[padSamples + i] = Math.max(-1.0, Math.min(1.0, rawFloatSamples[i] * normFactor));
-    }
-
-    const buffer = (typeof encodeMonoWavBuffer === 'function')
-      ? encodeMonoWavBuffer(pcmData, sampleRate)
-      : (() => {
-          const b = new ArrayBuffer(44 + totalSamples * 2);
-          const v = new DataView(b);
-          const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
-          w(0, 'RIFF'); v.setUint32(4, 36 + totalSamples * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
-          v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
-          v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true);
-          v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, totalSamples * 2, true);
-          for (let i = 0; i < totalSamples; i++) {
-            const s = pcmData[i];
-            v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-          }
-          return b;
-        })();
-
-    let srcUrl = '';
-    if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
-      srcUrl = URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
-    } else if (typeof Buffer !== 'undefined') {
-      srcUrl = 'data:audio/wav;base64,' + Buffer.from(buffer).toString('base64');
-    }
-    if (srcUrl && typeof synthPcmCache !== 'undefined') {
-      try { synthPcmCache.set(srcUrl, { pcmData, sampleRate }); } catch (e) {}
-    }
-    return srcUrl;
-  };
+  const finalizePcmAndEncode = encodeWasmPcmToBlobUrl;
 
   if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof loadKokoroOnDeviceTts === 'function') {
     const kokoroVoice = KOKORO_VOICE_MAP[voiceId] || KOKORO_VOICE_MAP.heart;
@@ -5957,16 +6035,10 @@ async function getNeuralAudioSrc(text) {
   const key = neuralCacheKey(spokenText);
   const hit = audioPreloadCache.get(key);
   if (hit && hit.src) return hit.src;
-  // A streamed sentence's first clause is already encoded; replaying it must not re-synthesize
-  // the whole sentence just because the merged clip was never cached.
-  const streamHit = wasmClauseStreams.get(key);
-  if (streamHit && streamHit.src) return streamHit.src;
   if (audioInflight.has(key)) return audioInflight.get(key);
 
   const engine = activeEngine;
-  const voiceId = (engine === 'wasm' && (!voicePicker.value || !['heart', 'michael', 'emma'].includes(voicePicker.value)))
-    ? 'heart'
-    : voicePicker.value;
+  const voiceId = engine === 'wasm' ? wasmCacheVoiceId() : voicePicker.value;
   const speed = 1;
 
   // 1. Check persistent IndexedDB audio cache FIRST (cache-first playback)
@@ -6379,6 +6451,14 @@ async function speakServerless(text, opts = {}) {
     if (stale()) return;
 
     // --- Studio (On-Device) WASM AudioContext Buffer Scheduling Path ---
+    // A sentence whose worker finished before playback began is already stitched into one clip;
+    // its first clause alone would be only part of the sentence.
+    const readyStream = (activeEngine === 'wasm') ? wasmClauseStreams.get(neuralCacheKey(text)) || null : null;
+    const stitchedSrc = (readyStream && readyStream.mergedSrc && synthPcmCache.has(readyStream.mergedSrc))
+      ? readyStream.mergedSrc
+      : null;
+    if (stitchedSrc) audioSrc = stitchedSrc;
+
     const audioCtx = (activeEngine === 'wasm') ? getWasmAudioCtx() : null;
     const pcmEntry = (activeEngine === 'wasm' && audioSrc) ? synthPcmCache.get(audioSrc) : null;
     const pcmData = pcmEntry ? (pcmEntry.pcmData || pcmEntry) : null;
@@ -6388,8 +6468,9 @@ async function speakServerless(text, opts = {}) {
       const schedKey = `${currentPage}:${currentSentenceIdx}:${sessionAtStart}`;
       const existingChunk = !standalone ? wasmScheduledChunks.get(schedKey) : null;
       // A long sentence arrives clause by clause: chunk 0 is the clip about to play here, and the
-      // remaining clauses are scheduled behind it as the worker finishes them.
-      const clauseStream = wasmClauseStreams.get(neuralCacheKey(text)) || null;
+      // remaining clauses are scheduled behind it as the worker finishes them. A stitched stream is
+      // already the whole sentence and plays from stitchedSrc above.
+      const clauseStream = (readyStream && !readyStream.mergedSrc) ? readyStream : null;
 
       let startTime = 0;
       let bufferDuration = 0;
@@ -6437,14 +6518,15 @@ async function speakServerless(text, opts = {}) {
       let karaokeEnd = bufferDuration;
 
       if (clauseStream && !existingChunk) {
-        const streamTimeline = [];
+        const clauseRuns = [];
         const pushChunkTimeline = (chunkText, duration, offsetSec) => {
           karaokeEnd = Math.max(karaokeEnd, offsetSec + duration);
-          const chunkWords = String(chunkText || '').trim().split(/\s+/).filter(Boolean);
-          if (!chunkWords.length || !(duration > 0)) return;
-          computeWordTimeline(chunkWords, playbackSpeed, duration).timeline.forEach((t) => {
-            streamTimeline.push({ start: t.start + offsetSec, end: t.end + offsetSec });
+          clauseRuns.push({
+            words: String(chunkText || '').trim().split(/\s+/).filter(Boolean),
+            duration,
+            offset: offsetSec
           });
+          timeline = buildClauseKaraokeTimeline(clauseRuns, wordsArr, playbackSpeed);
         };
         pushChunkTimeline(clauseStream.chunks[0] ? clauseStream.chunks[0].text : text, bufferDuration, 0);
         scheduleWasmClauseStream(audioCtx, clauseStream, {
@@ -6453,7 +6535,6 @@ async function speakServerless(text, opts = {}) {
           firstStartTime: startTime,
           pushTimeline: pushChunkTimeline
         });
-        timeline = streamTimeline;
       }
 
       startWordKaraokeLoop(
@@ -6534,9 +6615,11 @@ async function scheduleNextWasmChunkBackToBack(audioCtx, sessionAtStart) {
 
   const schedKey = `${nextPos.page}:${nextPos.sentenceIdx}:${sessionAtStart}`;
   if (wasmScheduledChunks.has(schedKey)) return;
-  // A streamed sentence owns its own clause scheduling; pre-scheduling its first clause here would
-  // strand the rest of the sentence on the worker's queue.
-  if (wasmClauseStreams.has(neuralCacheKey(nextPos.text))) return;
+  // A still-streaming sentence owns its own clause scheduling; pre-scheduling its first clause here
+  // would strand the rest of the sentence on the worker's queue. A stitched one is already a single
+  // clip and can be scheduled like any other sentence.
+  const streamingNext = wasmClauseStreams.get(neuralCacheKey(nextPos.text));
+  if (streamingNext && !streamingNext.mergedSrc) return;
 
   // Pre-synthesize the next chunk in background while current chunk is playing
   const key = neuralCacheKey(nextPos.text);
@@ -6546,7 +6629,8 @@ async function scheduleNextWasmChunkBackToBack(audioCtx, sessionAtStart) {
   }
   if (!nextSrc || sessionAtStart !== wasmSessionId || !isPlaying) return;
   if (wasmScheduledChunks.has(schedKey)) return;
-  if (wasmClauseStreams.has(neuralCacheKey(nextPos.text))) return;
+  const streamingNow = wasmClauseStreams.get(neuralCacheKey(nextPos.text));
+  if (streamingNow && !streamingNow.mergedSrc) return;
 
   const nextEntry = synthPcmCache.get(nextSrc);
   const nextPcm = nextEntry ? (nextEntry.pcmData || nextEntry) : null;

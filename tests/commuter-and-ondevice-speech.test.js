@@ -14,6 +14,10 @@ import { extractFunction } from './helpers/extract-function.mjs';
 const htmlPath = fileURLToPath(new URL('../public/index.html', import.meta.url));
 const html = readFileSync(htmlPath, 'utf8');
 
+// public/app.js is one classic script, so its functions reach each other through the global scope.
+// An extracted function needs the same for the helpers it calls.
+globalThis.encodeWasmPcmToBlobUrl = extractFunction('encodeWasmPcmToBlobUrl');
+
 test('Studio (On-Device) engine tab exists in index.html', () => {
   assert.ok(
     html.includes('data-engine="wasm"'),
@@ -311,6 +315,115 @@ test('Studio (On-Device) wires Kokoro-82M WASM voice mapping and multi-node sess
   assert.match(appSrc, /wasmActiveSourceNodes\.forEach/, 'cancelAllSpeech stops all scheduled WASM nodes');
   assert.match(appSrc, /wasmScheduledChunks\.clear\(\)/, 'cancelAllSpeech clears scheduled chunk map');
   assert.match(appSrc, /wasmScheduledChunks\.get\(schedKey\)/, 'speakServerless adopts pre-scheduled chunks without double playback');
+});
+
+test('a finished clause stream is stitched into one cached clip so replay does not re-synthesize it', async () => {
+  const stitchWasmClauseStream = extractFunction('stitchWasmClauseStream');
+
+  const encoded = [];
+  const cached = [];
+  const savedIdb = [];
+  const saved = {
+    encodeWasmPcmToBlobUrl: globalThis.encodeWasmPcmToBlobUrl,
+    cacheAudio: globalThis.cacheAudio,
+    neuralCacheKey: globalThis.neuralCacheKey,
+    wasmCacheVoiceId: globalThis.wasmCacheVoiceId,
+    computeAudioCacheKey: globalThis.computeAudioCacheKey,
+    saveAudioToIdbCache: globalThis.saveAudioToIdbCache,
+    fetch: globalThis.fetch,
+    modelSampleRate: globalThis.modelSampleRate
+  };
+
+  globalThis.modelSampleRate = 24000;
+  globalThis.encodeWasmPcmToBlobUrl = (pcm, rate) => {
+    encoded.push({ samples: Array.from(pcm), rate });
+    return `blob:stitched-${encoded.length}`;
+  };
+  globalThis.neuralCacheKey = (text) => `preload:${text}`;
+  globalThis.wasmCacheVoiceId = () => 'heart';
+  globalThis.cacheAudio = (key, src) => cached.push({ key, src });
+  globalThis.computeAudioCacheKey = async (engine, voice, speed, text) => `idb:${engine}:${voice}:${speed}:${text}`;
+  globalThis.saveAudioToIdbCache = async (key, blob) => { savedIdb.push({ key, size: blob.size }); return true; };
+  globalThis.fetch = async () => ({ blob: async () => ({ size: 1234 }) });
+
+  try {
+    const chunk = (index, samples, final = false) => ({
+      index, count: 2, text: `clause ${index}`, pcm: new Float32Array(samples), sampleRate: 24000, final
+    });
+    const text = 'First clause, second clause.';
+    const stream = { chunks: [chunk(0, [0.1, 0.2]), chunk(1, [0.3], true)], done: true, onChunk: null, nextIndex: 1 };
+
+    // The worker is still synthesizing the sentence: there is nothing whole to store yet.
+    assert.equal(await stitchWasmClauseStream({ ...stream, done: false }, text), null);
+    assert.equal(encoded.length, 0);
+
+    const src = await stitchWasmClauseStream(stream, text);
+    assert.equal(src, 'blob:stitched-1');
+    assert.equal(encoded.length, 1, 'the clauses are encoded once, as one clip');
+    assert.deepEqual(
+      encoded[0].samples,
+      [0.1, 0.2, 0.3].map((x) => Math.fround(x)),
+      'clauses are joined in order with no samples dropped or repeated'
+    );
+    assert.equal(encoded[0].rate, 24000, 'the model sample rate is kept');
+    assert.equal(stream.mergedSrc, src, 'playback can tell the stream is now a whole clip');
+    assert.deepEqual(cached, [{ key: `preload:${text}`, src }], 'the full clip is cached for replay');
+    assert.deepEqual(
+      savedIdb,
+      [{ key: `idb:wasm_kokoro_v1:heart:1:${text}`, size: 1234 }],
+      'and persisted in IndexedDB under the same key a replay looks up'
+    );
+
+    // Stitching twice must not rebuild or re-cache the clip.
+    assert.equal(await stitchWasmClauseStream(stream, text), src);
+    assert.equal(encoded.length, 1, 'an already stitched stream is left alone');
+  } finally {
+    Object.assign(globalThis, saved);
+  }
+});
+
+test('karaoke timeline lines up across clause boundaries and never runs past the visible words', () => {
+  const saved = {
+    learnedCadenceMultiplier: globalThis.learnedCadenceMultiplier,
+    userManualCalibration: globalThis.userManualCalibration,
+    computeWordTimeline: globalThis.computeWordTimeline
+  };
+  globalThis.learnedCadenceMultiplier = 1;
+  globalThis.userManualCalibration = 1;
+  globalThis.computeWordTimeline = extractFunction('computeWordTimeline');
+  const buildClauseKaraokeTimeline = extractFunction('buildClauseKaraokeTimeline');
+  const approx = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-9, `${msg} (${a} vs ${b})`);
+
+  try {
+    const visible = 'Alpha beta, gamma delta, epsilon zeta.'.split(/\s+/);
+    const runs = [
+      { words: ['Alpha', 'beta,'], duration: 0.6, offset: 0 },
+      { words: ['gamma', 'delta,'], duration: 0.5, offset: 0.6 },
+      { words: ['epsilon', 'zeta.'], duration: 0.55, offset: 1.1 }
+    ];
+    const timeline = buildClauseKaraokeTimeline(runs, visible, 1);
+
+    assert.equal(timeline.length, visible.length, 'one entry per word on screen');
+    approx(timeline[2].start, 0.6, 'the first word of clause 2 starts where clause 1 ends');
+    approx(timeline[4].start, 1.1, 'clause 3 picks up where clause 2 ends');
+    approx(timeline[1].end, 0.6, 'no gap is left at the clause boundary');
+    approx(timeline[timeline.length - 1].end, 1.65, 'the run ends with the scheduled audio');
+    for (let i = 1; i < timeline.length; i++) {
+      assert.ok(timeline[i].start >= timeline[i - 1].start, `word ${i} starts at or after the one before it`);
+    }
+
+    // A unit expansion changes the spoken word count ("15 kWh" -> "15 kilowatt hours"); the highlight
+    // must still land on the words on screen instead of running past them.
+    const spoken = [
+      { words: ['Save', '15', 'kilowatt', 'hours', 'now,'], duration: 1, offset: 0 },
+      { words: ['then', 'stop.'], duration: 0.5, offset: 1 }
+    ];
+    const scaled = buildClauseKaraokeTimeline(spoken, 'Save 15 kWh now, then stop.'.split(/\s+/), 1);
+    assert.equal(scaled.length, 6, 'the visible words, not the expanded ones');
+    approx(scaled[scaled.length - 1].end, 1.5, 'scaled over the audio scheduled so far');
+  } finally {
+    Object.assign(globalThis, saved);
+  }
 });
 
 test('Studio (On-Device) offloads synthesis to public/tts-worker.js without blocking main thread', () => {
