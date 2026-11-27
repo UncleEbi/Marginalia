@@ -5891,6 +5891,8 @@ function getWasmTtsWorker() {
         // and why it did not take the GPU path when that was on the table.
         if (msg.type === 'backend') {
           const why = msg.reason && msg.reason !== 'webgpu-ready' ? ` — ${msg.reason}` : '';
+          studioPerf.backend = 'kokoro-worker';
+          studioPerf.device = `${msg.device}/${msg.dtype}`;
           console.info(`[Studio voice] ${msg.device} backend (${msg.dtype})${why}`);
           return;
         }
@@ -5910,13 +5912,20 @@ function getWasmTtsWorker() {
         if (msg.type === 'chunk') {
           const entry = wasmWorkerPending.get(msg.id);
           if (!entry) return;
+          // Time each clause from the previous arrival: when the queue runs dry this is exactly the
+          // silence the reader hears, and it is the number worth comparing across devices.
+          const arrivedAt = studioNow();
+          const chunkSynthMs = arrivedAt - (entry.lastChunkAt || entry.queuedAt || arrivedAt);
+          entry.lastChunkAt = arrivedAt;
+          if (entry.firstAudioMs == null) entry.firstAudioMs = arrivedAt - (entry.queuedAt || arrivedAt);
           const chunk = {
             index: msg.index,
             count: msg.count,
             text: msg.text || '',
             pcm: new Float32Array(msg.pcmBuffer),
             sampleRate: msg.sampleRate || 24000,
-            final: Boolean(msg.final)
+            final: Boolean(msg.final),
+            synthMs: Math.round(chunkSynthMs)
           };
           if (!entry.stream) entry.stream = { chunks: [], done: false, onChunk: null, nextIndex: 1, speed: entry.speed || 1 };
           entry.stream.chunks.push(chunk);
@@ -5936,6 +5945,23 @@ function getWasmTtsWorker() {
         if (msg.type === 'result' && pending.stream) {
           pending.stream.done = true;
           wasmWorkerPending.delete(msg.id);
+          // Record the whole sentence before the stitch work, which is off the playback path but
+          // not free: a statement that hides a 200 ms join overstates how unnoticed synthesis is.
+          const streamDoneAt = studioNow();
+          let streamAudioMs = 0;
+          pending.stream.chunks.forEach((c) => {
+            if (c && c.pcm) streamAudioMs += (c.pcm.length / (c.sampleRate || 24000)) * 1000;
+          });
+          noteStudioSynth({
+            backend: 'kokoro-worker',
+            chars: (pending.text || '').length,
+            clauses: pending.stream.chunks.length,
+            clauseMs: pending.stream.chunks.map((c) => (c ? c.synthMs : 0)),
+            synthMs: streamDoneAt - (pending.queuedAt || streamDoneAt),
+            audioMs: streamAudioMs,
+            firstAudioMs: pending.firstAudioMs,
+            speed: pending.speed || 1
+          });
           // The whole sentence has arrived: join the clauses and cache the full clip for replay.
           // This runs off the message handler, so a failure must not surface as an unhandled rejection.
           stitchWasmClauseStream(pending.stream, pending.text)
@@ -5955,9 +5981,18 @@ function getWasmTtsWorker() {
         }
 
         if (msg.type === 'result') {
+          const pcm = new Float32Array(msg.pcmBuffer);
+          const rate = msg.sampleRate || 24000;
+          noteStudioSynth({
+            backend: 'kokoro-worker',
+            chars: (pending.text || '').length,
+            synthMs: studioNow() - (pending.queuedAt || studioNow()),
+            audioMs: (pcm.length / rate) * 1000,
+            speed: pending.speed || 1
+          });
           pending.resolve({
-            pcmData: new Float32Array(msg.pcmBuffer),
-            sampleRate: msg.sampleRate || 24000
+            pcmData: pcm,
+            sampleRate: rate
           });
         } else if (msg.type === 'cancelled') {
           const err = new Error('Synthesis cancelled.');
@@ -5989,7 +6024,7 @@ function synthInWasmWorker(text, voice, priority = 'high', speed = 1) {
     // The speed travels with the job: a streamed sentence is stitched from its clauses before the
     // awaiting caller has had a chance to record it, and that clip must be filed under the tempo it
     // was actually synthesized at.
-    wasmWorkerPending.set(id, { resolve, reject, text, speed });
+    wasmWorkerPending.set(id, { resolve, reject, text, speed, queuedAt: studioNow() });
     worker.postMessage({
       type: 'synthesize',
       id,
@@ -6114,6 +6149,85 @@ const wasmScheduledChunks = new Map();
 const WASM_AHEAD_SECONDS = 6;
 function wasmQueuedSeconds(currentTime, scheduledEndTime) {
   return Math.max(0, scheduledEndTime - currentTime);
+}
+
+// --- Studio synthesis instrumentation --------------------------------------
+// Per-clause synth time, real-time factor and backend, kept small enough to leave switched on: these
+// numbers answer the question a profiler cannot answer on a phone — does synthesis keep up with the
+// reader, or does the queue drain and leave a gap? A real-time factor (synth seconds per second of
+// audio) at or above 1 means the sentence took longer to make than it takes to hear.
+// Read them with window.marginaliaStudioStats(); log one line per sentence with
+// window.marginaliaStudioStats.verbose(true), which survives a reload (handy on a phone).
+const STUDIO_PERF_SAMPLES = 60;
+const studioPerf = { samples: [], backend: 'unknown', device: '' };
+
+function studioNow() {
+  return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+}
+
+function studioPerfVerbose() {
+  try {
+    return typeof localStorage !== 'undefined' && localStorage.getItem('marginalia_studio_perf') === '1';
+  } catch { return false; }
+}
+
+function noteStudioSynth(sample) {
+  if (!sample || !(sample.audioMs > 0) || !Number.isFinite(sample.synthMs)) return null;
+  const entry = {
+    backend: sample.backend || studioPerf.backend,
+    device: studioPerf.device || '',
+    chars: sample.chars || 0,
+    clauses: sample.clauses || 1,
+    clauseMs: sample.clauseMs || null,
+    synthMs: Math.round(sample.synthMs),
+    audioMs: Math.round(sample.audioMs),
+    firstAudioMs: Number.isFinite(sample.firstAudioMs) ? Math.round(sample.firstAudioMs) : null,
+    speed: sample.speed || 1,
+    rtf: Number((sample.synthMs / sample.audioMs).toFixed(2))
+  };
+  studioPerf.samples.push(entry);
+  while (studioPerf.samples.length > STUDIO_PERF_SAMPLES) studioPerf.samples.shift();
+  if (studioPerfVerbose()) {
+    console.info(
+      `[Studio perf] ${entry.backend}${entry.device ? ` (${entry.device})` : ''}: ${entry.chars} chars,` +
+      ` ${entry.clauses} clause(s), synth ${entry.synthMs}ms for ${entry.audioMs}ms audio, rtf ${entry.rtf}` +
+      (entry.firstAudioMs == null ? '' : `, first clause after ${entry.firstAudioMs}ms`)
+    );
+  }
+  return entry;
+}
+
+function studioPerfSummary() {
+  const samples = studioPerf.samples;
+  const percentile = (values, fraction) => {
+    if (!values.length) return null;
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted[Math.min(sorted.length - 1, Math.floor(fraction * (sorted.length - 1)))];
+  };
+  const rtfs = samples.map((s) => s.rtf);
+  const firsts = samples.filter((s) => s.firstAudioMs != null).map((s) => s.firstAudioMs);
+  return {
+    backend: studioPerf.backend,
+    device: studioPerf.device,
+    samples: samples.length,
+    // Under 1 the queue grows ahead of the reader; at or above 1 it drains, and a long read gaps.
+    rtf: { median: percentile(rtfs, 0.5), p95: percentile(rtfs, 0.95), worst: rtfs.length ? Math.max(...rtfs) : null },
+    firstAudioMs: { median: percentile(firsts, 0.5), worst: firsts.length ? Math.max(...firsts) : null },
+    slowerThanRealTime: rtfs.filter((r) => r >= 1).length,
+    slowest: [...samples].sort((a, b) => b.rtf - a.rtf).slice(0, 3)
+  };
+}
+
+if (typeof window !== 'undefined') {
+  window.marginaliaStudioStats = studioPerfSummary;
+  window.marginaliaStudioStats.reset = () => { studioPerf.samples.length = 0; };
+  window.marginaliaStudioStats.verbose = (on) => {
+    try {
+      if (on) localStorage.setItem('marginalia_studio_perf', '1');
+      else localStorage.removeItem('marginalia_studio_perf');
+    } catch { }
+    return studioPerfVerbose();
+  };
 }
 
 function getWasmAudioCtx() {
@@ -6252,12 +6366,21 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
       if (activeEngine === 'wasm' && preloadStatus) {
         preloadStatus.textContent = 'Synthesizing...';
       }
+      const synthStartedAt = studioNow();
       const generated = await tts.generate(trimmedText, { voice: kokoroVoice, speed });
       const rawPcm = generated && (generated.audio || generated.data);
       if (!rawPcm || !rawPcm.length) {
         throw new Error('On-device voice returned empty audio for this sentence.');
       }
       const outRate = (generated && generated.sampling_rate) || 24000;
+      // The fallback path: the same synthesis, but blocking the thread the reader scrolls on.
+      noteStudioSynth({
+        backend: 'kokoro-main-thread',
+        chars: trimmedText.length,
+        synthMs: studioNow() - synthStartedAt,
+        audioMs: (rawPcm.length / outRate) * 1000,
+        speed
+      });
       return finalizePcmAndEncode(rawPcm, outRate);
     };
 
