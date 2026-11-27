@@ -5,6 +5,7 @@
 // non-image payloads on the vision routes, inherited-property lookups, and Study Pack RLS.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 
 import { clientIp, normalizeEmail, TIERS } from '../api/_lib/rate-limit.js';
@@ -14,6 +15,7 @@ import { validatePublicUrl } from '../api/_lib/ssrf.js';
 import { REFILL_PACKS } from '../lib/refill-plans.js';
 import studyPackHandler from '../api/study-pack.js';
 import extractUrlHandler from '../api/extract-url.js';
+import webhookHandler from '../api/paystack-webhook.js';
 
 const DEFAULT_ORIGIN = 'https://marginalia-rme.vercel.app';
 
@@ -24,7 +26,8 @@ function mockRes() {
     headers: {},
     setHeader(key, value) { this.headers[key] = value; },
     status(code) { this.statusCode = code; return res; },
-    json(body) { this.body = body; return res; }
+    json(body) { this.body = body; return res; },
+    send(body) { this.body = body; return res; }
   };
   return res;
 }
@@ -183,6 +186,68 @@ test('Study Pack RLS lockdown revokes the browser key and drops the blanket poli
   assert.match(sql, /drop policy if exists "Allow public read of study packs by share token"/i);
   assert.match(sql, /drop policy if exists "Allow insert of study packs"/i);
   assert.match(sql, /revoke all on table public\.study_packs from public, anon, authenticated/i);
+});
+
+test('the webhook source allowlist accepts a real delivery and still refuses a stranger', async () => {
+  // The allowlist sits behind the HMAC, so a genuine delivery it refuses is a paid account that never
+  // gets credited. These are the shapes a correct delivery and config actually take: the edge writes
+  // its trusted header as "client, proxy", and an operator writes the configured entries with padding
+  // or in whatever IPv6 form they copied.
+  const savedSecret = process.env.PAYSTACK_SECRET_KEY;
+  const savedAllowed = process.env.PAYSTACK_WEBHOOK_ALLOWED_IPS;
+  process.env.PAYSTACK_SECRET_KEY = 'sk_test_webhook';
+
+  const payload = JSON.stringify({
+    event: 'charge.success',
+    data: {
+      status: 'success',
+      amount: 5000, // wrong for the plan it claims, so an accepted delivery stops at a 200 "Ignored"
+      currency: 'NGN',
+      reference: 'ref_allowlist_test',
+      paid_at: '2026-11-27T10:00:00Z',
+      metadata: { user_id: 'user-1', plan: 'studio_yearly' }
+    }
+  });
+  const signature = crypto.createHmac('sha512', 'sk_test_webhook').update(payload).digest('hex');
+
+  const deliver = async (headers) => {
+    const res = mockRes();
+    await webhookHandler(
+      { method: 'POST', headers: { 'x-paystack-signature': signature, ...headers }, body: payload },
+      res
+    );
+    return res;
+  };
+  // Reaching the event evaluation (a 200 about the deliberately wrong amount) means the delivery
+  // passed the allowlist; a 403 means it was refused as an unknown source.
+  const accepted = (res, label) => {
+    assert.equal(res.statusCode, 200, `${label} must not be refused as an unknown source`);
+    assert.match(res.body, /Ignored: amount/, label);
+  };
+  const refused = (res, label) => assert.equal(res.statusCode, 403, label);
+
+  try {
+    accepted(await deliver({ 'x-vercel-forwarded-for': '52.31.139.75, 10.0.0.7' }), 'platform header list');
+    accepted(await deliver({ 'x-forwarded-for': '1.2.3.4, 52.31.139.75' }), 'x-forwarded-for list');
+
+    process.env.PAYSTACK_WEBHOOK_ALLOWED_IPS = '  198.51.100.9 , 2001:0DB8::0001  ';
+    accepted(await deliver({ 'cf-connecting-ip': '198.51.100.9, 10.0.0.7' }), 'padded IPv4 entry');
+    accepted(await deliver({ 'cf-connecting-ip': '2001:db8::1, 10.0.0.7' }), 'equivalent IPv6 form');
+
+    // Neighbouring addresses on the same list are still strangers.
+    refused(await deliver({ 'cf-connecting-ip': '10.0.0.7' }), 'the proxy hop');
+    refused(await deliver({ 'cf-connecting-ip': '2001:db8::3' }), 'an unconfigured IPv6 address');
+    refused(await deliver({ 'cf-connecting-ip': '198.51.100.90' }), 'an unconfigured IPv4 address');
+
+    process.env.PAYSTACK_WEBHOOK_ALLOWED_IPS = '[2001:db8::2]:443';
+    accepted(await deliver({ 'x-real-ip': '2001:db8::2' }), 'bracketed IPv6 entry');
+    refused(await deliver({ 'x-forwarded-for': 'not-an-ip' }), 'an unparseable source address');
+  } finally {
+    if (savedSecret === undefined) delete process.env.PAYSTACK_SECRET_KEY;
+    else process.env.PAYSTACK_SECRET_KEY = savedSecret;
+    if (savedAllowed === undefined) delete process.env.PAYSTACK_WEBHOOK_ALLOWED_IPS;
+    else process.env.PAYSTACK_WEBHOOK_ALLOWED_IPS = savedAllowed;
+  }
 });
 
 test('the vision tier exists so page scans are throttled', () => {

@@ -11,10 +11,11 @@
 //   - deliberately-ignored events (wrong event type, mismatched amount, ...) are acknowledged
 //     with 200 so Paystack does not retry them forever; transient failures return 500 so it does
 import crypto from 'crypto';
+import net from 'node:net';
 import { createClient } from '@supabase/supabase-js';
 import { getPlan, evaluateChargeEvent, nextProExpiry, PRO_PERIOD_DAYS } from '../lib/pro-plan.js';
 import { REFILL_PACKS } from '../lib/refill-plans.js';
-import { enforceRateLimit, clientIp } from './_lib/rate-limit.js';
+import { enforceRateLimit, clientIp, normalizeIp } from './_lib/rate-limit.js';
 
 // Prefer whatever raw bytes the platform preserved; otherwise re-serialise the parsed body
 // (V8 keeps key order and compact formatting, which round-trips Paystack's JSON byte-for-byte
@@ -222,14 +223,26 @@ export async function applyRefill(db, { userId, reference, paidAt, packId, pack 
 // Paystack's published webhook source addresses.
 const PAYSTACK_WEBHOOK_IPS = ['52.31.139.75', '52.49.173.169', '52.214.14.220'];
 
-// The list can be extended from the environment, so a Paystack egress change is a config edit
-// instead of a rejected payment and a code deploy.
-function allowedWebhookIps() {
-  const configured = String(process.env.PAYSTACK_WEBHOOK_ALLOWED_IPS || '')
-    .split(',')
-    .map((ip) => ip.trim())
-    .filter(Boolean);
-  return new Set([...PAYSTACK_WEBHOOK_IPS, ...configured]);
+/**
+ * Whether a delivery came from a Paystack address. Compared as addresses, not strings: a configured
+ * IPv6 entry written in a different but equivalent form (expanded, upper case, bracketed, with a
+ * port) must still match the address clientIp() reports, or a genuine delivery gets a 403 and a paid
+ * account is never credited. PAYSTACK_WEBHOOK_ALLOWED_IPS extends the list, so an egress change is a
+ * config edit instead of a rejected payment and a code deploy.
+ */
+function isAllowedWebhookIp(sourceIp) {
+  const family = net.isIP(String(sourceIp || ''));
+  if (!family) return false; // clientIp() returned 'unknown': no address, no allowlist entry
+
+  const configured = String(process.env.PAYSTACK_WEBHOOK_ALLOWED_IPS || '').split(',');
+  const list = new net.BlockList();
+  for (const entry of [...PAYSTACK_WEBHOOK_IPS, ...configured]) {
+    const ip = normalizeIp(entry); // trims, and strips brackets, :port and %zone
+    if (!ip) continue; // not an address: it could never equal a request address anyway
+    list.addAddress(ip, net.isIP(ip) === 6 ? 'ipv6' : 'ipv4');
+  }
+
+  return list.check(String(sourceIp), family === 6 ? 'ipv6' : 'ipv4');
 }
 
 export default async function handler(req, res) {
@@ -281,7 +294,7 @@ export default async function handler(req, res) {
   // proves the body came from Paystack, so this is defence in depth for a leaked secret: a forged
   // delivery would still have to arrive from one of these addresses.
   const sourceIp = clientIp(req);
-  if (!allowedWebhookIps().has(sourceIp)) {
+  if (!isAllowedWebhookIp(sourceIp)) {
     // 403 (not 200) so Paystack retries rather than silently losing a real payment. Extend the list
     // with PAYSTACK_WEBHOOK_ALLOWED_IPS if Paystack changes its egress range.
     console.warn(`Paystack webhook rejected from ${sourceIp}: not a published Paystack address.`);

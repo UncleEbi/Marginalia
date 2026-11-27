@@ -86,7 +86,7 @@ const STORE_TIMEOUT_MS = 2500;
  * strings, so anything that is not an IP must never become a rate-limit key or a webhook allowlist
  * entry (a forged value would hand out a fresh allowance, or pass the Paystack source check).
  */
-function normalizeIp(value) {
+export function normalizeIp(value) {
   let ip = String(value || '').trim();
   if (!ip || ip.length > 64) return '';
   if (ip.startsWith('[')) { // [2001:db8::1]:443
