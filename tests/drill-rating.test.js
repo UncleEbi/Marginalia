@@ -10,32 +10,32 @@ function installSession(cardCount) {
   const cards = Array.from({ length: cardCount }, (_, i) => ({ prompt: `p${i}`, answer: `a${i}` }));
   globalThis.drillCards = cards;
   globalThis.drillIndex = 0;
-  globalThis.drillRateableCard = null;
+  globalThis.drillRatingOpen = false;
   globalThis.drillKnownCount = 0;
   globalThis.drillReviewQueue = [];
   globalThis.drillTimer = null;
   globalThis.isAudioDrillActive = true;
+  globalThis.isAudioDrillPaused = false;
   globalThis.cancelDrillSpeech = () => { };
   globalThis.showToast = () => { };
-  // Stand in for runDrillCard: advancing moves the index and leaves the next card's window closed
+  // Stand in for runDrillCard: advancing moves the index and leaves the next card's rating closed
   // until its prompt has been read out.
   globalThis.runDrillCard = (idx) => {
     globalThis.drillIndex = idx;
-    globalThis.drillRateableCard = null;
+    globalThis.drillRatingOpen = false;
     return Promise.resolve();
   };
   return cards;
 }
 
-// What runDrillCard does once a card's prompt has finished: its rating window opens.
-function openRatingWindow(cards, idx) {
-  globalThis.drillIndex = idx;
-  globalThis.drillRateableCard = cards[idx];
+// What runDrillCard does once a card's prompt has finished: the card accepts one rating.
+function openRating() {
+  globalThis.drillRatingOpen = true;
 }
 
 test('the rated card cannot be rated twice by the same press', () => {
-  const cards = installSession(3);
-  openRatingWindow(cards, 0);
+  installSession(3);
+  openRating();
 
   rateDrillCard(true);
   assert.equal(globalThis.drillKnownCount, 1);
@@ -49,8 +49,8 @@ test('the rated card cannot be rated twice by the same press', () => {
 });
 
 test('a repeated Review press queues the card once', () => {
-  const cards = installSession(2);
-  openRatingWindow(cards, 0);
+  installSession(2);
+  openRating();
 
   rateDrillCard(false);
   rateDrillCard(false);
@@ -58,6 +58,18 @@ test('a repeated Review press queues the card once', () => {
   assert.equal(globalThis.drillReviewQueue.length, 1);
   assert.equal(globalThis.drillKnownCount, 0);
   assert.equal(globalThis.drillIndex, 1);
+});
+
+test('a paused drill ignores ratings from the headset', () => {
+  installSession(3);
+  openRating();
+  globalThis.isAudioDrillPaused = true;
+
+  rateDrillCard(true);
+
+  assert.equal(globalThis.drillKnownCount, 0);
+  assert.equal(globalThis.drillIndex, 0);
+  assert.equal(globalThis.drillRatingOpen, true, 'the card stays rateable for after the resume');
 });
 
 test('no card can be rated before its prompt has been read out', () => {
@@ -69,16 +81,19 @@ test('no card can be rated before its prompt has been read out', () => {
   assert.equal(globalThis.drillIndex, 0);
 });
 
-test('each card is rateable once its own window opens, even if it was rated before', () => {
-  const cards = installSession(2);
-  openRatingWindow(cards, 0);
+test('each presentation accepts one rating, even of a card rated before', () => {
+  installSession(2);
+  openRating();
   rateDrillCard(true);
 
-  // A review round deals the same card object again; its new presentation is rateable again.
-  openRatingWindow(cards, 0);
+  // A review round deals the same card object again at the front of the deck; its new presentation
+  // is rateable again.
+  globalThis.drillIndex = 0;
+  openRating();
   rateDrillCard(true);
+  assert.equal(globalThis.drillKnownCount, 2);
 
-  openRatingWindow(cards, 1);
+  openRating();
   rateDrillCard(true);
 
   assert.equal(globalThis.drillKnownCount, 3);

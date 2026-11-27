@@ -3561,9 +3561,8 @@ let drillIndex = 0;
 let drillReviewQueue = [];
 let drillKnownCount = 0;
 let drillTimer = null;
-let drillState = 'idle'; // 'prompt', 'thinking', 'reveal', 'rating'
 let drillSessionCards = []; // the deck as dealt, so the summary can say how big it was
-let drillRateableCard = null; // the card on screen whose rating window is open; one rating per card
+let drillRatingOpen = false; // the card on screen accepts one rating, once its prompt has been read out
 
 function speakDrillText(text) {
   return new Promise((resolve) => {
@@ -3729,7 +3728,7 @@ function launchAudioDrillSession(cards, { albumTitle = currentDocName, shuffle =
   drillIndex = 0;
   drillReviewQueue = [];
   drillKnownCount = 0;
-  drillRateableCard = null;
+  drillRatingOpen = false;
   isAudioDrillActive = true;
   isAudioDrillPaused = false;
 
@@ -3794,8 +3793,8 @@ async function runDrillCard(idx) {
   drillIndex = idx;
   const card = drillCards[idx];
 
-  // State 1: Prompt
-  drillState = 'prompt';
+  // State 1: Prompt. Nothing is rateable until the question has been read out.
+  drillRatingOpen = false;
   if (drillProgressText) drillProgressText.textContent = `Card ${drillIndex + 1} of ${drillCards.length}`;
   if (drillProgressFill) {
     drillProgressFill.style.width = `${Math.round(((idx + 1) / Math.max(1, drillCards.length)) * 100)}%`;
@@ -3807,11 +3806,10 @@ async function runDrillCard(idx) {
   await speakDrillText(`Card ${drillIndex + 1} of ${drillCards.length}. ${card.prompt}`);
   if (!isAudioDrillActive || isAudioDrillPaused) return;
 
-  // State 2: Thinking Pause. The prompt has been read out, so this card may now be rated once.
-  // Opening the window only after the prompt keeps a double press from landing on the next card
-  // before the reader has even heard its question.
-  drillState = 'thinking';
-  drillRateableCard = card;
+  // State 2: Thinking Pause. The prompt has been read out, so this presentation now takes exactly
+  // one rating. Opening it only after the prompt keeps a double press from landing on the next card
+  // before the reader has heard its question.
+  drillRatingOpen = true;
   const pauseSec = parseInt(drillPauseSelect ? drillPauseSelect.value : '5', 10) || 5;
   for (let s = pauseSec; s > 0; s--) {
     if (!isAudioDrillActive || isAudioDrillPaused) return;
@@ -3822,14 +3820,12 @@ async function runDrillCard(idx) {
   if (!isAudioDrillActive || isAudioDrillPaused) return;
 
   // State 3: Reveal
-  drillState = 'reveal';
   if (drillAnswerBox) drillAnswerBox.style.opacity = '1';
   if (drillAnswerText) drillAnswerText.textContent = card.answer;
   await speakDrillText(`Answer: ${card.answer}`);
   if (!isAudioDrillActive || isAudioDrillPaused) return;
 
   // State 4: Rating window (5s window for Bluetooth headset input or click)
-  drillState = 'rating';
   if (drillAnswerText) drillAnswerText.textContent = `${card.answer} (Press Next for Known, Back for Review)`;
   await new Promise(r => { drillTimer = setTimeout(r, 5000); });
   if (!isAudioDrillActive || isAudioDrillPaused) return;
@@ -3839,23 +3835,21 @@ async function runDrillCard(idx) {
 }
 
 function rateDrillCard(known) {
-  if (!isAudioDrillActive) return;
   const card = drillCards[drillIndex];
-  // One rating per presentation. A double tap, or a headset Next press that arrives while the next
-  // prompt is still being read out, must not rate the same card twice or master a card unseen.
-  if (!card || card !== drillRateableCard) return;
-  drillRateableCard = null;
+  // One rating per presentation, and none while the drill is paused. A double tap, or a headset Next
+  // press that arrives while the next prompt is still being read out, must not rate a card twice,
+  // master the next one unseen, or advance a drill the reader has stopped.
+  if (!isAudioDrillActive || isAudioDrillPaused || !drillRatingOpen || !card) return;
+  drillRatingOpen = false;
   if (drillTimer) { clearTimeout(drillTimer); drillTimer = null; }
   cancelDrillSpeech();
 
-  if (card) {
-    if (known) {
-      drillKnownCount++;
-      showToast(`✓ Mastered: ${card.snippet || 'Card'}`);
-    } else {
-      drillReviewQueue.push(card);
-      showToast(`↺ Queued for review: ${card.snippet || 'Card'}`);
-    }
+  if (known) {
+    drillKnownCount++;
+    showToast(`✓ Mastered: ${card.snippet || 'Card'}`);
+  } else {
+    drillReviewQueue.push(card);
+    showToast(`↺ Queued for review: ${card.snippet || 'Card'}`);
   }
 
   runDrillCard(drillIndex + 1);
@@ -3890,14 +3884,12 @@ async function finishAudioDrill() {
 function showDrillSummary() {
   isAudioDrillActive = false;
   isAudioDrillPaused = false;
-  drillRateableCard = null;
   if (drillTimer) { clearTimeout(drillTimer); drillTimer = null; }
   cancelDrillSpeech();
   if (drillProgressText) drillProgressText.textContent = 'Drill complete';
   if (drillProgressFill) drillProgressFill.style.width = '100%';
   if (drillSummaryStats) {
-    const mastered = drillKnownCount;
-    drillSummaryStats.textContent = `${mastered} of ${drillSessionCards.length} cards mastered`;
+    drillSummaryStats.textContent = `${drillKnownCount} of ${drillSessionCards.length} cards mastered`;
   }
   if (drillCardBody) drillCardBody.style.display = 'none';
   if (drillControlRow) drillControlRow.style.display = 'none';
@@ -3908,7 +3900,6 @@ function showDrillSummary() {
 function stopAudioDrill() {
   isAudioDrillActive = false;
   isAudioDrillPaused = false;
-  drillRateableCard = null;
   if (drillTimer) { clearTimeout(drillTimer); drillTimer = null; }
   cancelDrillSpeech();
   if (audioDrillHud) audioDrillHud.style.display = 'none';
