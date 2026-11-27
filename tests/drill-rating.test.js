@@ -14,6 +14,9 @@ function installSession(cardCount) {
   globalThis.drillKnownCount = 0;
   globalThis.drillReviewQueue = [];
   globalThis.drillTimer = null;
+  globalThis.drillStageCard = -1;
+  globalThis.drillStageLeftMs = 0;
+  globalThis.releaseDrillCardWaits = () => { };
   globalThis.isAudioDrillActive = true;
   globalThis.isAudioDrillPaused = false;
   globalThis.cancelDrillSpeech = () => { };

@@ -639,6 +639,14 @@ test('the Studio paths that cannot schedule clauses complete a streamed sentence
   );
 });
 
+test('the audio drill speaks a clause-streamed sentence whole', () => {
+  const appSrc = readFileSync(fileURLToPath(new URL('../public/app.js', import.meta.url)), 'utf8');
+  assert.ok(
+    /if \(drillStudio\) src = await completeWasmSentenceSrc\(src, spoken, null\)/.test(appSrc),
+    'the drill waits for the whole sentence before playing it'
+  );
+});
+
 test('an export waits for the whole Studio sentence instead of keeping the first clause', async () => {
   const complete = extractFunction('completeWasmSentenceSrc');
   const saved = {};

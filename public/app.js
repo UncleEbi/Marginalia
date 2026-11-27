@@ -3561,12 +3561,52 @@ let drillIndex = 0;
 let drillReviewQueue = [];
 let drillKnownCount = 0;
 let drillTimer = null;
+let drillSpeechRelease = null; // lets a paused drill settle speakDrillText instead of leaving it pending
+let drillWaitRelease = null; // lets a paused drill settle drillWait instead of leaving it pending
+let drillStage = 'prompt'; // the beat the card on screen is in: prompt | thinking | reveal | rating
+let drillStageCard = -1; // which card that beat belongs to
+let drillRunId = 0; // bumps for every card frame, so a released frame can tell it was superseded
+let drillStageLeftMs = 0; // time left in a timed beat when it was paused, so resume continues it
 let drillSessionCards = []; // the deck as dealt, so the summary can say how big it was
 let drillRatingOpen = false; // the card on screen accepts one rating, once its prompt has been read out
 
+// A timed beat of a card. It settles on its own timeout, or when the drill is paused/stopped: a
+// cleared timeout never fires, and the card awaiting it would stay suspended for the rest of the
+// page's life, holding its whole frame and the card it was working on.
+function drillWait(ms) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      if (drillTimer) { clearTimeout(drillTimer); drillTimer = null; }
+      if (drillWaitRelease === done) drillWaitRelease = null;
+      resolve();
+    };
+    drillWaitRelease = done;
+    drillTimer = setTimeout(done, ms);
+  });
+}
+
+// Parking or leaving the drill has to release whatever the card is waiting on — the timer or the
+// speech — and then the card checks isAudioDrillPaused/isAudioDrillActive and returns cleanly.
+function releaseDrillCardWaits() {
+  if (drillWaitRelease) drillWaitRelease();
+  if (drillSpeechRelease) drillSpeechRelease();
+}
+
 function speakDrillText(text) {
   return new Promise((resolve) => {
-    if (!isAudioDrillActive) return resolve();
+    // Pausing cuts the utterance short without an onend, so the drill can release it too.
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      if (drillSpeechRelease === done) drillSpeechRelease = null;
+      resolve();
+    };
+    drillSpeechRelease = done;
+    if (!isAudioDrillActive) return done();
     const spoken = normalizeForSpeech(text);
     if (activeEngine === 'browser') {
       browserSpeech.cancel();
@@ -3574,25 +3614,28 @@ function speakDrillText(text) {
       utter.rate = playbackSpeed;
       utter.volume = playbackVolume;
       applyChosenVoice(utter);
-      utter.onend = () => resolve();
-      utter.onerror = () => resolve();
+      utter.onend = () => done();
+      utter.onerror = () => done();
       browserSpeech.speak(utter);
     } else {
       const drillStudio = activeEngine === 'wasm';
       // A Studio clip already carries its tempo; the media element must not retime it again.
-      getNeuralAudioSrc(spoken, drillStudio ? { speed: playbackSpeed } : {}).then((src) => {
-        if (!isAudioDrillActive) return resolve();
+      getNeuralAudioSrc(spoken, drillStudio ? { speed: playbackSpeed } : {}).then(async (src) => {
+        if (!isAudioDrillActive) return done();
+        // Same as the reader: a clause-streamed sentence has to be whole before the element plays it.
+        if (drillStudio) src = await completeWasmSentenceSrc(src, spoken, null).catch(() => src);
+        if (!isAudioDrillActive) return done();
         audioElement.src = src;
         audioElement.playbackRate = drillStudio ? 1 : playbackSpeed;
         audioElement.volume = playbackVolume;
-        audioElement.onended = () => resolve();
-        audioElement.onerror = () => resolve();
-        audioElement.play().catch(() => resolve());
+        audioElement.onended = () => done();
+        audioElement.onerror = () => done();
+        audioElement.play().catch(() => done());
       }).catch(() => {
         browserSpeech.cancel();
         const utter = new SpeechSynthesisUtterance(spoken);
-        utter.onend = () => resolve();
-        utter.onerror = () => resolve();
+        utter.onend = () => done();
+        utter.onerror = () => done();
         browserSpeech.speak(utter);
       });
     }
@@ -3733,6 +3776,9 @@ function launchAudioDrillSession(cards, { albumTitle = currentDocName, shuffle =
   drillRatingOpen = false;
   isAudioDrillActive = true;
   isAudioDrillPaused = false;
+  drillStage = 'prompt';
+  drillStageCard = -1; // a beat recorded by an earlier session must not be resumed into this one
+  drillStageLeftMs = 0;
 
   if (audioDrillHud) audioDrillHud.style.display = 'flex';
   if (drillSummary) drillSummary.style.display = 'none';
@@ -3795,45 +3841,90 @@ async function runDrillCard(idx) {
   drillIndex = idx;
   const card = drillCards[idx];
 
-  // State 1: Prompt. Nothing is rateable until the question has been read out.
-  drillRatingOpen = false;
-  if (drillProgressText) drillProgressText.textContent = `Card ${drillIndex + 1} of ${drillCards.length}`;
-  if (drillProgressFill) {
-    drillProgressFill.style.width = `${Math.round(((idx + 1) / Math.max(1, drillCards.length)) * 100)}%`;
+  // Pausing interrupts the card, it does not rewind it: the beat it was on is kept, so a resume
+  // picks up there instead of putting the question through the reader's ears a second time.
+  const resuming = drillStageCard === idx;
+  drillStageCard = idx;
+  if (!resuming) {
+    drillStage = 'prompt';
+    drillStageLeftMs = 0;
   }
-  if (drillPromptText) drillPromptText.textContent = card.prompt;
-  if (drillAnswerText) drillAnswerText.textContent = 'Thinking...';
-  if (drillAnswerBox) drillAnswerBox.style.opacity = '0.5';
 
-  await speakDrillText(`Card ${drillIndex + 1} of ${drillCards.length}. ${card.prompt}`);
-  if (!isAudioDrillActive || isAudioDrillPaused) return;
+  // This frame can be suspended (speech, timer) while the drill moves on: a rating press, a stop, a
+  // pause and its resume. Every stage re-checks that it is still the frame presenting this card
+  // before it touches the screen or the deck, so a released frame can never rate a card twice.
+  const runId = ++drillRunId;
+  const isCurrent = () => isAudioDrillActive && !isAudioDrillPaused && drillRunId === runId;
 
-  // State 2: Thinking Pause. The prompt has been read out, so this presentation now takes exactly
-  // one rating. Opening it only after the prompt keeps a double press from landing on the next card
-  // before the reader has heard its question.
-  drillRatingOpen = true;
-  const pauseSec = parseInt(drillPauseSelect ? drillPauseSelect.value : '5', 10) || 5;
-  for (let s = pauseSec; s > 0; s--) {
-    if (!isAudioDrillActive || isAudioDrillPaused) return;
-    if (drillAnswerText) drillAnswerText.textContent = `Thinking... (${s}s)`;
-    playBookmarkChime();
-    await new Promise(r => { drillTimer = setTimeout(r, 1000); });
+  if (drillStage === 'prompt') {
+    // State 1: Prompt. Nothing is rateable until the question has been read out.
+    drillRatingOpen = false;
+    if (drillProgressText) drillProgressText.textContent = `Card ${drillIndex + 1} of ${drillCards.length}`;
+    if (drillProgressFill) {
+      drillProgressFill.style.width = `${Math.round(((idx + 1) / Math.max(1, drillCards.length)) * 100)}%`;
+    }
+    if (drillPromptText) drillPromptText.textContent = card.prompt;
+    if (drillAnswerText) drillAnswerText.textContent = 'Thinking...';
+    if (drillAnswerBox) drillAnswerBox.style.opacity = '0.5';
+
+    await speakDrillText(`Card ${drillIndex + 1} of ${drillCards.length}. ${card.prompt}`);
+    // Cut off mid-question: stay on this beat, since speech cannot resume half a sentence.
+    if (!isCurrent()) return;
+    drillStage = 'thinking';
   }
-  if (!isAudioDrillActive || isAudioDrillPaused) return;
 
-  // State 3: Reveal
-  if (drillAnswerBox) drillAnswerBox.style.opacity = '1';
-  if (drillAnswerText) drillAnswerText.textContent = card.answer;
-  await speakDrillText(`Answer: ${card.answer}`);
-  if (!isAudioDrillActive || isAudioDrillPaused) return;
+  if (drillStage === 'thinking') {
+    // State 2: Thinking Pause. The prompt has been read out, so this presentation now takes exactly
+    // one rating. Opening it only after the prompt keeps a double press from landing on the next card
+    // before the reader has heard its question.
+    drillRatingOpen = true;
+    const pauseSec = parseInt(drillPauseSelect ? drillPauseSelect.value : '5', 10) || 5;
+    // A resumed countdown continues from what was left of it, rather than starting the full pause over.
+    const thinkingEndsAt = Date.now() + (drillStageLeftMs > 0 ? drillStageLeftMs : pauseSec * 1000);
+    drillStageLeftMs = 0;
+    while (true) {
+      if (!isAudioDrillActive || drillRunId !== runId) return;
+      if (isAudioDrillPaused) {
+        // Never 0: a beat that had already run out on pause must not start over on resume.
+        drillStageLeftMs = Math.max(1, thinkingEndsAt - Date.now());
+        return;
+      }
+      const leftMs = thinkingEndsAt - Date.now();
+      if (leftMs <= 0) break;
+      if (drillAnswerText) drillAnswerText.textContent = `Thinking... (${Math.ceil(leftMs / 1000)}s)`;
+      playBookmarkChime();
+      await drillWait(Math.min(1000, leftMs));
+    }
+    drillStage = 'reveal';
+  }
 
-  // State 4: Rating window (5s window for Bluetooth headset input or click)
-  if (drillAnswerText) drillAnswerText.textContent = `${card.answer} (Press Next for Known, Back for Review)`;
-  await new Promise(r => { drillTimer = setTimeout(r, 5000); });
-  if (!isAudioDrillActive || isAudioDrillPaused) return;
+  if (drillStage === 'reveal') {
+    // State 3: Reveal
+    drillRatingOpen = true;
+    if (drillAnswerBox) drillAnswerBox.style.opacity = '1';
+    if (drillAnswerText) drillAnswerText.textContent = card.answer;
+    await speakDrillText(`Answer: ${card.answer}`);
+    // Cut off mid-answer: replay the answer on resume, not the question above it.
+    if (!isCurrent()) return;
+    drillStage = 'rating';
+  }
 
-  // Default auto-advance as Known if time elapses without review press
-  rateDrillCard(true);
+  if (drillStage === 'rating') {
+    // State 4: Rating window (5s window for Bluetooth headset input or click). A pause inside it does
+    // not hand out a fresh window: whatever was left of this one is what is left.
+    drillRatingOpen = true;
+    if (drillAnswerText) drillAnswerText.textContent = `${card.answer} (Press Next for Known, Back for Review)`;
+    const ratingEndsAt = Date.now() + (drillStageLeftMs > 0 ? drillStageLeftMs : 5000);
+    drillStageLeftMs = 0;
+    await drillWait(Math.max(0, ratingEndsAt - Date.now()));
+    if (!isAudioDrillActive || drillRunId !== runId) return;
+    if (isAudioDrillPaused) {
+      drillStageLeftMs = Math.max(1, ratingEndsAt - Date.now());
+      return;
+    }
+    // Default auto-advance as Known if time elapses without review press
+    rateDrillCard(true);
+  }
 }
 
 function rateDrillCard(known) {
@@ -3849,8 +3940,12 @@ function rateDrillCard(known) {
     return;
   }
   drillRatingOpen = false;
-  if (drillTimer) { clearTimeout(drillTimer); drillTimer = null; }
+  drillStageCard = -1; // the next card starts at its prompt
+  drillStageLeftMs = 0;
   cancelDrillSpeech();
+  // Let the frame we are leaving finish its wait; it sees drillRunId move on and returns without
+  // rating anything a second time.
+  releaseDrillCardWaits();
 
   if (known) {
     drillKnownCount++;
@@ -3866,8 +3961,10 @@ function rateDrillCard(known) {
 function pauseAudioDrill() {
   if (!isAudioDrillActive) return;
   isAudioDrillPaused = true;
-  if (drillTimer) { clearTimeout(drillTimer); drillTimer = null; }
   cancelDrillSpeech();
+  // Settle the card's pending timer or utterance so its await finishes while paused, instead of
+  // hanging on a cleared timeout until the page is closed.
+  releaseDrillCardWaits();
   if (drillPauseToggleBtn) drillPauseToggleBtn.textContent = '▶ Resume';
   syncMediaSessionState(false);
   showToast('Audio drill paused.');
@@ -3879,21 +3976,24 @@ function resumeAudioDrill() {
   if (drillPauseToggleBtn) drillPauseToggleBtn.textContent = '⏸ Pause';
   syncMediaSessionState(true);
   showToast('Audio drill resumed.');
-  runDrillCard(drillIndex);
+  runDrillCard(drillIndex); // continues the beat the pause interrupted
 }
 
 async function finishAudioDrill() {
   // Peak-end: the drill ends on a summary card the reader can read, instead of a toast that
   // vanishes the moment the last card is rated.
   await speakDrillText(`Drill complete! You mastered ${drillKnownCount} of ${drillSessionCards.length} cards.`);
+  if (!isAudioDrillActive) return; // stopped while the summary was being spoken
   showDrillSummary();
 }
 
 function showDrillSummary() {
   isAudioDrillActive = false;
   isAudioDrillPaused = false;
-  if (drillTimer) { clearTimeout(drillTimer); drillTimer = null; }
   cancelDrillSpeech();
+  releaseDrillCardWaits(); // a card's await must not outlive the drill
+  drillStageCard = -1;
+  drillStageLeftMs = 0;
   if (drillProgressText) drillProgressText.textContent = 'Drill complete';
   if (drillProgressFill) drillProgressFill.style.width = '100%';
   if (drillSummaryStats) {
@@ -3908,8 +4008,10 @@ function showDrillSummary() {
 function stopAudioDrill() {
   isAudioDrillActive = false;
   isAudioDrillPaused = false;
-  if (drillTimer) { clearTimeout(drillTimer); drillTimer = null; }
   cancelDrillSpeech();
+  releaseDrillCardWaits(); // a card's await must not outlive the drill
+  drillStageCard = -1;
+  drillStageLeftMs = 0;
   if (audioDrillHud) audioDrillHud.style.display = 'none';
   syncMediaSessionState(false);
   updateMediaMetadata();
