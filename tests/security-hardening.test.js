@@ -230,6 +230,12 @@ test('the webhook source allowlist accepts a real delivery and still refuses a s
     accepted(await deliver({ 'x-vercel-forwarded-for': '52.31.139.75, 10.0.0.7' }), 'platform header list');
     accepted(await deliver({ 'x-forwarded-for': '1.2.3.4, 52.31.139.75' }), 'x-forwarded-for list');
 
+    // A dual-stack listener can report an IPv4 client as an IPv4-mapped IPv6 address, in either
+    // spelling (dotted, or the same bytes as two hex groups). It is the same Paystack address.
+    accepted(await deliver({ 'cf-connecting-ip': '::ffff:52.31.139.75' }), 'IPv4-mapped IPv6 source');
+    accepted(await deliver({ 'cf-connecting-ip': '::ffff:341f:8b4b' }), 'hex IPv4-mapped IPv6 source');
+    refused(await deliver({ 'cf-connecting-ip': '::ffff:203.0.113.5' }), 'a mapped non-Paystack address');
+
     process.env.PAYSTACK_WEBHOOK_ALLOWED_IPS = '  198.51.100.9 , 2001:0DB8::0001  ';
     accepted(await deliver({ 'cf-connecting-ip': '198.51.100.9, 10.0.0.7' }), 'padded IPv4 entry');
     accepted(await deliver({ 'cf-connecting-ip': '2001:db8::1, 10.0.0.7' }), 'equivalent IPv6 form');
