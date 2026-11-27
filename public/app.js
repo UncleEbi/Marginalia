@@ -5816,7 +5816,7 @@ function getWasmTtsWorker() {
             sampleRate: msg.sampleRate || 24000,
             final: Boolean(msg.final)
           };
-          if (!entry.stream) entry.stream = { chunks: [], done: false, onChunk: null, nextIndex: 1 };
+          if (!entry.stream) entry.stream = { chunks: [], done: false, onChunk: null, nextIndex: 1, speed: entry.speed || 1 };
           entry.stream.chunks.push(chunk);
           if (!entry.settled) {
             entry.settled = true;
@@ -5884,7 +5884,10 @@ function synthInWasmWorker(text, voice, priority = 'high', speed = 1) {
   if (!worker) return null;
   const id = ++wasmWorkerJobId;
   return new Promise((resolve, reject) => {
-    wasmWorkerPending.set(id, { resolve, reject, text });
+    // The speed travels with the job: a streamed sentence is stitched from its clauses before the
+    // awaiting caller has had a chance to record it, and that clip must be filed under the tempo it
+    // was actually synthesized at.
+    wasmWorkerPending.set(id, { resolve, reject, text, speed });
     worker.postMessage({
       type: 'synthesize',
       id,
@@ -6443,8 +6446,11 @@ async function exportAudioForSentences(sentences, titlePrefix) {
 
       if (!blob) {
         const src = await getNeuralAudioSrc(s, { speed, signal: controller.signal }); // exports are always normal pace
-        if (src.startsWith('blob:') || src.startsWith('data:')) {
-          const resp = await fetch(src);
+        // A long Studio sentence is resolved with its first clause only, which is right for playback
+        // and would cut the sentence short in the file: wait for the rest and use the whole clip.
+        const fullSrc = await completeWasmSentenceSrc(src, s, controller.signal);
+        if (fullSrc.startsWith('blob:') || fullSrc.startsWith('data:')) {
+          const resp = await fetch(fullSrc);
           blob = await resp.blob();
         }
       }
@@ -6537,6 +6543,26 @@ async function stitchExportChunks(chunks, engine) {
   view.setUint32(4, 36 + totalSamples * 2, true);
   view.setUint32(40, totalSamples * 2, true);
   return new Blob([header, ...parts.map((part) => part.buffer)], { type: 'audio/wav' });
+}
+
+// A sentence long enough for the worker to split resolves its request with the first clause, because
+// playback starts as soon as it can. An export has to write the whole sentence, so wait for the
+// remaining clauses and hand back the stitched clip. Clips that were never split are already whole.
+async function completeWasmSentenceSrc(src, text, signal) {
+  let stream = null;
+  wasmClauseStreams.forEach((s) => { if (s && s.src === src) stream = s; });
+  if (!stream) return src;
+  if (stream.mergedSrc) return stream.mergedSrc; // joined by the worker while the export asked
+  const deadline = Date.now() + 60000;
+  while (!stream.done && !(signal && signal.aborted) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  // The export was cancelled: the loop drops the file before it is written, so the partial clip here
+  // only has to be returned, not stitched.
+  if (signal && signal.aborted) return src;
+  const merged = stream.done ? await stitchWasmClauseStream(stream, text) : null;
+  if (!merged) throw new Error('Studio could not finish synthesizing a long sentence for this export.');
+  return merged;
 }
 
 const exportChapterMp3Btn = document.getElementById('exportChapterMp3Btn');
@@ -6827,6 +6853,13 @@ async function speakServerless(text, opts = {}) {
       return;
     }
 
+    // A streamed sentence resolves its request with the first clause only, and a media element
+    // cannot schedule the clauses behind it: wait for the whole sentence so this path speaks all of
+    // it instead of cutting it off at the first comma.
+    if (activeEngine === 'wasm' && audioSrc) {
+      audioSrc = await completeWasmSentenceSrc(audioSrc, text, null);
+    }
+
     const wordsArr = text.trim().split(/\s+/).filter(w => w.length > 0);
     let timeline = null;
 
@@ -6899,20 +6932,21 @@ async function scheduleNextWasmChunkBackToBack(audioCtx, sessionAtStart) {
   // Keep filling the queue until the scheduled audio covers the target lead. Sentences are queued
   // in order and any sentence that cannot be prepared yet ends the run, so nothing is skipped.
   let nextPos = getNextSentencePosition(currentPage, currentSentenceIdx);
-  let scheduled = 0;
+  let scheduled = 0; // sentences this pass accounts for: queued now or already queued
   while (nextPos) {
     // Always keep one sentence ahead, as before, then top up while the queue is thinner than the
     // target lead. The check is skipped on the first pass so a long sentence does not lose its
     // lookahead just because its own audio already covers the target.
     if (scheduled > 0 && wasmQueuedSeconds(audioCtx.currentTime, wasmScheduledEndTime) >= WASM_AHEAD_SECONDS) break;
     const schedKey = `${nextPos.page}:${nextPos.sentenceIdx}:${sessionAtStart}`;
-    if (wasmScheduledChunks.has(schedKey)) return;
-    // A still-streaming sentence owns its own clause scheduling; pre-scheduling its first clause here
-    // would strand the rest of the sentence on the worker's queue. A stitched one is already a single
-    // clip and can be scheduled like any other sentence.
-    const streamingNext = wasmClauseStreams.get(neuralCacheKey(nextPos.text));
-    if (streamingNext && !streamingNext.mergedSrc) return;
-
+    // Already queued by an earlier top-up. It holds its own slot at the end of wasmScheduledEndTime,
+    // so skip over it and keep filling behind it: returning here stopped the top-up at the first
+    // sentence it had queued last time and starved the lead the seconds target is supposed to hold.
+    if (wasmScheduledChunks.has(schedKey)) {
+      scheduled++;
+      nextPos = getNextSentencePosition(nextPos.page, nextPos.sentenceIdx);
+      continue;
+    }
     // Pre-synthesize the next chunk in background while the current ones play
     const key = neuralCacheKey(nextPos.text);
     let nextSrc = audioPreloadCache.get(key)?.src;
@@ -6920,9 +6954,16 @@ async function scheduleNextWasmChunkBackToBack(audioCtx, sessionAtStart) {
       nextSrc = await getNeuralAudioSrc(nextPos.text, { priority: 'normal' }).catch(() => null);
     }
     if (!nextSrc || sessionAtStart !== wasmSessionId || !isPlaying) return;
+    // A sentence is delivered clause by clause, and the slots after it belong to clauses that have
+    // not arrived yet. Wait for all of them and queue the joined clip: jumping ahead would play the
+    // sentence after this one in the middle of it, and stopping here would leave the queue at one
+    // sentence no matter how much lead the reader has.
+    const streamingNow = wasmClauseStreams.get(key);
+    if (streamingNow && !streamingNow.mergedSrc) {
+      nextSrc = await completeWasmSentenceSrc(nextSrc, nextPos.text, null).catch(() => null);
+      if (!nextSrc || sessionAtStart !== wasmSessionId || !isPlaying) return;
+    }
     if (wasmScheduledChunks.has(schedKey)) return;
-    const streamingNow = wasmClauseStreams.get(neuralCacheKey(nextPos.text));
-    if (streamingNow && !streamingNow.mergedSrc) return;
 
     const nextEntry = synthPcmCache.get(nextSrc);
     const nextPcm = nextEntry ? (nextEntry.pcmData || nextEntry) : null;

@@ -506,3 +506,180 @@ test('Studio (On-Device) offloads synthesis to public/tts-worker.js without bloc
   assert.match(appSrc, /new Worker\('tts-worker\.js'/, 'app.js launches tts-worker.js module worker');
   assert.match(appSrc, /if \(!standalone && activeEngine !== 'wasm'\) preloadUpcoming\(myToken\)/, 'wasm skips 3-way preload burst on start');
 });
+
+test('the Studio queue tops up past sentences it has already scheduled', async () => {
+  const scheduleNext = extractFunction('scheduleNextWasmChunkBackToBack');
+  const queuedSeconds = extractFunction('wasmQueuedSeconds');
+  const sentences = ['S0', 'S1', 'S2', 'S3', 'S4'];
+  const synths = [];
+  const saved = {};
+  const set = (name, value) => {
+    if (!(name in saved)) saved[name] = { had: name in globalThis, value: globalThis[name] };
+    globalThis[name] = value;
+  };
+  const restoreGlobals = () => {
+    Object.entries(saved).forEach(([name, prev]) => {
+      if (prev.had) globalThis[name] = prev.value;
+      else delete globalThis[name];
+    });
+  };
+
+  const scheduled = new Map();
+  const audioCtx = {
+    currentTime: 0,
+    destination: {},
+    createBufferSource: () => ({ playbackRate: { value: 0 }, connect() {}, start() {}, stop() {}, disconnect() {} })
+  };
+
+  set('activeEngine', 'wasm');
+  set('isPlaying', true);
+  set('wasmSessionId', 7);
+  set('currentPage', 0);
+  set('currentSentenceIdx', 0);
+  set('WASM_AHEAD_SECONDS', 6);
+  set('wasmQueuedSeconds', queuedSeconds);
+  set('wasmScheduledChunks', scheduled);
+  set('wasmClauseStreams', new Map());
+  set('neuralCacheKey', (t) => `key:${t}`);
+  set('audioPreloadCache', new Map());
+  set('synthPcmCache', new Map());
+  set('wasmActiveSourceNodes', new Set());
+  set('wasmGainNode', null);
+  set('createWasmAudioBuffer', () => ({ duration: 2.5 }));
+  set('getNextSentencePosition', (page, idx) => (idx + 1 < sentences.length
+    ? { page, sentenceIdx: idx + 1, text: sentences[idx + 1] }
+    : null));
+  set('getNeuralAudioSrc', async (text) => {
+    synths.push(text);
+    const src = `blob:${text}`;
+    globalThis.synthPcmCache.set(src, { pcmData: new Float32Array(2), sampleRate: 24000 });
+    return src;
+  });
+
+  try {
+    // S0 is playing (0–2.5s) and S1 is already queued behind it (2.5–5s), so the 6s lead is one
+    // sentence short. An earlier top-up left S1 in the map: the fill has to step over it and queue
+    // S2 rather than stop at the first sentence it recognises.
+    scheduled.set('0:1:7', { startTime: 2.5, duration: 2.5 });
+    set('wasmScheduledEndTime', 5);
+    await scheduleNext(audioCtx, 7);
+    assert.deepEqual(synths, ['S2'], 'the fill continues behind the sentence it had already queued');
+    assert.ok(scheduled.has('0:2:7'), 'the next sentence is scheduled');
+    assert.equal(globalThis.wasmScheduledEndTime, 5 + 2.5, 'it lands at the end of what was queued');
+    assert.ok(!scheduled.has('0:3:7'), 'and the fill stops once the lead is covered');
+
+    // Once the 6 seconds are covered there is nothing to add, scheduled sentence or not.
+    synths.length = 0;
+    set('wasmScheduledEndTime', 20);
+    await scheduleNext(audioCtx, 7);
+    assert.deepEqual(synths, [], 'a queue that already holds the lead is left alone');
+
+    // A sentence that is still streaming its clauses has no slot for the clauses behind it yet: the
+    // fill waits for the whole sentence and queues the joined clip rather than skipping past it.
+    const streamedScheduled = new Map();
+    set('wasmClauseStreams', new Map([['key:S1', { chunks: [], done: false, onChunk: null, nextIndex: 1 }]]));
+    set('wasmScheduledChunks', streamedScheduled);
+    set('completeWasmSentenceSrc', async (src) => `${src}-whole`);
+    set('synthPcmCache', new Map([['blob:S1-whole', { pcmData: new Float32Array(2), sampleRate: 24000 }]]));
+    synths.length = 0;
+    set('wasmScheduledEndTime', 5);
+    await scheduleNext(audioCtx, 7);
+    assert.deepEqual(synths, ['S1'], 'the streaming sentence is the one that gets prepared');
+    assert.ok(streamedScheduled.has('0:1:7'), 'and its joined clip is queued whole');
+    assert.ok(!streamedScheduled.has('0:2:7'), 'the lead check still ends the run once it is covered');
+  } finally {
+    restoreGlobals();
+  }
+});
+
+test('Studio splits every sentence into short clauses so the first one can start sooner', () => {
+  const workerSrc = readFileSync(fileURLToPath(new URL('../public/tts-worker.js', import.meta.url)), 'utf8');
+  // A regex literal that fails to parse takes the whole worker down, and every sentence then runs on
+  // the main thread instead: lookbehind only shipped in Safari 16.4.
+  assert.ok(!/\(\?</.test(workerSrc), 'the worker must not rely on lookbehind assertions');
+
+  const start = workerSrc.indexOf('function splitLongText(');
+  assert.ok(start > -1, 'splitLongText exists');
+  let depth = 0;
+  let end = workerSrc.indexOf('{', start);
+  for (; end < workerSrc.length; end++) {
+    if (workerSrc[end] === '{') depth++;
+    else if (workerSrc[end] === '}') { depth--; if (!depth) break; }
+  }
+  const splitLongText = new Function('return ' + workerSrc.slice(start, end + 1))();
+
+  const clauses = splitLongText('The quick brown fox jumps over the lazy dog, and then it rests; the end of the story begins here, once more.');
+  assert.ok(clauses.length >= 2, 'a long sentence is spoken in more than one piece');
+  assert.ok(clauses.every((c) => c.length <= 80), 'no piece waits on more than ~15 words of inference');
+  assert.equal(
+    clauses.join(' '),
+    'The quick brown fox jumps over the lazy dog, and then it rests; the end of the story begins here, once more.',
+    'splitting keeps the punctuation and every word'
+  );
+
+  const long = Array.from({ length: 60 }, (_, i) => `word${i}`).join(' ');
+  const pieces = splitLongText(long);
+  assert.ok(pieces.length >= 5, 'a sentence with no punctuation is still split');
+  assert.ok(pieces.every((c) => c.length <= 80));
+  assert.equal(pieces.join(' '), long, 'no words are lost when it falls back to word boundaries');
+  assert.deepEqual(splitLongText('Short one.'), ['Short one.'], 'a short sentence stays one clip');
+});
+
+// Every Studio sentence streams now, so every path that cannot schedule clauses has to wait for the
+// joined clip instead of speaking the first clause and then jumping to the next sentence.
+test('the Studio paths that cannot schedule clauses complete a streamed sentence first', () => {
+  const appSrc = readFileSync(fileURLToPath(new URL('../public/app.js', import.meta.url)), 'utf8');
+  assert.ok(
+    /if \(activeEngine === 'wasm' && audioSrc\) \{\s*audioSrc = await completeWasmSentenceSrc\(audioSrc, text, null\);/.test(appSrc),
+    'the media-element fallback waits for the whole sentence'
+  );
+  assert.ok(
+    /nextSrc = await completeWasmSentenceSrc\(nextSrc, nextPos\.text, null\)/.test(appSrc),
+    'the lookahead queues the joined clip behind a streaming sentence'
+  );
+});
+
+test('an export waits for the whole Studio sentence instead of keeping the first clause', async () => {
+  const complete = extractFunction('completeWasmSentenceSrc');
+  const saved = {};
+  const set = (name, value) => {
+    if (!(name in saved)) saved[name] = { had: name in globalThis, value: globalThis[name] };
+    globalThis[name] = value;
+  };
+  const stitched = [];
+  set('activeEngine', 'wasm');
+  set('wasmClauseStreams', new Map());
+  set('stitchWasmClauseStream', async (stream, text) => {
+    stitched.push({ text, done: stream.done });
+    return stream.done ? 'blob:whole' : null;
+  });
+
+  try {
+    // A short sentence is one clip already.
+    assert.equal(await complete('blob:short', 'Short sentence.'), 'blob:short');
+    assert.equal(stitched.length, 0);
+
+    // The clauses were joined before the export got here.
+    globalThis.wasmClauseStreams.set('k1', { src: 'blob:c0', mergedSrc: 'blob:merged', done: true });
+    assert.equal(await complete('blob:c0', 'Long one.'), 'blob:merged');
+
+    // Still being synthesized: the export waits for the last clause and writes the whole sentence.
+    const stream = { src: 'blob:c1', chunks: [], done: false, onChunk: null, nextIndex: 1 };
+    globalThis.wasmClauseStreams.set('k2', stream);
+    setTimeout(() => { stream.done = true; }, 10);
+    assert.equal(await complete('blob:c1', 'Long two.'), 'blob:whole');
+    assert.deepEqual(stitched, [{ text: 'Long two.', done: true }], 'the export stitches only once the stream is complete');
+
+    // Cancelled: the loop drops the file, so the partial clip is handed back instead of waiting.
+    const controller = new AbortController();
+    controller.abort();
+    globalThis.wasmClauseStreams.set('k3', { src: 'blob:c2', done: false });
+    assert.equal(await complete('blob:c2', 'Long three.', controller.signal), 'blob:c2');
+    assert.equal(stitched.length, 1, 'a cancelled export does not stitch');
+  } finally {
+    Object.entries(saved).forEach(([name, prev]) => {
+      if (prev.had) globalThis[name] = prev.value;
+      else delete globalThis[name];
+    });
+  }
+});

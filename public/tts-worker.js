@@ -38,12 +38,20 @@ let activeSessionId = 0;
 let running = false;
 const queue = [];
 
-function splitLongText(text, maxLen = 180) {
+// Chunks are deliberately small: the first one is what the reader hears, and it arrives after one
+// inference instead of one per sentence, so Studio starts speaking several times sooner and the
+// clauses behind it stream in while it plays.
+function splitLongText(text, maxLen = 80) {
   const clean = String(text || '').trim().replace(/\s+/g, ' ');
   if (!clean) return [];
   if (clean.length <= maxLen) return [clean];
 
-  const clauses = clean.split(/(?<=[,;:\u2014])\s+/);
+  // Clause boundaries with the punctuation kept on the clause before them. No lookbehind: Safari
+  // before 16.4 cannot parse one, and a regex literal that fails to parse takes the whole worker
+  // down — every sentence then falls back to the main thread, which is the slowest path there is.
+  const clauses = (clean.match(/[^,;:\u2014]+[,;:\u2014]?/g) || [clean])
+    .map((clause) => clause.trim())
+    .filter(Boolean);
   const chunks = [];
   let buf = '';
 
@@ -155,13 +163,13 @@ async function getTts() {
   return ttsPromise;
 }
 
-// A long sentence is split into clauses and each one is handed to `emit` as soon as it is
-// synthesized, so the reader hears the first clause while the rest is still being generated. The
-// clause's inter-sentence pause is carried inside its samples (except for the last one) so the
-// player can schedule the chunks back to back without knowing about gaps. Only multi-clause text
-// streams: a single-clause sentence is returned merged, exactly as before.
+// Every sentence longer than one chunk is split at its clauses, and each one is handed to `emit` as
+// soon as it is synthesized, so the reader hears the opening clause while the rest is still being
+// generated. The clause's inter-sentence pause is carried inside its samples (except for the last
+// one) so the player can schedule the chunks back to back without knowing about gaps. Text that
+// fits in one chunk still comes back merged.
 async function synthesizeSegments(tts, text, voice, speed, emit, isCancelled) {
-  const parts = splitLongText(text, 180);
+  const parts = splitLongText(text);
   if (parts.length === 0) return { pcm: new Float32Array(0), sampleRate: 24000 };
 
   if (parts.length === 1) {
