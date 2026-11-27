@@ -3397,6 +3397,42 @@ async function shareCurrentStudyPack() {
   }
 }
 
+// A share link is untrusted input: anyone can create a pack, and the client stores and renders it.
+// Keep exactly the shape the reader uses — strings for text, integers for positions, an allowlisted
+// colour, and only embedded image data for diagrams — so a crafted pack cannot smuggle an unexpected
+// field, a non-image URL, or a value the renderer was never written for.
+function sanitizeSharedPackPayload(raw) {
+  const text = (value, max = 5000) => (typeof value === 'string' ? value.slice(0, max) : '');
+  const list = (value) => (Array.isArray(value) ? value : []);
+
+  const pages = list(raw && raw.pages).slice(0, 5000).map((page) => {
+    return list(page).slice(0, 500).map((item) => {
+      if (typeof item === 'string') return item.slice(0, 10000);
+      if (!item || typeof item !== 'object') return '';
+      const caption = text(item.caption, 1000);
+      const src = typeof item.src === 'string' && /^(data:image\/|blob:)/i.test(item.src) ? item.src : '';
+      return src ? { caption, src } : caption;
+    });
+  }).filter((page) => page.length > 0);
+
+  const annotations = list(raw && raw.annotations).slice(0, 2000).map((ann) => ({
+    page: Number.isInteger(ann?.page) && ann.page >= 0 ? ann.page : 0,
+    sentenceIdx: Number.isInteger(ann?.sentenceIdx) && ann.sentenceIdx >= 0 ? ann.sentenceIdx : 0,
+    quoteText: text(ann?.quoteText, 2000),
+    noteText: text(ann?.noteText, 5000),
+    color: ['amber', 'mint', 'rose'].includes(ann?.color) ? ann.color : 'amber'
+  }));
+
+  const vocabulary = list(raw && raw.vocabulary).slice(0, 5000).map((entry) => ({
+    word: text(entry?.word, 200),
+    partOfSpeech: text(entry?.partOfSpeech, 60),
+    definition: text(entry?.definition, 2000),
+    context: text(entry?.context, 1000)
+  }));
+
+  return { pages, annotations, vocabulary };
+}
+
 async function checkSharedStudyPack() {
   const urlParams = new URLSearchParams(window.location.search);
   const packToken = urlParams.get('pack');
@@ -3411,21 +3447,22 @@ async function checkSharedStudyPack() {
     }
 
     const { pack } = await res.json();
-    if (!pack || !pack.payload || !pack.payload.pages) {
+    const payload = sanitizeSharedPackPayload(pack && pack.payload);
+    if (!pack || payload.pages.length === 0) {
       showToast('⚠️ Shared pack is empty or invalid.');
       return;
     }
 
-    currentDocName = pack.doc_title || 'Shared Study Pack';
-    bookPages = pack.payload.pages;
+    currentDocName = String(pack.doc_title || 'Shared Study Pack').slice(0, 300);
+    bookPages = payload.pages;
     totalSentences = bookPages.reduce((acc, p) => acc + (Array.isArray(p) ? p.length : 0), 0);
     currentPage = 0;
     currentSentenceIdx = 0;
 
     // Load annotations into memory and save locally
-    if (Array.isArray(pack.payload.annotations)) {
-      currentDocAnnotations = pack.payload.annotations;
-      for (const ann of pack.payload.annotations) {
+    if (payload.annotations.length) {
+      currentDocAnnotations = payload.annotations;
+      for (const ann of payload.annotations) {
         saveAnnotationToDB({
           bookTitle: currentDocName,
           page: ann.page,
@@ -3438,8 +3475,8 @@ async function checkSharedStudyPack() {
     }
 
     // Load vocabulary
-    if (Array.isArray(pack.payload.vocabulary)) {
-      for (const v of pack.payload.vocabulary) {
+    if (payload.vocabulary.length) {
+      for (const v of payload.vocabulary) {
         saveVocabToDB({
           word: v.word,
           partOfSpeech: v.partOfSpeech,
@@ -3456,8 +3493,8 @@ async function checkSharedStudyPack() {
     if (studyPackBanner) {
       studyPackBanner.style.display = 'flex';
       if (studyPackBannerMeta) {
-        const annCount = pack.payload.annotations?.length || 0;
-        const vocCount = pack.payload.vocabulary?.length || 0;
+        const annCount = payload.annotations.length;
+        const vocCount = payload.vocabulary.length;
         studyPackBannerMeta.textContent = `"${currentDocName}" with ${annCount} note${annCount === 1 ? '' : 's'} & ${vocCount} term${vocCount === 1 ? '' : 's'}`;
       }
     }
@@ -5158,10 +5195,19 @@ function buildDiagramDOM(imgObj, sIdx) {
   fig.className = 'reader-diagram';
   fig.id = `sent-${sIdx}`;
 
+  // A diagram's src comes from a document (EPUB/PDF) or a shared Study Pack, both of which are
+  // untrusted input. Only embedded image data is rendered: a crafted file must not be able to make
+  // the reader's browser tag out to an arbitrary host through an <img> URL.
+  const src = typeof imgObj.src === 'string' && /^(data:image\/|blob:)/i.test(imgObj.src)
+    ? imgObj.src
+    : '';
+
   const img = document.createElement('img');
-  img.src = imgObj.src;
-  img.alt = imgObj.caption || "Diagram";
-  img.loading = "lazy";
+  if (src) {
+    img.src = src;
+    img.alt = imgObj.caption || "Diagram";
+    img.loading = "lazy";
+  }
 
   const bar = document.createElement('div');
   bar.className = 'diagram-toolbar';
@@ -5173,14 +5219,15 @@ function buildDiagramDOM(imgObj, sIdx) {
   const expBtn = document.createElement('button');
   expBtn.className = 'btn-explain-diagram';
   expBtn.textContent = '✨ Explain';
+  expBtn.disabled = !src;
   expBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    explainDiagram(imgObj.src, imgObj.caption);
+    if (src) explainDiagram(src, imgObj.caption);
   });
 
   bar.appendChild(cap);
   bar.appendChild(expBtn);
-  fig.appendChild(img);
+  if (src) fig.appendChild(img);
   fig.appendChild(bar);
 
   fig.addEventListener('click', () => {

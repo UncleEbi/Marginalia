@@ -57,6 +57,12 @@ export async function validatePublicUrl(urlString) {
     throw new Error('Prohibited protocol: only http: and https: URLs are permitted.');
   }
 
+  // Credentials in the URL are never meaningful for an article and would be forwarded to whatever
+  // host the name resolves to.
+  if (parsed.username || parsed.password) {
+    throw new Error('Prohibited URL: credentials in the address are not allowed.');
+  }
+
   const hostname = parsed.hostname.toLowerCase();
   if (
     hostname === 'localhost' ||

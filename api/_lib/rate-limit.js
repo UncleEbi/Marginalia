@@ -28,6 +28,7 @@
 //     endpoint where "no limit" means "unlimited password guesses". Sign-in staying down while the
 //     store is broken is the safe direction for that trade.
 import crypto from 'crypto';
+import net from 'node:net';
 import { supabaseConfig } from './supabase.js';
 
 export const TIERS = {
@@ -60,6 +61,14 @@ export const TIERS = {
   // Shareable read-only Study Packs: 15 requests per minute per IP
   study_pack: {
     ip: { limit: 15, windowSeconds: 60 }
+  },
+  // Page scans and diagram explanations. Reading a scanned chapter page by page is legitimate, so
+  // this is a flood ceiling (not a per-sentence limit) that still stops a script from turning one
+  // account into a free vision pipeline.
+  vision: {
+    user: { limit: 20, windowSeconds: 60 },
+    ip: { limit: 40, windowSeconds: 60 },
+    byok: { limit: 40, windowSeconds: 60 }
   }
 };
 
@@ -73,20 +82,85 @@ const KEY_PREFIX = 'marginalia';
 const STORE_TIMEOUT_MS = 2500;
 
 /**
- * The caller's address. Vercel sets x-forwarded-for; the others are fallbacks for other proxies.
+ * One address, or '' when the value is not a well-formed IP. Proxy headers are caller-controlled
+ * strings, so anything that is not an IP must never become a rate-limit key or a webhook allowlist
+ * entry (a forged value would hand out a fresh allowance, or pass the Paystack source check).
+ */
+function normalizeIp(value) {
+  let ip = String(value || '').trim();
+  if (!ip || ip.length > 64) return '';
+  if (ip.startsWith('[')) { // [2001:db8::1]:443
+    const end = ip.indexOf(']');
+    if (end > 1) ip = ip.slice(1, end);
+  } else if (/^\d{1,3}(\.\d{1,3}){3}:\d+$/.test(ip)) { // 203.0.113.5:443
+    ip = ip.slice(0, ip.lastIndexOf(':'));
+  }
+  const zone = ip.indexOf('%'); // fe80::1%eth0
+  if (zone !== -1) ip = ip.slice(0, zone);
+  return net.isIP(ip) ? ip : '';
+}
+
+/**
+ * First address in a header that may arrive as one string, a list, or repeated headers.
+ *
+ * Trusted platform headers are written by the edge as "client, proxy": the address that opened the
+ * connection comes FIRST and the hop it passed through comes last. Reading their rightmost entry
+ * (as this used to) returned the proxy instead of the reader, so the Paystack webhook source
+ * allowlist saw the wrong address and rejected real callback IPs.
+ */
+function firstEntry(headerValue) {
+  const values = Array.isArray(headerValue) ? headerValue : [headerValue];
+  for (const raw of values) {
+    for (const entry of String(raw || '').split(',')) {
+      const trimmed = entry.trim();
+      if (trimmed) return trimmed;
+    }
+  }
+  return '';
+}
+
+/** Last address in an append-only header (see clientIp). */
+function lastEntry(headerValue) {
+  const entries = (Array.isArray(headerValue) ? headerValue : [headerValue])
+    .flatMap((raw) => String(raw || '').split(','))
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return entries.length ? entries[entries.length - 1] : '';
+}
+
+/**
+ * The caller's address, from the header the platform itself wrote.
+ *
+ * x-forwarded-for is append-only across hops, so the RIGHTMOST entry is the address the last trusted
+ * proxy actually saw; everything to its left arrived in the request and can be forged. Reading the
+ * leftmost entry (as this once did) let anyone mint a new IP identity per request and walk past every
+ * ip ceiling — including the Paystack webhook source allowlist.
+ *
+ * Platform headers are different: they are written by the edge itself, so a caller cannot forge them,
+ * and in their list form the first entry is the original client. They are read first (and leftmost),
+ * the generic header last (and rightmost).
  */
 export function clientIp(req) {
   const headers = (req && req.headers) || {};
-  const forwarded = headers['x-forwarded-for'];
-  const first = Array.isArray(forwarded) ? forwarded[0] : String(forwarded || '').split(',')[0];
-  const candidate = first || headers['x-real-ip'] || headers['cf-connecting-ip'] ||
-    headers['x-vercel-forwarded-for'] || '';
-  const ip = String(candidate).trim();
-  return ip || 'unknown';
+
+  const candidates = [
+    firstEntry(headers['x-vercel-forwarded-for']),
+    firstEntry(headers['cf-connecting-ip']),
+    firstEntry(headers['x-real-ip']),
+    lastEntry(headers['x-forwarded-for'])
+  ];
+
+  for (const candidate of candidates) {
+    const ip = normalizeIp(candidate);
+    if (ip) return ip;
+  }
+  return 'unknown';
 }
 
 export function normalizeEmail(email) {
-  return String(email || '').trim().toLowerCase();
+  // 254 is the maximum length of an address that can receive mail; a longer "email" is not one, and
+  // it would otherwise become an unbounded rate-limit key.
+  return String(email || '').trim().toLowerCase().slice(0, 254);
 }
 
 /**

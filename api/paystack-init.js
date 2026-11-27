@@ -27,6 +27,7 @@ import {
   REFILL_PACKS, refillAmountDisplay, refillPacksFor
 } from '../lib/refill-plans.js';
 import { supabaseConfig } from './_lib/supabase.js';
+import { appOrigin } from './_lib/app-origin.js';
 
 // Vercel sets x-vercel-ip-country on every request; Cloudflare's cf-ipcountry is the fallback in
 // case this ever runs behind it. No header means no usable country, and lib/pro-plan.js then
@@ -113,7 +114,9 @@ export default async function handler(req, res) {
   }
 
   if (requestedPack != null) {
-    const pack = REFILL_PACKS[requestedPack];
+    // Own-property lookup: a body value like "__proto__" or "constructor" must not resolve to an
+    // inherited member and be treated as a real pack.
+    const pack = Object.hasOwn(REFILL_PACKS, requestedPack) ? REFILL_PACKS[requestedPack] : null;
     if (!pack) {
       return res.status(400).json({ error: `Unknown refill pack: ${String(requestedPack).slice(0, 40)}` });
     }
@@ -151,7 +154,7 @@ export default async function handler(req, res) {
           email: user.email,
           amount: packAmount,
           currency,
-          ...(req.headers.origin ? { callback_url: `${req.headers.origin}/` } : {}),
+          callback_url: `${appOrigin(req)}/`,
           metadata: {
             user_id: user.id,
             type: 'refill',
@@ -219,7 +222,7 @@ export default async function handler(req, res) {
         email: user.email,
         amount, // server-owned: the plan's price in this market, from lib/pro-plan.js
         currency,
-        ...(req.headers.origin ? { callback_url: `${req.headers.origin}/` } : {}),
+        callback_url: `${appOrigin(req)}/`,
         metadata: {
           user_id: user.id,
           plan: plan.id

@@ -1,18 +1,23 @@
 import { createClient } from '@supabase/supabase-js';
 import { isProActive, downgradeExpiredPro, FREE_SUMMARY_CREDITS, refreshProQuota } from '../lib/pro-plan.js';
 import { AI_OPS_MONTHLY_COL, AI_OPS_TOPUP_COL, bothBucketsEmpty, monthlyAllowance, deductAiOp } from '../lib/quota-ops.js';
-import { MAX_IMAGE_BASE64_CHARS } from './_lib/image-payload.js';
+import { MAX_IMAGE_BASE64_CHARS, normalizeImageMime, isImagePayload } from './_lib/image-payload.js';
 import { supabaseConfig } from './_lib/supabase.js';
+import { enforceRateLimit, clientIp, keyFingerprint } from './_lib/rate-limit.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { imageBase64, mimeType = 'image/jpeg' } = req.body || {};
+  const mime = normalizeImageMime(mimeType);
   const customOpenAiKey = req.headers['x-custom-openai-key'];
   const token = req.headers.authorization?.replace('Bearer ', '');
 
   if (!imageBase64 || typeof imageBase64 !== 'string') {
     return res.status(400).json({ error: 'No image data provided.' });
+  }
+  if (!isImagePayload(imageBase64)) {
+    return res.status(400).json({ error: 'Only image data can be described.' });
   }
   if (imageBase64.length > MAX_IMAGE_BASE64_CHARS) {
     return res.status(413).json({ error: 'This image is too large to describe. Try a smaller image.' });
@@ -47,6 +52,17 @@ export default async function handler(req, res) {
       ? createClient(url, key)
       : createClient(url, key, { global: { headers: { Authorization: `Bearer ${token}` } } });
 
+    // A diagram explanation is one paid vision call: throttle the account and its address before
+    // spending the quota read on it.
+    const gate = await enforceRateLimit(req, res, {
+      tier: 'vision',
+      identifiers: [
+        { bucket: 'user', value: userId },
+        { bucket: 'ip', value: clientIp(req) }
+      ]
+    });
+    if (!gate.ok) return;
+
     const { profile, error: profileErr } = await refreshProQuota(db, userId);
     if (profileErr) {
       const missingColumn = /pro_expires_at/i.test(profileErr.message || '');
@@ -71,6 +87,11 @@ export default async function handler(req, res) {
       await downgradeExpiredPro(db, userId);
     }
 
+    // Unconfirmed sign-ups must not spend host-paid vision calls.
+    if (!isPro && !user.email_confirmed_at) {
+      return res.status(403).json({ error: 'EMAIL_VERIFICATION_REQUIRED' });
+    }
+
     const allowance = monthlyAllowance(profile);
     const monthlyOps = profile?.summary_credits_remaining ?? allowance.ops;
     const topupOps = profile?.topup_ai_ops ?? 0;
@@ -93,6 +114,15 @@ export default async function handler(req, res) {
     userId = null;
     trialsMonthly = null;
     trialsTopup = null;
+
+    const gate = await enforceRateLimit(req, res, {
+      tier: 'vision',
+      identifiers: [
+        { bucket: 'byok', value: keyFingerprint(customOpenAiKey) },
+        { bucket: 'ip', value: clientIp(req) }
+      ]
+    });
+    if (!gate.ok) return;
   }
 
   const apiKey = customOpenAiKey || process.env.OPENAI_API_KEY;
@@ -103,7 +133,7 @@ export default async function handler(req, res) {
   try {
     const dataUrl = imageBase64.startsWith('data:')
       ? imageBase64
-      : `data:${mimeType};base64,${imageBase64}`;
+      : `data:${mime};base64,${imageBase64}`;
 
     const aiRes = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',

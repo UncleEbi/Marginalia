@@ -66,13 +66,19 @@ export default async function handler(req, res) {
   if (!ACTIONS.has(action)) {
     return res.status(400).json({ error: 'Unsupported auth action.' });
   }
-  if (!isPasswordUpdate && (!email || !email.includes('@'))) {
+  // Length ceilings on everything that becomes a rate-limit key, a hash input or a bearer token.
+  // An unbounded string is a free way to make the hasher and the counter store do work on the
+  // server's behalf, and a 254-character maximum is how long an address that can receive mail is.
+  if (!isPasswordUpdate && (!email || !email.includes('@') || email.length > 254)) {
     return res.status(400).json({ error: 'Enter a valid email address.' });
   }
   if (action !== 'reset' && !password) {
     return res.status(400).json({ error: 'Enter your password.' });
   }
-  if (isPasswordUpdate && !accessToken) {
+  if (password.length > 200) {
+    return res.status(400).json({ error: 'That password is too long (200 characters maximum).' });
+  }
+  if (isPasswordUpdate && (!accessToken || accessToken.length > 4096)) {
     return res.status(400).json({ error: 'This reset link is missing its session. Request a new one.' });
   }
 

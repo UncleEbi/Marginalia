@@ -305,7 +305,8 @@ export default async function handler(req, res) {
   const meta = event?.data?.metadata || {};
   if (meta.type === 'refill') {
     const packId = meta.pack_id;
-    const pack = REFILL_PACKS[packId];
+    // Own-property lookup so "__proto__"/"constructor" cannot resolve to an inherited object.
+    const pack = Object.hasOwn(REFILL_PACKS, packId) ? REFILL_PACKS[packId] : null;
     if (!pack) {
       console.warn(`Paystack webhook ignored (refill pack id "${packId || 'missing'}" not recognized).`);
       return res.status(200).send('Ignored: refill pack not recognized');

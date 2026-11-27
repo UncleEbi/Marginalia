@@ -1,8 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
 import { isProActive, downgradeExpiredPro, FREE_SUMMARY_CREDITS, refreshProQuota } from '../lib/pro-plan.js';
 import { AI_OPS_MONTHLY_COL, AI_OPS_TOPUP_COL, bothBucketsEmpty, monthlyAllowance, deductAiOp } from '../lib/quota-ops.js';
-import { MAX_IMAGE_BASE64_CHARS } from './_lib/image-payload.js';
+import { MAX_IMAGE_BASE64_CHARS, normalizeImageMime, isImagePayload } from './_lib/image-payload.js';
 import { supabaseConfig } from './_lib/supabase.js';
+import { enforceRateLimit, clientIp, keyFingerprint } from './_lib/rate-limit.js';
 
 // Flat image scans have no text layer, so the reader renders each PDF page to an image and posts it
 // here to get the text back. The credit gate is now the same two-bucket model used by /api/summarize
@@ -19,11 +20,15 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { imageBase64, mimeType = 'image/jpeg' } = req.body || {};
+  const mime = normalizeImageMime(mimeType);
   const customOpenAiKey = req.headers['x-custom-openai-key'];
   const token = req.headers.authorization?.replace('Bearer ', '');
 
   if (!imageBase64 || typeof imageBase64 !== 'string') {
     return res.status(400).json({ error: 'No image data provided.' });
+  }
+  if (!isImagePayload(imageBase64)) {
+    return res.status(400).json({ error: 'Only image data can be read.' });
   }
   if (imageBase64.length > MAX_IMAGE_BASE64_CHARS) {
     return res.status(413).json({ error: 'Scanned page image is too large to read.' });
@@ -58,6 +63,17 @@ export default async function handler(req, res) {
       ? createClient(url, key)
       : createClient(url, key, { global: { headers: { Authorization: `Bearer ${token}` } } });
 
+    // One page scan is one paid vision call, so a verified account and its address are throttled
+    // before the quota read, exactly as /api/tts does for narration.
+    const gate = await enforceRateLimit(req, res, {
+      tier: 'vision',
+      identifiers: [
+        { bucket: 'user', value: userId },
+        { bucket: 'ip', value: clientIp(req) }
+      ]
+    });
+    if (!gate.ok) return;
+
     const { profile, error: profileErr } = await refreshProQuota(db, userId);
     if (profileErr) {
       const missingColumn = /pro_expires_at/i.test(profileErr.message || '');
@@ -82,6 +98,11 @@ export default async function handler(req, res) {
       await downgradeExpiredPro(db, userId);
     }
 
+    // Unconfirmed sign-ups are disposable inboxes; they must not spend host-paid vision calls.
+    if (!isPro && !user.email_confirmed_at) {
+      return res.status(403).json({ error: 'EMAIL_VERIFICATION_REQUIRED' });
+    }
+
     const allowance = monthlyAllowance(profile);
     const monthlyOps = profile?.summary_credits_remaining ?? allowance.ops;
     const topupOps = profile?.topup_ai_ops ?? 0;
@@ -99,6 +120,16 @@ export default async function handler(req, res) {
     trialsMonthly = monthlyOps;
     trialsTopup = topupOps;
     trialsLeft = monthlyOps + topupOps;
+  } else {
+    // BYOK spends the reader's own key: throttle the key fingerprint and the client address.
+    const gate = await enforceRateLimit(req, res, {
+      tier: 'vision',
+      identifiers: [
+        { bucket: 'byok', value: keyFingerprint(customOpenAiKey) },
+        { bucket: 'ip', value: clientIp(req) }
+      ]
+    });
+    if (!gate.ok) return;
   }
 
   const apiKey = customOpenAiKey || process.env.OPENAI_API_KEY;
@@ -109,7 +140,7 @@ export default async function handler(req, res) {
   try {
     const dataUrl = imageBase64.startsWith('data:')
       ? imageBase64
-      : `data:${mimeType};base64,${imageBase64}`;
+      : `data:${mime};base64,${imageBase64}`;
 
     const aiRes = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',

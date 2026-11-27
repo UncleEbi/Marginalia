@@ -9,8 +9,14 @@ import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { enforceRateLimit, clientIp } from './_lib/rate-limit.js';
 import { supabaseConfig } from './_lib/supabase.js';
+import { appOrigin } from './_lib/app-origin.js';
 
 const MAX_PAYLOAD_BYTES = 2 * 1024 * 1024; // 2 MB
+const MAX_TITLE_CHARS = 300;
+const MAX_PAGES = 5000;
+// Tokens are minted below as 16 base64url characters. Anything else is not a token this service
+// issued, so it is refused before it becomes a database lookup.
+const SHARE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
 
 export default async function handler(req, res) {
   if (req.method !== 'POST' && req.method !== 'GET') {
@@ -43,8 +49,14 @@ async function handleCreate(req, res) {
   if (!doc_title || typeof doc_title !== 'string' || !doc_title.trim()) {
     return res.status(400).json({ error: 'Missing or invalid "doc_title".' });
   }
+  if (doc_title.trim().length > MAX_TITLE_CHARS) {
+    return res.status(400).json({ error: `"doc_title" is too long (limit ${MAX_TITLE_CHARS}).` });
+  }
   if (!payload || typeof payload !== 'object' || !payload.pages || !Array.isArray(payload.pages)) {
     return res.status(400).json({ error: 'Invalid study pack payload: "pages" array is required.' });
+  }
+  if (payload.pages.length === 0 || payload.pages.length > MAX_PAGES) {
+    return res.status(400).json({ error: `Invalid study pack payload: "pages" must hold 1-${MAX_PAGES} entries.` });
   }
 
   const { url, key } = supabaseConfig();
@@ -72,7 +84,10 @@ async function handleCreate(req, res) {
     share_token: shareToken,
     created_by: createdBy,
     doc_title: doc_title.trim(),
-    pack_type: pack_type || 'chapter',
+    // Free text from the body becomes an enum-like label the client renders: keep it a short string.
+    pack_type: typeof pack_type === 'string' && pack_type.trim()
+      ? pack_type.trim().slice(0, 40)
+      : 'chapter',
     payload,
     views_count: 0
   };
@@ -86,8 +101,9 @@ async function handleCreate(req, res) {
     return res.status(500).json({ error: 'Could not create study pack. Please try again.' });
   }
 
-  const origin = req.headers.origin || `https://${req.headers.host || 'marginalia.app'}`;
-  const shareUrl = `${origin}/?pack=${shareToken}`;
+  // Never build a share link from the request's Origin/Host: a forged header would produce a link
+  // that sends the token to someone else's domain.
+  const shareUrl = `${appOrigin(req)}/?pack=${shareToken}`;
 
   return res.status(200).json({
     ok: true,
@@ -100,6 +116,9 @@ async function handleGet(req, res) {
   const token = req.query?.token;
   if (!token || typeof token !== 'string' || !token.trim()) {
     return res.status(400).json({ error: 'Missing "token" query parameter.' });
+  }
+  if (!SHARE_TOKEN_PATTERN.test(token.trim())) {
+    return res.status(400).json({ error: 'Invalid "token" query parameter.' });
   }
 
   const { url, key } = supabaseConfig();

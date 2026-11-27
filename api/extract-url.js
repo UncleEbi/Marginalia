@@ -10,6 +10,7 @@ import { validatePublicUrl } from './_lib/ssrf.js';
 
 const MAX_BODY_BYTES = 3 * 1024 * 1024; // 3 MB max body size
 const FETCH_TIMEOUT_MS = 5000; // 5 seconds
+const MAX_REDIRECTS = 3;
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -43,13 +44,40 @@ export default async function handler(req, res) {
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
   try {
-    const response = await fetch(parsedUrl.toString(), {
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'MarginaliaReader/1.0 (Mozilla/5.0 compatible; WebArticleExtractor)',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+    // Redirects are followed by hand. fetch()'s automatic following happens AFTER the SSRF check
+    // above, so a public URL could simply bounce to http://169.254.169.254/ or a local address and
+    // the validated host would never be the one contacted. Every hop is validated exactly like the
+    // original URL instead, and the chain is capped.
+    let target = parsedUrl;
+    let response = null;
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      response = await fetch(target.toString(), {
+        signal: controller.signal,
+        redirect: 'manual',
+        headers: {
+          'User-Agent': 'MarginaliaReader/1.0 (Mozilla/5.0 compatible; WebArticleExtractor)',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+        }
+      });
+
+      if (response.status < 300 || response.status >= 400) break;
+
+      const location = response.headers.get('location');
+      if (!location) break; // a redirect without a target: let the !ok branch below report it
+      if (hop === MAX_REDIRECTS) {
+        return res.status(502).json({ error: 'The page redirected too many times.' });
       }
-    });
+      try {
+        target = await validatePublicUrl(new URL(location, target).toString());
+      } catch (redirectErr) {
+        return res.status(400).json({ error: redirectErr.message });
+      }
+      response = null;
+    }
+
+    if (!response) {
+      return res.status(502).json({ error: 'The page did not return a response.' });
+    }
 
     if (!response.ok) {
       return res.status(502).json({

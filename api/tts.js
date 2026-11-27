@@ -453,7 +453,8 @@ export default async function handler(req, res) {
   }
 
   const engine = body.engine || 'openai';
-  const voiceId = body.voiceId || body.voice || '';
+  // Provider voice ids are short slugs; cap what is forwarded to them.
+  const voiceId = String(body.voiceId || body.voice || '').slice(0, 64);
   const speed = clampSpeed(body.speed);
 
   const customOpenAiKey = req.headers['x-custom-openai-key'];
