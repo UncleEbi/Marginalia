@@ -6,6 +6,20 @@ import { JSDOM } from 'jsdom';
 const html = fs.readFileSync('public/index.html', 'utf8');
 const app = fs.readFileSync('public/app.js', 'utf8');
 
+// The drill loads its deck asynchronously — an IndexedDB open that fails, then a state refresh — so a
+// fixed sleep either flakes or hides a regression behind a generous wait. Poll for the condition and
+// fail with the state that never arrived.
+async function waitFor(predicate, label, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    let ok = false;
+    try { ok = predicate(); } catch { ok = false; }
+    if (ok) return;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  assert.fail(`timed out after ${timeoutMs}ms waiting for ${label}`);
+}
+
 test('public/index.html defines Audio Drill trigger, setup modal, and HUD', () => {
   // Triggers
   assert.match(html, /id="audioDrillBtn"/, 'has audioDrillBtn in header');
@@ -196,11 +210,12 @@ test('audioDrillModal shows empty-state guide at 0 cards and runs 2-card sample 
 
     // Open Audio Drill when no cards exist
     dom.window.document.getElementById('audioDrillBtn').click();
-    await new Promise((r) => setTimeout(r, 30));
 
     const emptyGuide = dom.window.document.getElementById('drillEmptyGuide');
     const startBtn = dom.window.document.getElementById('startAudioDrillBtn');
     const countLabel = dom.window.document.getElementById('drillAvailableCount');
+
+    await waitFor(() => emptyGuide.style.display === 'block', 'the empty-state guide to display');
 
     assert.equal(emptyGuide.style.display, 'block', 'empty-state guide displays when 0 cards exist');
     assert.equal(startBtn.disabled, true, 'Start Drill button disabled when 0 cards exist');
@@ -208,12 +223,16 @@ test('audioDrillModal shows empty-state guide at 0 cards and runs 2-card sample 
 
     // Launch 2-card sample drill
     dom.window.document.getElementById('trySampleDrillBtn').click();
-    await new Promise((r) => setTimeout(r, 20));
 
     const hud = dom.window.document.getElementById('audioDrillHud');
     const modal = dom.window.document.getElementById('audioDrillModal');
     const progress = dom.window.document.getElementById('drillProgressText');
     const prompt = dom.window.document.getElementById('drillPromptText');
+
+    await waitFor(
+      () => hud.style.display === 'flex' && /Sample Card 1/i.test(prompt.textContent),
+      'the sample drill to show its first card'
+    );
 
     assert.equal(modal.style.display, 'none', 'setup modal closes when sample drill launches');
     assert.equal(hud.style.display, 'flex', 'HUD opens for sample drill');
