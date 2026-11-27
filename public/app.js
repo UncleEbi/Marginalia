@@ -1904,6 +1904,13 @@ const drillReviewBtn = document.getElementById('drillReviewBtn');
 const drillPauseToggleBtn = document.getElementById('drillPauseToggleBtn');
 const drillKnownBtn = document.getElementById('drillKnownBtn');
 const drillStopBtn = document.getElementById('drillStopBtn');
+const drillProgressFill = document.getElementById('drillProgressFill');
+const drillCardBody = document.getElementById('drillCardBody');
+const drillControlRow = document.getElementById('drillControlRow');
+const drillSummary = document.getElementById('drillSummary');
+const drillSummaryStats = document.getElementById('drillSummaryStats');
+const drillAgainBtn = document.getElementById('drillAgainBtn');
+const drillDoneBtn = document.getElementById('drillDoneBtn');
 
 // Cognitive Modes
 const bionicModeSelect = document.getElementById('bionicModeSelect');
@@ -2897,6 +2904,33 @@ function showInstallHelp(title, steps) {
 })();
 
 // --- SHELF & RECENT MODALS ---
+
+// How far through a saved book the reader is, measured in words rather than pages: every page is
+// five sentences, so "page 4 of 12" says nothing about how much reading is left. The minutes use
+// MS_PER_WORD, the same pace the player dock estimates with, so the two clocks agree.
+function shelfReadingMomentum(book) {
+  const pages = book && Array.isArray(book.pages) ? book.pages : [];
+  const wordsIn = (items) => (items || []).reduce((sum, item) => sum + countWordsInItem(item), 0);
+
+  const totalWords = pages.reduce((sum, items) => sum + wordsIn(items), 0);
+  const page = Number(book && book.currentPage) || 0;
+  let readWords = 0;
+  for (let p = 0; p < page && p < pages.length; p++) readWords += wordsIn(pages[p]);
+  const activePage = pages[page] || [];
+  const sentence = Number(book && book.currentSentenceIdx) || 0;
+  for (let s = 0; s < sentence && s < activePage.length; s++) readWords += countWordsInItem(activePage[s]);
+
+  const percent = totalWords > 0 ? Math.min(100, Math.round((readWords / totalWords) * 100)) : 0;
+  const minutesLeft = Math.ceil(((totalWords - readWords) * MS_PER_WORD) / 60000);
+  let label;
+  if (totalWords === 0) label = 'Not started';
+  else if (minutesLeft <= 0) label = 'Finished';
+  else if (minutesLeft < 60) label = `${percent}% read · ~${minutesLeft} min left`;
+  else label = `${percent}% read · ~${Math.floor(minutesLeft / 60)}h ${minutesLeft % 60}m left`;
+
+  return { percent, label };
+}
+
 async function showShelfModal(mode = "shelf", options = {}) {
   closeDrawer();
   // Render from local data first. The shelf has to open instantly even with no network or a stalled
@@ -2910,12 +2944,14 @@ async function showShelfModal(mode = "shelf", options = {}) {
   } else {
     const displayBooks = mode === "recent" ? books.slice(0, 5) : books;
     displayBooks.forEach(b => {
+      const momentum = shelfReadingMomentum(b);
       const card = document.createElement('div');
       card.className = 'shelf-card';
       card.innerHTML = `
         <div class="shelf-card-info">
           <span class="shelf-card-title">${escapeHtml(b.title)}</span>
-          <span class="shelf-card-sub">Page ${(b.currentPage || 0) + 1} of ${b.pages.length}</span>
+          <span class="shelf-card-sub">Page ${(b.currentPage || 0) + 1} of ${b.pages.length} · ${escapeHtml(momentum.label)}</span>
+          <span class="shelf-progress-track" role="img" aria-label="${momentum.percent}% read"><span class="shelf-progress-fill" style="width:${momentum.percent}%"></span></span>
         </div>
         <div class="shelf-action-group">
           <button class="shelf-delete-btn" title="Delete document">🗑️</button>
@@ -3526,6 +3562,8 @@ let drillReviewQueue = [];
 let drillKnownCount = 0;
 let drillTimer = null;
 let drillState = 'idle'; // 'prompt', 'thinking', 'reveal', 'rating'
+let drillSessionCards = []; // the deck as dealt, so the summary can say how big it was
+let drillRateableCard = null; // the card on screen whose rating window is open; one rating per card
 
 function speakDrillText(text) {
   return new Promise((resolve) => {
@@ -3687,13 +3725,19 @@ function launchAudioDrillSession(cards, { albumTitle = currentDocName, shuffle =
   if (audioDrillModal) audioDrillModal.style.display = 'none';
 
   drillCards = sessionCards;
+  drillSessionCards = sessionCards;
   drillIndex = 0;
   drillReviewQueue = [];
   drillKnownCount = 0;
+  drillRateableCard = null;
   isAudioDrillActive = true;
   isAudioDrillPaused = false;
 
   if (audioDrillHud) audioDrillHud.style.display = 'flex';
+  if (drillSummary) drillSummary.style.display = 'none';
+  if (drillCardBody) drillCardBody.style.display = 'flex';
+  if (drillControlRow) drillControlRow.style.display = 'flex';
+  if (drillProgressFill) drillProgressFill.style.width = '0%';
   syncMediaSessionState(true);
 
   if ('mediaSession' in navigator && typeof MediaMetadata !== 'undefined') {
@@ -3753,6 +3797,9 @@ async function runDrillCard(idx) {
   // State 1: Prompt
   drillState = 'prompt';
   if (drillProgressText) drillProgressText.textContent = `Card ${drillIndex + 1} of ${drillCards.length}`;
+  if (drillProgressFill) {
+    drillProgressFill.style.width = `${Math.round(((idx + 1) / Math.max(1, drillCards.length)) * 100)}%`;
+  }
   if (drillPromptText) drillPromptText.textContent = card.prompt;
   if (drillAnswerText) drillAnswerText.textContent = 'Thinking...';
   if (drillAnswerBox) drillAnswerBox.style.opacity = '0.5';
@@ -3760,8 +3807,11 @@ async function runDrillCard(idx) {
   await speakDrillText(`Card ${drillIndex + 1} of ${drillCards.length}. ${card.prompt}`);
   if (!isAudioDrillActive || isAudioDrillPaused) return;
 
-  // State 2: Thinking Pause
+  // State 2: Thinking Pause. The prompt has been read out, so this card may now be rated once.
+  // Opening the window only after the prompt keeps a double press from landing on the next card
+  // before the reader has even heard its question.
   drillState = 'thinking';
+  drillRateableCard = card;
   const pauseSec = parseInt(drillPauseSelect ? drillPauseSelect.value : '5', 10) || 5;
   for (let s = pauseSec; s > 0; s--) {
     if (!isAudioDrillActive || isAudioDrillPaused) return;
@@ -3790,10 +3840,14 @@ async function runDrillCard(idx) {
 
 function rateDrillCard(known) {
   if (!isAudioDrillActive) return;
+  const card = drillCards[drillIndex];
+  // One rating per presentation. A double tap, or a headset Next press that arrives while the next
+  // prompt is still being read out, must not rate the same card twice or master a card unseen.
+  if (!card || card !== drillRateableCard) return;
+  drillRateableCard = null;
   if (drillTimer) { clearTimeout(drillTimer); drillTimer = null; }
   cancelDrillSpeech();
 
-  const card = drillCards[drillIndex];
   if (card) {
     if (known) {
       drillKnownCount++;
@@ -3827,14 +3881,34 @@ function resumeAudioDrill() {
 }
 
 async function finishAudioDrill() {
-  await speakDrillText(`Drill complete! You mastered ${drillKnownCount} cards.`);
-  showToast(`🎉 Drill complete! ${drillKnownCount} cards mastered.`);
-  stopAudioDrill();
+  // Peak-end: the drill ends on a summary card the reader can read, instead of a toast that
+  // vanishes the moment the last card is rated.
+  await speakDrillText(`Drill complete! You mastered ${drillKnownCount} of ${drillSessionCards.length} cards.`);
+  showDrillSummary();
+}
+
+function showDrillSummary() {
+  isAudioDrillActive = false;
+  isAudioDrillPaused = false;
+  drillRateableCard = null;
+  if (drillTimer) { clearTimeout(drillTimer); drillTimer = null; }
+  cancelDrillSpeech();
+  if (drillProgressText) drillProgressText.textContent = 'Drill complete';
+  if (drillProgressFill) drillProgressFill.style.width = '100%';
+  if (drillSummaryStats) {
+    const mastered = drillKnownCount;
+    drillSummaryStats.textContent = `${mastered} of ${drillSessionCards.length} cards mastered`;
+  }
+  if (drillCardBody) drillCardBody.style.display = 'none';
+  if (drillControlRow) drillControlRow.style.display = 'none';
+  if (drillSummary) drillSummary.style.display = 'block';
+  syncMediaSessionState(false);
 }
 
 function stopAudioDrill() {
   isAudioDrillActive = false;
   isAudioDrillPaused = false;
+  drillRateableCard = null;
   if (drillTimer) { clearTimeout(drillTimer); drillTimer = null; }
   cancelDrillSpeech();
   if (audioDrillHud) audioDrillHud.style.display = 'none';
@@ -3871,6 +3945,18 @@ if (drillPauseToggleBtn) {
 
 if (drillStopBtn) {
   drillStopBtn.addEventListener('click', () => {
+    stopAudioDrill();
+  });
+}
+
+if (drillAgainBtn) {
+  drillAgainBtn.addEventListener('click', () => {
+    launchAudioDrillSession(drillSessionCards, { shuffle: false });
+  });
+}
+
+if (drillDoneBtn) {
+  drillDoneBtn.addEventListener('click', () => {
     stopAudioDrill();
   });
 }

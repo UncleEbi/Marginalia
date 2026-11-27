@@ -1113,12 +1113,15 @@
     <div style="display:flex; justify-content:space-between; align-items:center;">
       <div style="display:flex; align-items:center; gap:0.5rem;">
         <span style="font-size:1.3rem;">🎧</span>
-        <span id="drillProgressText" style="font-weight:600; font-size:0.95rem; color:var(--accent, #6366f1);">Card 1 of 1</span>
+        <span style="display:flex; flex-direction:column; gap:0.3rem;">
+          <span id="drillProgressText" style="font-weight:600; font-size:0.95rem; color:var(--accent, #6366f1);">Card 1 of 1</span>
+          <span class="drill-progress-track" role="img" aria-label="Drill progress"><span id="drillProgressFill" class="drill-progress-fill"></span></span>
+        </span>
       </div>
       <button id="drillStopBtn" type="button" style="padding:0.35rem 0.75rem; border-radius:6px; background:rgba(255,255,255,0.15); border:1px solid rgba(255,255,255,0.25); color:#fff; cursor:pointer; font-size:0.82rem;">✕ Exit Drill</button>
     </div>
 
-    <div style="max-width:600px; margin:0 auto; text-align:center; display:flex; flex-direction:column; gap:1.2rem; width:100%;">
+    <div id="drillCardBody" style="max-width:600px; margin:0 auto; text-align:center; display:flex; flex-direction:column; gap:1.2rem; width:100%;">
       <div id="drillPromptBox" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); border-radius:12px; padding:1.25rem;">
         <span style="font-size:0.75rem; text-transform:uppercase; letter-spacing:1px; color:rgba(255,255,255,0.5); display:block; margin-bottom:0.4rem;">Question / Prompt</span>
         <div id="drillPromptText" style="font-size:1.15rem; font-weight:500; line-height:1.5;">Prompt text</div>
@@ -1134,7 +1137,16 @@
       </div>
     </div>
 
-    <div style="max-width:500px; margin:0 auto; width:100%; display:flex; justify-content:center; gap:0.75rem; flex-wrap:wrap;">
+    <div id="drillSummary" style="display:none; max-width:520px; margin:auto; width:100%; text-align:center; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); border-radius:12px; padding:1.35rem 1.25rem;">
+      <div style="font-size:1.1rem; font-weight:600; margin-bottom:0.35rem;">Drill complete</div>
+      <div id="drillSummaryStats" style="font-size:0.88rem; color:rgba(255,255,255,0.7); margin-bottom:1rem;">0 cards mastered</div>
+      <div style="display:flex; justify-content:center; gap:0.75rem; flex-wrap:wrap;">
+        <button id="drillAgainBtn" type="button" style="padding:0.55rem 1rem; border-radius:8px; background:rgba(255,255,255,0.12); border:1px solid rgba(255,255,255,0.25); color:#fff; font-weight:600; cursor:pointer; font-size:0.88rem;">↻ Drill these again</button>
+        <button id="drillDoneBtn" type="button" style="padding:0.55rem 1.1rem; border-radius:8px; background:var(--accent, #6366f1); border:none; color:#fff; font-weight:600; cursor:pointer; font-size:0.88rem;">Done</button>
+      </div>
+    </div>
+
+    <div id="drillControlRow" style="max-width:500px; margin:0 auto; width:100%; display:flex; justify-content:center; gap:0.75rem; flex-wrap:wrap;">
       <button id="drillReviewBtn" type="button" style="flex:1; min-width:120px; padding:0.6rem 1rem; border-radius:8px; background:rgba(239,68,68,0.25); border:1px solid #ef4444; color:#fca5a5; font-weight:600; cursor:pointer; font-size:0.9rem;">↺ Review (Back)</button>
       <button id="drillPauseToggleBtn" type="button" style="padding:0.6rem 1rem; border-radius:8px; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:#fff; cursor:pointer; font-size:0.9rem;">⏸ Pause</button>
       <button id="drillKnownBtn" type="button" style="flex:1; min-width:120px; padding:0.6rem 1rem; border-radius:8px; background:rgba(16,185,129,0.25); border:1px solid #10b981; color:#6ee7b7; font-weight:600; cursor:pointer; font-size:0.9rem;">✓ Known (Next)</button>

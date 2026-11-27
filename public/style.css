@@ -1287,6 +1287,38 @@ button:not(:disabled):not(.player-btn-main):active {
 }
 .shelf-card-sub { font-size: 0.74rem; color: var(--text-muted); }
 
+/* How far into the book the reader already is, so a shelf of half-read books looks like progress
+   rather than a backlog. */
+.shelf-progress-track {
+  display: block;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+.shelf-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--transition);
+}
+
+.drill-progress-track {
+  display: block;
+  width: 150px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+  overflow: hidden;
+}
+.drill-progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent, #6366f1);
+  transition: width var(--transition);
+}
+
 .shelf-action-group {
   display: flex;
   align-items: center;
