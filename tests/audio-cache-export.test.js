@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { extractFunction } from './helpers/extract-function.mjs';
 
 const read = (rel) => readFileSync(fileURLToPath(new URL(`../${rel}`, import.meta.url)), 'utf8');
 
@@ -66,9 +67,74 @@ test('public/app.js restricts MP3 export to pro or BYOK users', () => {
   assert.match(app, /openPaywall\(\)/, 'opens paywall when user is not pro/byok');
 });
 
-test('public/app.js stitches audio chunks and triggers chapter/summary download', () => {
+test('public/app.js triggers the chapter/summary download with a matching extension', () => {
   const app = read('public/app.js');
-  assert.match(app, /new Blob\(chunks,\s*\{\s*type:\s*mime\s*\}\)/, 'stitches audio chunks into a single Blob');
   assert.match(app, /a\.download\s*=\s*`\$\{safeTitle\}\$\{ext\}`/, 'sets download filename');
+  assert.match(app, /const ext = \(finalBlob\.type \|\| ''\)\.includes\('wav'\) \? '\.wav' : '\.mp3'/, 'the extension follows the file Studio actually produced');
   assert.match(app, /getActiveChapterSentences/, 'getActiveChapterSentences extracts sentences for the active chapter');
+});
+
+test('the export dialog names the real format instead of always claiming .mp3', () => {
+  const html = read('public/index.html');
+  assert.match(html, /id="audioExportTitle"/, 'the dialog title is addressable');
+  assert.ok(!html.includes('Exporting Audio (.mp3)'), 'no hard-coded mp3 claim when the dialog opens');
+  const exportFn = extractFunction('exportAudioForSentences').toString();
+  assert.match(exportFn, /engine === 'wasm' \? '\.wav' : '\.mp3'/, 'Studio exports say .wav, the cloud voice says .mp3');
+});
+
+test('stitchExportChunks writes one WAV header, keeps the seam, and frees its sources', async () => {
+  // The stitcher is a top-level function of a classic script, so hand the extracted copy the two
+  // helpers it calls (a Function body resolves free identifiers on globals) and run the real code.
+  const encode = extractFunction('encodeMonoWavBuffer');
+  const decode = extractFunction('extractWavPcm');
+  globalThis.encodeMonoWavBuffer = encode;
+  globalThis.extractWavPcm = decode;
+  try {
+    const stitch = extractFunction('stitchExportChunks');
+    const first = Float32Array.from({ length: 120 }, (_, i) => Math.sin(i / 6) * 0.5);
+    const second = Float32Array.from({ length: 80 }, (_, i) => Math.cos(i / 9) * 0.4);
+    const chunks = [
+      new Blob([encode(first, 24000)], { type: 'audio/wav' }),
+      new Blob([encode(second, 24000)], { type: 'audio/wav' }),
+    ];
+
+    const blob = await stitch(chunks, 'wasm');
+    const buffer = await blob.arrayBuffer();
+    const view = new DataView(buffer);
+
+    assert.equal(blob.type, 'audio/wav');
+    assert.equal(buffer.byteLength, 44 + (first.length + second.length) * 2, 'one header for the whole chapter');
+    let riffCount = 0;
+    for (let o = 0; o + 4 <= buffer.byteLength; o++) {
+      if (view.getUint32(o, false) === 0x52494646) riffCount++; // 'RIFF'
+    }
+    assert.equal(riffCount, 1, 'a header per sentence is what makes players stop after sentence one');
+
+    const pcm = decode(buffer);
+    assert.ok(pcm, 'the stitched file parses as WAV');
+    assert.equal(pcm.sampleRate, 24000);
+    assert.equal(pcm.pcmData.length, first.length + second.length, 'no samples lost at the seam');
+    assert.ok(Math.abs(pcm.pcmData[first.length - 1] - first[first.length - 1]) < 1e-3, 'the seam keeps the last sample of the first clip');
+    assert.ok(Math.abs(pcm.pcmData[first.length] - second[0]) < 1e-3, 'and starts the second clip immediately after it');
+
+    assert.deepEqual(chunks, [], 'each source blob is released as it is decoded');
+  } finally {
+    delete globalThis.encodeMonoWavBuffer;
+    delete globalThis.extractWavPcm;
+  }
+});
+
+test('cancelling an export aborts the in-flight /api/tts request so it is not billed', () => {
+  const exportFn = extractFunction('exportAudioForSentences').toString();
+  assert.match(exportFn, /new AbortController\(\)/, 'the export needs a cancel handle for its request');
+  assert.match(exportFn, /controller\.abort\(\)/, 'the cancel button drops the request on the wire');
+  assert.match(
+    exportFn,
+    /getNeuralAudioSrc\(s, \{ speed, signal: controller\.signal \}\)/,
+    'the abort signal reaches the fetch'
+  );
+  assert.match(exportFn, /err\.name === 'AbortError'/, 'an aborted request reads as cancelled, not failed');
+  assert.match(exportFn, /new MutationObserver\(\(\) => \{/, 'closing the dialog has to be observed');
+  assert.match(exportFn, /if \(exportModal\.style\.display === 'none'\) onCancel\(\)/, 'hiding the dialog cancels the export');
+  assert.match(exportFn, /if \(modalObserver\) modalObserver\.disconnect\(\)/, 'and the observer is released');
 });

@@ -3578,10 +3578,12 @@ function speakDrillText(text) {
       utter.onerror = () => resolve();
       browserSpeech.speak(utter);
     } else {
-      getNeuralAudioSrc(spoken).then((src) => {
+      const drillStudio = activeEngine === 'wasm';
+      // A Studio clip already carries its tempo; the media element must not retime it again.
+      getNeuralAudioSrc(spoken, drillStudio ? { speed: playbackSpeed } : {}).then((src) => {
         if (!isAudioDrillActive) return resolve();
         audioElement.src = src;
-        audioElement.playbackRate = playbackSpeed;
+        audioElement.playbackRate = drillStudio ? 1 : playbackSpeed;
         audioElement.volume = playbackVolume;
         audioElement.onended = () => resolve();
         audioElement.onerror = () => resolve();
@@ -5698,10 +5700,16 @@ const audioInflight = new Map();
 const PRELOAD_AHEAD = 3;
 const AUDIO_CACHE_MAX = 12;
 
-function neuralCacheKey(text) {
-  // speed is applied on the phone (playbackRate), so cached audio is reusable at any speed
+function neuralCacheKey(text, speedOverride = null) {
+  // Studio bakes the reading speed into the clip, so 1x and 2x are different recordings and need
+  // different keys. The cloud voice is retimed by the media element (pitch preserved), so it is
+  // always cached at 1x.
   const normalized = typeof normalizeForSpeech === 'function' ? normalizeForSpeech(text) : text;
-  return `${activeEngine}_${voicePicker.value}_${normalized}`;
+  const speed = speedOverride != null ? speedOverride : (activeEngine === 'wasm' ? playbackSpeed : 1);
+  // Studio names its clips with the voice it actually synthesized, so a leftover cloud voice id in
+  // the picker maps to heart here too; otherwise the same clip would split across two keys.
+  const voice = activeEngine === 'wasm' ? wasmCacheVoiceId() : voicePicker.value;
+  return `${activeEngine}_${voice}_${speed}_${normalized}`;
 }
 
 // The Studio voice a clip was synthesized with: a leftover cloud voice id in the picker falls back
@@ -5871,7 +5879,7 @@ function getWasmTtsWorker() {
   return wasmTtsWorker;
 }
 
-function synthInWasmWorker(text, voice, priority = 'high') {
+function synthInWasmWorker(text, voice, priority = 'high', speed = 1) {
   const worker = getWasmTtsWorker();
   if (!worker) return null;
   const id = ++wasmWorkerJobId;
@@ -5882,6 +5890,7 @@ function synthInWasmWorker(text, voice, priority = 'high') {
       id,
       text,
       voice,
+      speed,
       sessionId: wasmSessionId,
       priority
     });
@@ -5915,15 +5924,16 @@ async function stitchWasmClauseStream(stream, text) {
 
   const src = encodeWasmPcmToBlobUrl(joined, sampleRate);
   if (!src) return null;
+  const speed = stream.speed || 1;
   stream.mergedSrc = src;
-  cacheAudio(neuralCacheKey(text), src);
+  cacheAudio(neuralCacheKey(text, speed), src);
   // The stitched clip is the sentence's only copy from here: with mergedSrc set nothing schedules
   // or replays the clauses, so their PCM and chunk 0's own clip are just a second copy.
   chunks.forEach((c) => { if (c) c.pcm = null; });
   if (stream.src) releaseAudioSrc(stream.src);
 
   try {
-    const cacheKey = await computeAudioCacheKey('wasm_kokoro_v1', wasmCacheVoiceId(), 1, text);
+    const cacheKey = await computeAudioCacheKey('wasm_kokoro_v1', wasmCacheVoiceId(), speed, text);
     if (src.startsWith('blob:')) {
       const blob = await (await fetch(src)).blob();
       if (blob && blob.size) saveAudioToIdbCache(cacheKey, blob).catch(() => { });
@@ -5993,6 +6003,13 @@ let wasmScheduledEndTime = 0;
 let wasmSessionId = 0;
 const wasmActiveSourceNodes = new Set();
 const wasmScheduledChunks = new Map();
+// Studio keeps a fixed *wall-clock* lead of audio scheduled ahead of the playhead. One sentence is
+// not a fixed lead: clips are synthesized at the reading speed, so at 2x the same sentence is half
+// as many seconds and the queue drains twice as fast. Measure the lead in seconds instead.
+const WASM_AHEAD_SECONDS = 6;
+function wasmQueuedSeconds(currentTime, scheduledEndTime) {
+  return Math.max(0, scheduledEndTime - currentTime);
+}
 
 function getWasmAudioCtx() {
   if (typeof window === 'undefined') return null;
@@ -6074,6 +6091,7 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
   const trimmedText = String(text || '').trim().replace(/\s+/g, ' ');
   if (!trimmedText && typeof document !== 'undefined') return '';
   const priority = opts.priority || 'high';
+  const speed = Number(opts.speed) > 0 ? Number(opts.speed) : 1;
 
   const finalizePcmAndEncode = encodeWasmPcmToBlobUrl;
 
@@ -6082,7 +6100,7 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
 
     // 1. Prefer dedicated Web Worker so neural inference never freezes the UI thread
     if (typeof synthInWasmWorker === 'function') {
-      const workerPromise = synthInWasmWorker(trimmedText, kokoroVoice, priority);
+      const workerPromise = synthInWasmWorker(trimmedText, kokoroVoice, priority, speed);
       if (workerPromise) {
         try {
           const { pcmData, sampleRate, stream } = await workerPromise;
@@ -6094,7 +6112,8 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
             // Keep the clause run next to the first clause's clip so the player can pick up the
             // remaining clauses as the worker finishes them (and replay from memory afterwards).
             stream.src = src;
-            const streamKey = neuralCacheKey(trimmedText);
+            stream.speed = speed; // replay and stitching must reuse the speed this clip was built at
+            const streamKey = neuralCacheKey(trimmedText, speed);
             wasmClauseStreams.set(streamKey, stream);
             while (wasmClauseStreams.size > 8) {
               const oldest = wasmClauseStreams.keys().next().value;
@@ -6128,7 +6147,7 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
       if (activeEngine === 'wasm' && preloadStatus) {
         preloadStatus.textContent = 'Synthesizing...';
       }
-      const generated = await tts.generate(trimmedText, { voice: kokoroVoice, speed: 1 });
+      const generated = await tts.generate(trimmedText, { voice: kokoroVoice, speed });
       const rawPcm = generated && (generated.audio || generated.data);
       if (!rawPcm || !rawPcm.length) {
         throw new Error('On-device voice returned empty audio for this sentence.');
@@ -6170,14 +6189,19 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
 async function getNeuralAudioSrc(text) {
   const opts = (arguments.length > 1 && arguments[1]) || {};
   const spokenText = normalizeForSpeech(text);
-  const key = neuralCacheKey(spokenText);
-  const hit = audioPreloadCache.get(key);
-  if (hit && hit.src) return hit.src;
-  if (audioInflight.has(key)) return audioInflight.get(key);
 
   const engine = activeEngine;
   const voiceId = engine === 'wasm' ? wasmCacheVoiceId() : voicePicker.value;
-  const speed = 1;
+  // Studio synthesizes at the reading speed so its pitch stays natural; the cloud voice is retimed
+  // at playout by the media element, so its request and cache stay at 1x.
+  const speed = engine === 'wasm' ? (Number(opts.speed) > 0 ? Number(opts.speed) : playbackSpeed) : 1;
+
+  // Keyed by the speed actually being synthesized, not the reader's current speed: an export at 1x
+  // while the reader sits at 2x must not cache its clip under the 2x key.
+  const key = neuralCacheKey(spokenText, speed);
+  const hit = audioPreloadCache.get(key);
+  if (hit && hit.src) return hit.src;
+  if (audioInflight.has(key)) return audioInflight.get(key);
 
   // 1. Check persistent IndexedDB audio cache FIRST (cache-first playback)
   const cacheEngine = engine === 'wasm' ? 'wasm_kokoro_v1' : engine;
@@ -6213,7 +6237,7 @@ async function getNeuralAudioSrc(text) {
 
   if (engine === 'wasm') {
     const job = (async () => {
-      const src = await synthOnDeviceSpeech(spokenText, voiceId, { priority: opts.priority || 'high' });
+      const src = await synthOnDeviceSpeech(spokenText, voiceId, { priority: opts.priority || 'high', speed });
       // A streamed clip is only the first clause: caching it would replay half a sentence.
       if (!wasmClauseStreams.has(key)) {
         try {
@@ -6365,20 +6389,44 @@ async function exportAudioForSentences(sentences, titlePrefix) {
   const statusText = document.getElementById('audioExportStatusText');
   const progressBar = document.getElementById('audioExportProgressBar');
   const cancelBtn = document.getElementById('audioExportCancelBtn');
+  const titleEl = document.getElementById('audioExportTitle');
 
   if (exportModal) exportModal.style.display = 'flex';
   if (progressBar) progressBar.style.width = '0%';
 
   let cancelled = false;
-  const onCancel = () => { cancelled = true; };
+  // Cancel must also drop the request that is already on the wire: the loop only checks the flag
+  // between sentences, so a cancelled export would otherwise still pay for the sentence it is on.
+  const controller = new AbortController();
+  const onCancel = () => {
+    cancelled = true;
+    try { controller.abort(); } catch { }
+  };
+  const finishCancelled = () => {
+    if (statusText) statusText.textContent = "Export cancelled.";
+    setTimeout(() => { if (exportModal) exportModal.style.display = 'none'; }, 800);
+  };
   if (cancelBtn) cancelBtn.onclick = onCancel;
 
+  // The dialog can also be dismissed without the Cancel button (the backdrop is a generic
+  // .modal-overlay handler), which used to leave the export running and billing behind a hidden
+  // dialog. Watch the modal itself so every close path reaches the same abort.
+  let modalObserver = null;
+  if (exportModal && typeof MutationObserver !== 'undefined') {
+    modalObserver = new MutationObserver(() => {
+      if (exportModal.style.display === 'none') onCancel();
+    });
+    modalObserver.observe(exportModal, { attributes: true, attributeFilter: ['style'] });
+  }
+
   const engine = activeEngine;
+  // Studio downloads a .wav, the cloud voice an .mp3: say which one this export is actually making.
+  if (titleEl) titleEl.textContent = `⬇️ Exporting Audio (${engine === 'wasm' ? '.wav' : '.mp3'})`;
   const cacheEngine = engine === 'wasm' ? 'wasm_kokoro_v1' : engine;
   const voiceId = (engine === 'wasm' && (!voicePicker.value || !['heart', 'michael', 'emma'].includes(voicePicker.value)))
     ? 'heart'
     : voicePicker.value;
-  const speed = 1;
+  const speed = 1; // exports are always normal pace
 
   const chunks = [];
   const total = sentences.length;
@@ -6394,7 +6442,7 @@ async function exportAudioForSentences(sentences, titlePrefix) {
       let blob = await getAudioFromIdbCache(cacheKey);
 
       if (!blob) {
-        const src = await getNeuralAudioSrc(s);
+        const src = await getNeuralAudioSrc(s, { speed, signal: controller.signal }); // exports are always normal pace
         if (src.startsWith('blob:') || src.startsWith('data:')) {
           const resp = await fetch(src);
           blob = await resp.blob();
@@ -6405,8 +6453,7 @@ async function exportAudioForSentences(sentences, titlePrefix) {
     }
 
     if (cancelled) {
-      if (statusText) statusText.textContent = "Export cancelled.";
-      setTimeout(() => { if (exportModal) exportModal.style.display = 'none'; }, 800);
+      finishCancelled();
       return;
     }
 
@@ -6417,14 +6464,13 @@ async function exportAudioForSentences(sentences, titlePrefix) {
     if (statusText) statusText.textContent = "Stitching audio file...";
     if (progressBar) progressBar.style.width = '100%';
 
-    const mime = chunks[0]?.type || 'audio/mpeg';
-    const finalBlob = new Blob(chunks, { type: mime });
+    const finalBlob = await stitchExportChunks(chunks, engine);
 
     const downloadUrl = URL.createObjectURL(finalBlob);
     const a = document.createElement('a');
     a.href = downloadUrl;
     const safeTitle = (titlePrefix || 'export').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    const ext = mime.includes('wav') ? '.wav' : '.mp3';
+    const ext = (finalBlob.type || '').includes('wav') ? '.wav' : '.mp3';
     a.download = `${safeTitle}${ext}`;
     document.body.appendChild(a);
     a.click();
@@ -6436,11 +6482,61 @@ async function exportAudioForSentences(sentences, titlePrefix) {
       if (exportModal) exportModal.style.display = 'none';
     }, 800);
   } catch (err) {
+    // An aborted fetch rejects here; that is the cancel button working, not an export failure.
+    if (cancelled || err.name === 'AbortError') {
+      finishCancelled();
+      return;
+    }
     if (statusText) statusText.textContent = `Error: ${err.message}`;
     alert(`Export failed: ${err.message}`);
   } finally {
+    if (modalObserver) modalObserver.disconnect();
     if (cancelBtn) cancelBtn.onclick = null;
   }
+}
+
+// Every Studio clip is a complete WAV file with its own header, so gluing the blobs together would
+// leave 44 stray bytes per sentence and a RIFF length describing only the first clip (players stop
+// after it). Decode each clip to 16-bit samples and write one header for the whole chapter. MP3
+// frames concatenate correctly as they are, so the cloud path only needs the plain Blob.
+async function stitchExportChunks(chunks, engine) {
+  const sourceMime = chunks[0]?.type || 'audio/mpeg';
+  if (engine !== 'wasm' && !sourceMime.includes('wav')) return new Blob(chunks, { type: sourceMime });
+
+  const parts = [];
+  let sampleRate = 0;
+  let totalSamples = 0;
+  // shift(), not for-of: the array holds the only reference to each source blob, so consuming it
+  // frees the clip before the next one is decoded. Keeping it would hold the whole chapter as WAV
+  // blobs *and* 16-bit samples at once.
+  while (chunks.length) {
+    const chunk = chunks.shift();
+    let parsed = null;
+    try { parsed = extractWavPcm(await chunk.arrayBuffer()); } catch { }
+    // A clip that will not decode cannot be repaired once the source is gone, and a changed rate
+    // would mean two different WAVs wearing one header; both are worth failing loudly over.
+    if (!parsed) throw new Error('Could not read the synthesized audio for this export.');
+    if (sampleRate && parsed.sampleRate !== sampleRate) {
+      throw new Error('The synthesized audio changed sample rate mid-export.');
+    }
+    sampleRate = parsed.sampleRate;
+    const samples = parsed.pcmData;
+    const int16 = new Int16Array(samples.length);
+    for (let i = 0; i < samples.length; i++) {
+      const sample = Number.isFinite(samples[i]) ? Math.max(-1, Math.min(1, samples[i])) : 0;
+      int16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+    }
+    totalSamples += int16.length;
+    parts.push(int16);
+  }
+
+  // The encoder's header is exactly 44 bytes with zero-length fields, so patch the two lengths the
+  // chapter now knows and let the browser lay the parts out; a Blob of buffers is not one JS array.
+  const header = encodeMonoWavBuffer(new Float32Array(0), sampleRate);
+  const view = new DataView(header);
+  view.setUint32(4, 36 + totalSamples * 2, true);
+  view.setUint32(40, totalSamples * 2, true);
+  return new Blob([header, ...parts.map((part) => part.buffer)], { type: 'audio/wav' });
 }
 
 const exportChapterMp3Btn = document.getElementById('exportChapterMp3Btn');
@@ -6663,10 +6759,11 @@ async function speakServerless(text, opts = {}) {
         const audioBuffer = createWasmAudioBuffer(audioCtx, pcmData, pcmRate);
         bufferDuration = audioBuffer.duration;
 
-        // 2. Prevent Double Speed Distortion: speed is applied in ONE place only (AudioBufferSourceNode.playbackRate)
+        // 2. Studio clips are synthesized at the reading speed, so playout is always real-time.
+        // Retiming here would resample the buffer and raise its pitch (the chipmunk effect).
         const sourceNode = audioCtx.createBufferSource();
         sourceNode.buffer = audioBuffer;
-        sourceNode.playbackRate.value = playbackSpeed;
+        sourceNode.playbackRate.value = 1;
         sourceNode.connect(wasmGainNode || audioCtx.destination);
 
         const now = audioCtx.currentTime;
@@ -6674,8 +6771,7 @@ async function speakServerless(text, opts = {}) {
         wasmActiveSourceNodes.add(sourceNode);
         sourceNode.start(startTime);
 
-        const chunkDur = bufferDuration / playbackSpeed;
-        wasmScheduledEndTime = startTime + chunkDur;
+        wasmScheduledEndTime = startTime + bufferDuration;
         if (!standalone) {
           wasmScheduledChunks.set(schedKey, { startTime, duration: bufferDuration });
         }
@@ -6692,7 +6788,7 @@ async function speakServerless(text, opts = {}) {
       }
 
       const wordsArr = text.trim().split(/\s+/).filter(w => w.length > 0);
-      let timeline = computeWordTimeline(wordsArr, playbackSpeed, bufferDuration).timeline;
+      let timeline = computeWordTimeline(wordsArr, 1, bufferDuration).timeline;
       // The karaoke run grows with the stream: each clause contributes its own words and duration.
       let karaokeEnd = bufferDuration;
 
@@ -6705,7 +6801,7 @@ async function speakServerless(text, opts = {}) {
             duration,
             offset: offsetSec
           });
-          timeline = buildClauseKaraokeTimeline(clauseRuns, wordsArr, playbackSpeed);
+          timeline = buildClauseKaraokeTimeline(clauseRuns, wordsArr, 1);
         };
         pushChunkTimeline(clauseStream.chunks[0] ? clauseStream.chunks[0].text : text, bufferDuration, 0);
         scheduleWasmClauseStream(audioCtx, clauseStream, {
@@ -6717,9 +6813,9 @@ async function speakServerless(text, opts = {}) {
       }
 
       startWordKaraokeLoop(
-        () => (audioCtx.currentTime - startTime) * playbackSpeed,
+        () => (audioCtx.currentTime - startTime), // clip time is real time: the tempo is already in the buffer
         () => timeline,
-        () => myToken === speakToken && isPlaying && (audioCtx.currentTime - startTime) * playbackSpeed <= karaokeEnd + 0.5
+        () => myToken === speakToken && isPlaying && (audioCtx.currentTime - startTime) <= karaokeEnd + 0.5
       );
 
       // 4. Smooth Buffer Scheduling: Pre-synthesize the NEXT sentence chunk while the current chunk is playing
@@ -6738,9 +6834,11 @@ async function speakServerless(text, opts = {}) {
     // lands. The highlight itself is driven from requestAnimationFrame: currentTime is sampled
     // ~60 times a second, where ontimeupdate fires about four times a second and left the karaoke
     // visibly trailing the voice at 1.5x and above.
+    // A Studio clip already carries its tempo; only the cloud media element needs retiming.
+    const mediaRate = activeEngine === 'wasm' ? 1 : playbackSpeed;
     const buildTimeline = () => {
       if (!timeline && audioElement.duration && Number.isFinite(audioElement.duration)) {
-        timeline = computeWordTimeline(wordsArr, playbackSpeed, audioElement.duration).timeline;
+        timeline = computeWordTimeline(wordsArr, mediaRate, audioElement.duration).timeline;
       }
       return timeline;
     };
@@ -6756,7 +6854,7 @@ async function speakServerless(text, opts = {}) {
 
     audioElement.preload = 'auto';
     audioElement.src = audioSrc;
-    audioElement.playbackRate = playbackSpeed;
+    audioElement.playbackRate = mediaRate;
     audioElement.volume = playbackVolume;
     await audioElement.play();
 
@@ -6797,58 +6895,68 @@ async function speakServerless(text, opts = {}) {
 
 async function scheduleNextWasmChunkBackToBack(audioCtx, sessionAtStart) {
   if (sessionAtStart !== wasmSessionId || !isPlaying || activeEngine !== 'wasm') return;
-  const nextPos = getNextSentencePosition(currentPage, currentSentenceIdx);
-  if (!nextPos) return;
 
-  const schedKey = `${nextPos.page}:${nextPos.sentenceIdx}:${sessionAtStart}`;
-  if (wasmScheduledChunks.has(schedKey)) return;
-  // A still-streaming sentence owns its own clause scheduling; pre-scheduling its first clause here
-  // would strand the rest of the sentence on the worker's queue. A stitched one is already a single
-  // clip and can be scheduled like any other sentence.
-  const streamingNext = wasmClauseStreams.get(neuralCacheKey(nextPos.text));
-  if (streamingNext && !streamingNext.mergedSrc) return;
+  // Keep filling the queue until the scheduled audio covers the target lead. Sentences are queued
+  // in order and any sentence that cannot be prepared yet ends the run, so nothing is skipped.
+  let nextPos = getNextSentencePosition(currentPage, currentSentenceIdx);
+  let scheduled = 0;
+  while (nextPos) {
+    // Always keep one sentence ahead, as before, then top up while the queue is thinner than the
+    // target lead. The check is skipped on the first pass so a long sentence does not lose its
+    // lookahead just because its own audio already covers the target.
+    if (scheduled > 0 && wasmQueuedSeconds(audioCtx.currentTime, wasmScheduledEndTime) >= WASM_AHEAD_SECONDS) break;
+    const schedKey = `${nextPos.page}:${nextPos.sentenceIdx}:${sessionAtStart}`;
+    if (wasmScheduledChunks.has(schedKey)) return;
+    // A still-streaming sentence owns its own clause scheduling; pre-scheduling its first clause here
+    // would strand the rest of the sentence on the worker's queue. A stitched one is already a single
+    // clip and can be scheduled like any other sentence.
+    const streamingNext = wasmClauseStreams.get(neuralCacheKey(nextPos.text));
+    if (streamingNext && !streamingNext.mergedSrc) return;
 
-  // Pre-synthesize the next chunk in background while current chunk is playing
-  const key = neuralCacheKey(nextPos.text);
-  let nextSrc = audioPreloadCache.get(key)?.src;
-  if (!nextSrc) {
-    nextSrc = await getNeuralAudioSrc(nextPos.text, { priority: 'normal' }).catch(() => null);
+    // Pre-synthesize the next chunk in background while the current ones play
+    const key = neuralCacheKey(nextPos.text);
+    let nextSrc = audioPreloadCache.get(key)?.src;
+    if (!nextSrc) {
+      nextSrc = await getNeuralAudioSrc(nextPos.text, { priority: 'normal' }).catch(() => null);
+    }
+    if (!nextSrc || sessionAtStart !== wasmSessionId || !isPlaying) return;
+    if (wasmScheduledChunks.has(schedKey)) return;
+    const streamingNow = wasmClauseStreams.get(neuralCacheKey(nextPos.text));
+    if (streamingNow && !streamingNow.mergedSrc) return;
+
+    const nextEntry = synthPcmCache.get(nextSrc);
+    const nextPcm = nextEntry ? (nextEntry.pcmData || nextEntry) : null;
+    const nextRate = (nextEntry && nextEntry.sampleRate) || modelSampleRate;
+    if (!nextPcm) return;
+
+    // 1. Match Native Model Sample Rate: AudioContext.createBuffer(1, pcmData.length, rate)
+    const nextBuffer = createWasmAudioBuffer(audioCtx, nextPcm, nextRate);
+
+    // 2. The next chunk was synthesized at the reading speed too: play it at real-time.
+    const nextSource = audioCtx.createBufferSource();
+    nextSource.buffer = nextBuffer;
+    nextSource.playbackRate.value = 1;
+    nextSource.connect(wasmGainNode || audioCtx.destination);
+
+    // 4. Smooth Buffer Scheduling: schedule back-to-back on AudioContext.currentTime at exact sample boundary
+    const schedStart = Math.max(audioCtx.currentTime + 0.01, wasmScheduledEndTime);
+    wasmActiveSourceNodes.add(nextSource);
+    nextSource.start(schedStart);
+
+    wasmScheduledEndTime = schedStart + nextBuffer.duration;
+    wasmScheduledChunks.set(schedKey, { startTime: schedStart, duration: nextBuffer.duration });
+
+    nextSource.onended = () => {
+      wasmActiveSourceNodes.delete(nextSource);
+      cancelWordAnimation();
+      if (sessionAtStart !== wasmSessionId || !isPlaying) return;
+      currentSentenceIdx++;
+      playCurrentSentence();
+    };
+
+    scheduled++;
+    nextPos = getNextSentencePosition(nextPos.page, nextPos.sentenceIdx);
   }
-  if (!nextSrc || sessionAtStart !== wasmSessionId || !isPlaying) return;
-  if (wasmScheduledChunks.has(schedKey)) return;
-  const streamingNow = wasmClauseStreams.get(neuralCacheKey(nextPos.text));
-  if (streamingNow && !streamingNow.mergedSrc) return;
-
-  const nextEntry = synthPcmCache.get(nextSrc);
-  const nextPcm = nextEntry ? (nextEntry.pcmData || nextEntry) : null;
-  const nextRate = (nextEntry && nextEntry.sampleRate) || modelSampleRate;
-  if (!nextPcm) return;
-
-  // 1. Match Native Model Sample Rate: AudioContext.createBuffer(1, pcmData.length, rate)
-  const nextBuffer = createWasmAudioBuffer(audioCtx, nextPcm, nextRate);
-
-  // 2. Prevent Double Speed Distortion: speed is applied in ONE place only (AudioBufferSourceNode.playbackRate)
-  const nextSource = audioCtx.createBufferSource();
-  nextSource.buffer = nextBuffer;
-  nextSource.playbackRate.value = playbackSpeed;
-  nextSource.connect(wasmGainNode || audioCtx.destination);
-
-  // 4. Smooth Buffer Scheduling: schedule back-to-back on AudioContext.currentTime at exact sample boundary
-  const schedStart = Math.max(audioCtx.currentTime + 0.01, wasmScheduledEndTime);
-  wasmActiveSourceNodes.add(nextSource);
-  nextSource.start(schedStart);
-
-  const dur = nextBuffer.duration / playbackSpeed;
-  wasmScheduledEndTime = schedStart + dur;
-  wasmScheduledChunks.set(schedKey, { startTime: schedStart, duration: nextBuffer.duration });
-
-  nextSource.onended = () => {
-    wasmActiveSourceNodes.delete(nextSource);
-    cancelWordAnimation();
-    if (sessionAtStart !== wasmSessionId || !isPlaying) return;
-    currentSentenceIdx++;
-    playCurrentSentence();
-  };
 }
 
 // Plays the remaining clauses of a streamed Studio sentence back to back. Chunk 0 is already
@@ -6880,14 +6988,14 @@ function scheduleWasmClauseStream(audioCtx, stream, opts) {
       if (!audioBuffer) continue;
       const source = audioCtx.createBufferSource();
       source.buffer = audioBuffer;
-      source.playbackRate.value = playbackSpeed;
+      source.playbackRate.value = 1;
       source.connect(wasmGainNode || audioCtx.destination);
       const startAt = Math.max(audioCtx.currentTime + 0.005, wasmScheduledEndTime);
       wasmActiveSourceNodes.add(source);
       source.start(startAt);
-      wasmScheduledEndTime = startAt + audioBuffer.duration / playbackSpeed;
+      wasmScheduledEndTime = startAt + audioBuffer.duration;
       if (pushTimeline) {
-        pushTimeline(chunk.text, audioBuffer.duration, Math.max(0, (startAt - firstStartTime) * playbackSpeed));
+        pushTimeline(chunk.text, audioBuffer.duration, Math.max(0, startAt - firstStartTime));
       }
       lastSource = source;
       if (chunk.final) {
@@ -6944,15 +7052,12 @@ speedCycleBtn.addEventListener('click', () => {
   playbackSpeed = speedSteps[nextIdx];
   speedCycleBtn.textContent = `${playbackSpeed.toFixed(1)}x`;
   if (isPlaying) {
-    if (activeEngine === 'browser') {
+    if (activeEngine === 'browser' || activeEngine === 'wasm') {
+      // Studio has to re-synthesize at the new speed: retiming a scheduled buffer would shift
+      // its pitch, and the pre-scheduled chunks behind it are already at the old tempo.
       cancelAllSpeech();
       playCurrentSentence();
     } else {
-      if (activeEngine === 'wasm' && wasmActiveSourceNodes.size > 0) {
-        wasmActiveSourceNodes.forEach((node) => {
-          if (node.playbackRate) node.playbackRate.value = playbackSpeed;
-        });
-      }
       audioElement.playbackRate = playbackSpeed;
     }
   }

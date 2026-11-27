@@ -258,8 +258,9 @@ test('synthOnDeviceSpeech includes 40-60ms zero-padded silence at start and end 
   assert.ok(endSilenceSamples >= 800, 'End of buffer must contain zero-padded silence to prevent phoneme clipping');
 });
 
-test('WASM audio engine applies speed in ONE place only and schedules back-to-back on AudioContext.currentTime', () => {
+test('Studio bakes the reading speed into synthesis and schedules buffers in real time', () => {
   const appSrc = readFileSync(fileURLToPath(new URL('../public/app.js', import.meta.url)), 'utf8');
+  const workerSrc = readFileSync(fileURLToPath(new URL('../public/tts-worker.js', import.meta.url)), 'utf8');
 
   // 1. Model sample rate used in createBuffer
   assert.ok(
@@ -268,14 +269,37 @@ test('WASM audio engine applies speed in ONE place only and schedules back-to-ba
     'createBuffer must use native modelSampleRate'
   );
 
-  // 2. Playback speed applied to sourceNode.playbackRate only (never doubled in synth)
+  // 2. Speed reaches the synthesizer and never the playout graph: retiming an
+  //    AudioBufferSourceNode resamples it and raises its pitch (the chipmunk effect at 1.5x/2x).
+  assert.match(workerSrc, /synthesizeSegments\(tts, text, voice, speed, emit, isCancelled\)/);
+  assert.match(workerSrc, /tts\.generate\(parts\[i\], \{ voice, speed \}\)/);
+  assert.ok(appSrc.includes('sourceNode.playbackRate.value = 1;'), 'first chunk plays at real time');
+  assert.ok(appSrc.includes('nextSource.playbackRate.value = 1;'), 'pre-scheduled chunk plays at real time');
+  assert.ok(appSrc.includes('source.playbackRate.value = 1;'), 'streamed clauses play at real time');
+  assert.ok(!appSrc.includes('playbackRate.value = playbackSpeed'), 'no Studio buffer may be retimed');
   assert.ok(
-    appSrc.includes('sourceNode.playbackRate.value = playbackSpeed;') &&
-    appSrc.includes('nextSource.playbackRate.value = playbackSpeed;'),
-    'Playback speed must be applied via sourceNode.playbackRate'
+    appSrc.includes("const speed = engine === 'wasm' ? (Number(opts.speed) > 0 ? Number(opts.speed) : playbackSpeed) : 1;"),
+    'Studio synthesizes at the reading speed; the cloud voice stays at 1x'
+  );
+  assert.ok(
+    !appSrc.includes('(audioCtx.currentTime - startTime) * playbackSpeed'),
+    'karaoke reads clip time directly because the tempo is already in the buffer'
   );
 
-  // 3. Natural punctuation preserved without stripping
+  // 3. A 2x clip is a different recording from the 1x one, in memory and in IndexedDB, and both
+  //    keys name Studio's resolved voice (heart for a leftover cloud id), never the raw picker.
+  assert.ok(
+    appSrc.includes("const voice = activeEngine === 'wasm' ? wasmCacheVoiceId() : voicePicker.value;"),
+    'the in-memory key must resolve a leftover cloud voice id the same way IndexedDB does'
+  );
+  assert.match(appSrc, /\$\{activeEngine\}_\$\{voice\}_\$\{speed\}_\$\{normalized\}/);
+  assert.ok(appSrc.includes("computeAudioCacheKey('wasm_kokoro_v1', wasmCacheVoiceId(), speed, text)"));
+  assert.ok(
+    appSrc.includes('const key = neuralCacheKey(spokenText, speed);'),
+    'the in-memory key must use the synthesized speed, so a 1x export never lands under the 2x key'
+  );
+
+  // 4. Natural punctuation preserved without stripping
   assert.ok(
     appSrc.includes("const trimmedText = String(text || '').trim().replace(/\\s+/g, ' ');"),
     'Text must preserve natural punctuation (. , ? !) without stripping'
@@ -286,6 +310,42 @@ test('WASM audio engine applies speed in ONE place only and schedules back-to-ba
     appSrc.includes('Math.max(audioCtx.currentTime + 0.01, wasmScheduledEndTime)'),
     'Buffers must be scheduled back-to-back on AudioContext.currentTime'
   );
+});
+
+test('Studio synthesis lead is measured in seconds, so 2x queues more sentences than 1x', () => {
+  const appSrc = readFileSync(fileURLToPath(new URL('../public/app.js', import.meta.url)), 'utf8');
+  const target = Number((appSrc.match(/WASM_AHEAD_SECONDS = ([\d.]+)/) || [])[1]);
+  assert.ok(target > 0, 'WASM_AHEAD_SECONDS must be a positive number of seconds');
+  const queuedSeconds = extractFunction('wasmQueuedSeconds');
+
+  // The queue is topped up while the audio already scheduled covers less than the lead target.
+  assert.match(
+    appSrc,
+    /wasmQueuedSeconds\(audioCtx\.currentTime, wasmScheduledEndTime\) >= WASM_AHEAD_SECONDS\) break;/,
+    'the lead has to be compared in seconds, not sentences'
+  );
+  assert.match(appSrc, /let scheduled = 0;/, 'the first lookahead stays unconditional');
+
+  // Simulate the production loop: the sentence playing is already scheduled, one more sentence is
+  // always queued ahead of it, and further sentences are added until the scheduled audio reaches the
+  // target. The lookahead count is what changes with speed, not the lead in seconds.
+  const simulate = (clipSeconds) => {
+    let end = clipSeconds;
+    let lookahead = 0;
+    while (lookahead < 50) {
+      if (lookahead > 0 && queuedSeconds(0, end) >= target) break;
+      end += clipSeconds;
+      lookahead++;
+    }
+    return { lookahead, leadSeconds: queuedSeconds(0, end) };
+  };
+
+  const at1x = simulate(5); // a sentence that takes 5s to read at 1x
+  const at2x = simulate(2.5); // the same sentence at 2x: half the audio
+
+  assert.ok(queuedSeconds(0, 2.5) < target, 'one sentence at 2x on its own is thinner than the target lead');
+  assert.ok(at1x.leadSeconds >= target && at2x.leadSeconds >= target, 'both speeds hold the lead in seconds');
+  assert.ok(at2x.lookahead > at1x.lookahead, 'the shorter 2x clips need more sentences queued for the same lead');
 });
 
 test('encodeMonoWavBuffer and extractWavPcm round-trip 24000Hz Kokoro PCM cleanly', () => {

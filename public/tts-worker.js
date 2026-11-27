@@ -160,12 +160,12 @@ async function getTts() {
 // clause's inter-sentence pause is carried inside its samples (except for the last one) so the
 // player can schedule the chunks back to back without knowing about gaps. Only multi-clause text
 // streams: a single-clause sentence is returned merged, exactly as before.
-async function synthesizeSegments(tts, text, voice, emit, isCancelled) {
+async function synthesizeSegments(tts, text, voice, speed, emit, isCancelled) {
   const parts = splitLongText(text, 180);
   if (parts.length === 0) return { pcm: new Float32Array(0), sampleRate: 24000 };
 
   if (parts.length === 1) {
-    const out = await tts.generate(parts[0], { voice, speed: 1 });
+    const out = await tts.generate(parts[0], { voice, speed });
     const raw = out && (out.audio || out.data);
     return {
       pcm: raw ? Float32Array.from(raw) : new Float32Array(0),
@@ -176,7 +176,7 @@ async function synthesizeSegments(tts, text, voice, emit, isCancelled) {
   let sampleRate = 24000;
   for (let i = 0; i < parts.length; i++) {
     if (isCancelled()) return { cancelled: true };
-    const out = await tts.generate(parts[i], { voice, speed: 1 });
+    const out = await tts.generate(parts[i], { voice, speed });
     if (out && out.sampling_rate) sampleRate = out.sampling_rate;
     // Synthesizing can outlive the request that asked for it: stop before emitting stale audio.
     if (isCancelled()) return { cancelled: true };
@@ -235,6 +235,7 @@ async function drainQueue() {
           tts,
           job.text,
           job.voice,
+          job.speed,
           (chunk) => {
             // The merge buffer is not built for streamed jobs, so hand over a copy and keep the
             // original intact for the (single-clause) merged path below.
@@ -313,6 +314,7 @@ self.addEventListener('message', (e) => {
       id: msg.id,
       text: msg.text,
       voice: msg.voice || 'af_heart',
+      speed: Number(msg.speed) > 0 ? Number(msg.speed) : 1,
       sessionId: typeof msg.sessionId === 'number' ? msg.sessionId : activeSessionId,
       priority: msg.priority === 'high' ? 0 : 1
     };
