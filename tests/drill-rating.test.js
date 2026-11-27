@@ -17,7 +17,10 @@ function installSession(cardCount) {
   globalThis.isAudioDrillActive = true;
   globalThis.isAudioDrillPaused = false;
   globalThis.cancelDrillSpeech = () => { };
-  globalThis.showToast = () => { };
+  globalThis.chimeCount = 0;
+  globalThis.toastCount = 0;
+  globalThis.playBookmarkChime = () => { globalThis.chimeCount += 1; };
+  globalThis.showToast = () => { globalThis.toastCount += 1; };
   // Stand in for runDrillCard: advancing moves the index and leaves the next card's rating closed
   // until its prompt has been read out.
   globalThis.runDrillCard = (idx) => {
@@ -72,13 +75,16 @@ test('a paused drill ignores ratings from the headset', () => {
   assert.equal(globalThis.drillRatingOpen, true, 'the card stays rateable for after the resume');
 });
 
-test('no card can be rated before its prompt has been read out', () => {
+test('a press before the question has been read out is acknowledged, not rated', () => {
   installSession(2);
 
   rateDrillCard(true);
 
   assert.equal(globalThis.drillKnownCount, 0);
   assert.equal(globalThis.drillIndex, 0);
+  assert.equal(globalThis.drillRatingOpen, false, 'the press is not queued for the card either');
+  assert.equal(globalThis.chimeCount, 1, 'a hands-free press hears that it landed');
+  assert.equal(globalThis.toastCount, 1, 'and a visible reader sees the same');
 });
 
 test('each presentation accepts one rating, even of a card rated before', () => {

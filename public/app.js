@@ -3835,11 +3835,17 @@ async function runDrillCard(idx) {
 }
 
 function rateDrillCard(known) {
+  if (!isAudioDrillActive || isAudioDrillPaused) return;
   const card = drillCards[drillIndex];
-  // One rating per presentation, and none while the drill is paused. A double tap, or a headset Next
-  // press that arrives while the next prompt is still being read out, must not rate a card twice,
-  // master the next one unseen, or advance a drill the reader has stopped.
-  if (!isAudioDrillActive || isAudioDrillPaused || !drillRatingOpen || !card) return;
+  if (!card) return;
+  // The question is still being read out: acknowledge the press so a hands-free reader knows it
+  // landed, without rating a card they have not heard yet. Nothing is queued, so the same press
+  // cannot take effect later either.
+  if (!drillRatingOpen) {
+    playBookmarkChime();
+    showToast('🎧 Still reading the question — press again once it ends.');
+    return;
+  }
   drillRatingOpen = false;
   if (drillTimer) { clearTimeout(drillTimer); drillTimer = null; }
   cancelDrillSpeech();
