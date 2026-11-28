@@ -96,7 +96,7 @@ controlsToggleBar.addEventListener('click', () => openOptionsModal());
 
 // --- INDEXEDDB STORAGE ---
 const DB_NAME = "MarginaliaBookDB";
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 let dbInstance = null;
 
 function initIndexedDB() {
@@ -121,6 +121,27 @@ function initIndexedDB() {
         if (!db.objectStoreNames.contains("audio_cache")) {
           const audioStore = db.createObjectStore("audio_cache", { keyPath: "cacheKey" });
           audioStore.createIndex("lastAccessedAt", "lastAccessedAt", { unique: false });
+        }
+        if (!db.objectStoreNames.contains("pdf_binaries")) {
+          db.createObjectStore("pdf_binaries", { keyPath: "title" });
+        }
+        // v3 and older kept the raw PDF inside the book record, so opening My Shelf cloned every
+        // multi-megabyte file. Move the binaries out once, during the upgrade.
+        if (db.objectStoreNames.contains("books")) {
+          const booksStore = e.target.transaction.objectStore("books");
+          const pdfStore = e.target.transaction.objectStore("pdf_binaries");
+          booksStore.openCursor().onsuccess = (event) => {
+            const cursor = event.target.result;
+            if (!cursor) return;
+            const book = cursor.value;
+            if (book && book.originalPdf && typeof book.title === 'string') {
+              pdfStore.put({ title: book.title, buffer: book.originalPdf });
+              delete book.originalPdf;
+              book.hasPdf = true;
+              cursor.update(book);
+            }
+            cursor.continue();
+          };
         }
       };
       req.onsuccess = (e) => {
@@ -307,6 +328,8 @@ async function saveBookToShelf(title, pages, chapters = [], options = {}) {
   try {
     if (!dbInstance) await initIndexedDB();
     if (!dbInstance) return;
+    // The binary lives in its own store so shelf reads never touch it.
+    if (options && options.originalPdf) await savePdfBinaryToDB(title, options.originalPdf);
     const tx = dbInstance.transaction(["books"], "readwrite");
     const store = tx.objectStore("books");
     const req = store.getAll();
@@ -316,7 +339,8 @@ async function saveBookToShelf(title, pages, chapters = [], options = {}) {
         existing.pages = pages;
         existing.chapters = chapters;
         existing.updatedAt = Date.now();
-        if (options && options.originalPdf) existing.originalPdf = options.originalPdf;
+        delete existing.originalPdf;
+        if (options && options.originalPdf) existing.hasPdf = true;
         store.put(existing);
       } else {
         const bookDoc = {
@@ -325,15 +349,44 @@ async function saveBookToShelf(title, pages, chapters = [], options = {}) {
           chapters,
           currentPage: 0,
           currentSentenceIdx: 0,
-          updatedAt: Date.now()
+          updatedAt: Date.now(),
+          hasPdf: Boolean(options && options.originalPdf)
         };
-        if (options && options.originalPdf) bookDoc.originalPdf = options.originalPdf;
         store.add(bookDoc);
       }
     };
   } catch (err) {
     console.warn("Storage warning:", err);
   }
+}
+
+async function savePdfBinaryToDB(title, buffer) {
+  if (!title || !buffer) return false;
+  return withIdbStore('pdf_binaries', 'readwrite', (store, tx, resolve) => {
+    store.put({ title, buffer });
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+    tx.onabort = () => resolve(false);
+  }, false);
+}
+
+async function getPdfBinaryFromDB(title) {
+  if (!title) return null;
+  return withIdbStore('pdf_binaries', 'readonly', (store, _tx, resolve) => {
+    const req = store.get(title);
+    req.onsuccess = () => resolve((req.result && req.result.buffer) || null);
+    req.onerror = () => resolve(null);
+  }, null);
+}
+
+async function deletePdfBinaryFromDB(title) {
+  if (!title) return false;
+  return withIdbStore('pdf_binaries', 'readwrite', (store, tx, resolve) => {
+    store.delete(title);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+    tx.onabort = () => resolve(false);
+  }, false);
 }
 
 // Show teaser access notice (for unauthenticated users)
@@ -403,24 +456,43 @@ async function syncBookmarkToCloud(bookTitle, page, sentenceIdx, snippet) {
   } catch (e) { }
 }
 
-async function syncAnnotationToCloud(ann) {
-  if (!supabaseClient || !ann) return;
+// One local note as the row user_annotations stores. The unique key is book, page, sentence and
+// kind; the account id always comes from the session, never from the annotation itself.
+function annotationCloudRow(ann, userId) {
+  return {
+    user_id: userId,
+    book_title: ann.bookTitle,
+    page: Math.max(0, Math.floor(Number(ann.page) || 0)),
+    sentence_idx: Math.max(0, Math.floor(Number(ann.sentenceIdx) || 0)),
+    text: ann.quoteText || ann.text || '',
+    type: ann.noteText ? 'note' : 'highlight',
+    color: ann.color || 'amber',
+    note_text: ann.noteText || '',
+    created_at: typeof ann.createdAt === 'number' ? new Date(ann.createdAt).toISOString() : (ann.createdAt || new Date().toISOString()),
+    updated_at: new Date().toISOString()
+  };
+}
+
+// Pushes any number of notes in one upsert. The sync path hands over every note the account is
+// missing, so a first sign-in with a full notebook costs one request instead of one per note.
+async function pushAnnotationsToCloud(annotations) {
+  const list = (Array.isArray(annotations) ? annotations : []).filter(Boolean);
+  if (!supabaseClient || list.length === 0) return false;
   try {
     const { data: { session } } = await supabaseClient.auth.getSession();
-    if (!session?.user) return;
-    await supabaseClient.from('user_annotations').upsert({
-      user_id: session.user.id,
-      book_title: ann.bookTitle,
-      page: ann.page,
-      sentence_idx: ann.sentenceIdx,
-      text: ann.quoteText || ann.text || '',
-      type: ann.noteText ? 'note' : 'highlight',
-      color: ann.color || 'amber',
-      note_text: ann.noteText || '',
-      created_at: typeof ann.createdAt === 'number' ? new Date(ann.createdAt).toISOString() : (ann.createdAt || new Date().toISOString()),
-      updated_at: new Date().toISOString()
-    }, { onConflict: 'user_id,book_title,page,sentence_idx,type' });
-  } catch (e) { }
+    if (!session?.user) return false;
+    const rows = list.map((ann) => annotationCloudRow(ann, session.user.id));
+    const { error } = await supabaseClient.from('user_annotations').upsert(
+      rows,
+      { onConflict: 'user_id,book_title,page,sentence_idx,type' }
+    );
+    return !error;
+  } catch (e) { return false; }
+}
+
+// A note written in the reader goes out on its own, so the common case stays a single request.
+async function syncAnnotationToCloud(ann) {
+  return pushAnnotationsToCloud(ann ? [ann] : []);
 }
 
 async function deleteCloudAnnotation(bookTitle, page, sentenceIdx, type) {
@@ -439,116 +511,6 @@ async function deleteCloudAnnotation(bookTitle, page, sentenceIdx, type) {
   } catch (e) { }
 }
 
-/**
- * Bi-directional reconciliation:
- * Pulls remote user_books, user_bookmarks, and user_annotations;
- * Merges missing entries into local IndexedDB; pushes newer local entries to remote.
- */
-async function syncAllWithCloud() {
-  if (!supabaseClient) return { success: false, reason: 'no_client' };
-  try {
-    const { data: { session } } = await supabaseClient.auth.getSession();
-    if (!session?.user) return { success: false, reason: 'not_authenticated' };
-    const userId = session.user.id;
-
-    // 1. Sync Books & Reading Progress
-    const { data: remoteBooks } = await supabaseClient
-      .from('user_books')
-      .select('title, current_page, current_sentence, total_pages, updated_at')
-      .eq('user_id', userId);
-
-    const localBooks = await getAllBooksFromShelf();
-    const localBooksMap = new Map(localBooks.map(b => [b.title, b]));
-
-    if (Array.isArray(remoteBooks)) {
-      for (const rb of remoteBooks) {
-        const lb = localBooksMap.get(rb.title);
-        if (lb) {
-          const remoteTime = new Date(rb.updated_at || 0).getTime();
-          const localTime = Number(lb.updatedAt || 0);
-          if (remoteTime > localTime) {
-            await updateBookProgressInDB(rb.title, rb.current_page, rb.current_sentence);
-            if (currentDocName === rb.title && !isPlaying) {
-              currentPage = rb.current_page;
-              currentSentenceIdx = rb.current_sentence;
-              renderPage(currentPage);
-            }
-          } else if (localTime > remoteTime) {
-            await supabaseClient.from('user_books').upsert({
-              user_id: userId,
-              title: lb.title,
-              current_page: lb.currentPage || 0,
-              current_sentence: lb.currentSentenceIdx || 0,
-              total_pages: lb.pages?.length || 1,
-              updated_at: new Date(localTime).toISOString()
-            }, { onConflict: 'user_id,title' });
-          }
-        }
-      }
-    }
-
-    // 2. Sync Bookmarks
-    const { data: remoteBookmarks } = await supabaseClient
-      .from('user_bookmarks')
-      .select('book_title, page, sentence_idx, snippet, created_at')
-      .eq('user_id', userId);
-
-    const localBookmarks = await getBookmarksFromDB();
-    const localBmSet = new Set(localBookmarks.map(b => `${b.bookTitle}:::${b.page}:::${b.sentenceIdx}`));
-
-    if (Array.isArray(remoteBookmarks)) {
-      for (const rb of remoteBookmarks) {
-        const key = `${rb.book_title}:::${rb.page}:::${rb.sentence_idx}`;
-        if (!localBmSet.has(key)) {
-          await saveBookmarkToDB(rb.book_title, rb.page, rb.sentence_idx, rb.snippet);
-          localBmSet.add(key);
-        }
-      }
-    }
-    for (const lb of localBookmarks) {
-      await syncBookmarkToCloud(lb.bookTitle, lb.page, lb.sentenceIdx, lb.snippet);
-    }
-
-    // 3. Sync Annotations
-    const { data: remoteAnn } = await supabaseClient
-      .from('user_annotations')
-      .select('book_title, page, sentence_idx, text, type, color, note_text, created_at')
-      .eq('user_id', userId);
-
-    const localAnn = await getAnnotationsFromDB(currentDocName);
-    const localAnnSet = new Set(localAnn.map(a => `${a.bookTitle}:::${a.page}:::${a.sentenceIdx}:::${a.noteText ? 'note' : 'highlight'}`));
-
-    if (Array.isArray(remoteAnn)) {
-      for (const ra of remoteAnn) {
-        const key = `${ra.book_title}:::${ra.page}:::${ra.sentence_idx}:::${ra.type}`;
-        if (!localAnnSet.has(key)) {
-          await saveAnnotationToDB({
-            bookTitle: ra.book_title,
-            page: ra.page,
-            sentenceIdx: ra.sentence_idx,
-            quoteText: ra.text,
-            noteText: ra.note_text,
-            color: ra.color,
-            createdAt: ra.created_at
-          });
-          localAnnSet.add(key);
-        }
-      }
-      if (currentDocName) {
-        await refreshCurrentDocAnnotations();
-        renderPage(currentPage);
-      }
-    }
-    for (const la of localAnn) {
-      await syncAnnotationToCloud(la);
-    }
-
-    return { success: true };
-  } catch (err) {
-    return { success: false, error: err?.message || 'Sync failed' };
-  }
-}
-
 async function getAllBooksFromShelf() {
   return withIdbStore('books', 'readonly', (store, _tx, resolve) => {
     const req = store.getAll();
@@ -561,7 +523,8 @@ async function getAllBooksFromShelf() {
   }, []);
 }
 
-async function deleteBookFromShelf(bookId) {
+async function deleteBookFromShelf(bookId, title = null) {
+  if (title) deletePdfBinaryFromDB(title);
   return withIdbStore('books', 'readwrite', (store, tx, resolve) => {
     store.delete(bookId);
     tx.oncomplete = () => resolve(true);
@@ -1103,7 +1066,8 @@ async function reportStorageUsage() {
 
 // Pure: the exact file contents. IndexedDB ids are dropped because they are per-device counters;
 // books are matched by title and bookmarks by content when the file is restored.
-function buildBackupPayload(books, bookmarks, exportedAt) {
+function buildBackupPayload(books, bookmarks, exportedAt, extras) {
+  const extraData = extras || {};
   const cleanBooks = (Array.isArray(books) ? books : []).map((book) => ({
     title: String(book && book.title != null ? book.title : ''),
     pages: Array.isArray(book && book.pages) ? book.pages : [],
@@ -1119,12 +1083,33 @@ function buildBackupPayload(books, bookmarks, exportedAt) {
     snippet: String(mark && mark.snippet != null ? mark.snippet : ''),
     createdAt: Number(mark && mark.createdAt) || 0
   }));
+  const cleanAnnotations = (Array.isArray(extraData.annotations) ? extraData.annotations : []).map((ann) => ({
+    bookTitle: String(ann && ann.bookTitle != null ? ann.bookTitle : ''),
+    page: Math.max(0, Math.floor(Number(ann && ann.page) || 0)),
+    sentenceIdx: Math.max(0, Math.floor(Number(ann && ann.sentenceIdx) || 0)),
+    quoteText: String(ann && ann.quoteText != null ? ann.quoteText : ''),
+    noteText: String(ann && ann.noteText != null ? ann.noteText : ''),
+    color: String(ann && ann.color != null ? ann.color : 'amber'),
+    createdAt: Number(ann && ann.createdAt) || 0,
+    updatedAt: Number(ann && ann.updatedAt) || 0
+  }));
+  const cleanVocabulary = (Array.isArray(extraData.vocabulary) ? extraData.vocabulary : []).map((card) => ({
+    word: String(card && card.word != null ? card.word : ''),
+    partOfSpeech: String(card && card.partOfSpeech != null ? card.partOfSpeech : ''),
+    definition: String(card && card.definition != null ? card.definition : ''),
+    bookTitle: String(card && card.bookTitle != null ? card.bookTitle : ''),
+    context: String(card && card.context != null ? card.context : ''),
+    createdAt: Number(card && card.createdAt) || 0,
+    updatedAt: Number(card && card.updatedAt) || 0
+  }));
   return {
     format: 'marginalia-backup',
-    version: 1,
+    version: 2,
     exportedAt: typeof exportedAt === 'string' ? exportedAt : '',
     books: cleanBooks,
-    bookmarks: cleanBookmarks
+    bookmarks: cleanBookmarks,
+    annotations: cleanAnnotations,
+    vocabulary: cleanVocabulary
   };
 }
 
@@ -1145,13 +1130,24 @@ function parseBackupPayload(text) {
   if (parsed.format !== 'marginalia-backup') {
     return { ok: false, error: 'That file is not a Marginalia backup.' };
   }
-  if (parsed.version !== 1) {
+  if (parsed.version !== 1 && parsed.version !== 2) {
     return { ok: false, error: 'That backup came from a different version of Marginalia.' };
   }
   if (!Array.isArray(parsed.books) || !Array.isArray(parsed.bookmarks)) {
     return { ok: false, error: 'That backup is missing its book list.' };
   }
-  return { ok: true, payload: parsed };
+  // v1 files predate notes and vocabulary, so they restore with both lists empty.
+  if (parsed.version === 2 && (!Array.isArray(parsed.annotations) || !Array.isArray(parsed.vocabulary))) {
+    return { ok: false, error: 'That backup is missing its notes or vocabulary list.' };
+  }
+  return {
+    ok: true,
+    payload: {
+      ...parsed,
+      annotations: Array.isArray(parsed.annotations) ? parsed.annotations : [],
+      vocabulary: Array.isArray(parsed.vocabulary) ? parsed.vocabulary : []
+    }
+  };
 }
 
 // Pure: newest position wins per title, a book only on this device is kept, and a replaced book
@@ -1195,6 +1191,55 @@ function mergeBookmarks(existing, incoming) {
   return merged;
 }
 
+// Pure: a note is identified the same way the cloud table is (book, page, sentence, kind), so the
+// same highlight restored twice stays one entry. The newer copy wins but keeps the device id.
+function mergeAnnotations(existing, incoming) {
+  const keyOf = (ann) => [
+    String(ann && ann.bookTitle != null ? ann.bookTitle : ''),
+    Math.max(0, Math.floor(Number(ann && ann.page) || 0)),
+    Math.max(0, Math.floor(Number(ann && ann.sentenceIdx) || 0)),
+    ann && ann.noteText ? 'note' : 'highlight'
+  ].join('\u0000');
+  const byKey = new Map();
+  for (const ann of Array.isArray(existing) ? existing : []) {
+    if (ann) byKey.set(keyOf(ann), ann);
+  }
+  for (const ann of Array.isArray(incoming) ? incoming : []) {
+    if (!ann) continue;
+    const key = keyOf(ann);
+    const current = byKey.get(key);
+    if (!current) {
+      byKey.set(key, ann);
+      continue;
+    }
+    const incomingTime = Number(ann.updatedAt || ann.createdAt) || 0;
+    const currentTime = Number(current.updatedAt || current.createdAt) || 0;
+    if (incomingTime > currentTime) byKey.set(key, { ...ann, id: current.id });
+  }
+  return Array.from(byKey.values());
+}
+
+// Pure: vocabulary is one card per word, case-insensitively; the newest edit wins.
+function mergeVocabulary(existing, incoming) {
+  const byWord = new Map();
+  for (const card of Array.isArray(existing) ? existing : []) {
+    if (card && card.word) byWord.set(String(card.word).toLowerCase(), card);
+  }
+  for (const card of Array.isArray(incoming) ? incoming : []) {
+    if (!card || !card.word) continue;
+    const word = String(card.word).toLowerCase();
+    const current = byWord.get(word);
+    if (!current) {
+      byWord.set(word, card);
+      continue;
+    }
+    const incomingTime = Number(card.updatedAt || card.createdAt) || 0;
+    const currentTime = Number(current.updatedAt || current.createdAt) || 0;
+    if (incomingTime > currentTime) byWord.set(word, { ...card, id: current.id });
+  }
+  return Array.from(byWord.values());
+}
+
 async function writeRecords(storeName, records) {
   if (!dbInstance) await initIndexedDB();
   if (!dbInstance) return false;
@@ -1219,11 +1264,13 @@ async function exportLibraryBackup() {
   try {
     const books = await getAllBooksFromShelf();
     const bookmarks = await getBookmarksFromDB();
-    if (!books.length && !bookmarks.length) {
+    const annotations = await getAnnotationsFromDB();
+    const vocabulary = await getVocabFromDB();
+    if (!books.length && !bookmarks.length && !annotations.length && !vocabulary.length) {
       showToast('There is nothing on your shelf to back up yet.');
       return;
     }
-    const payload = buildBackupPayload(books, bookmarks, new Date().toISOString());
+    const payload = buildBackupPayload(books, bookmarks, new Date().toISOString(), { annotations, vocabulary });
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -1233,7 +1280,7 @@ async function exportLibraryBackup() {
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
-    showToast('Backup downloaded: ' + books.length + ' book(s), ' + bookmarks.length + ' bookmark(s).');
+    showToast('Backup downloaded: ' + books.length + ' book(s), ' + bookmarks.length + ' bookmark(s), ' + annotations.length + ' note(s), ' + vocabulary.length + ' word(s).');
   } catch (err) {
     console.error('Backup export failed:', err);
     showToast('Could not create the backup file. Please try again.');
@@ -1250,8 +1297,9 @@ async function importLibraryBackup(file) {
       return;
     }
 
-    if (!parsed.payload.books.length && !parsed.payload.bookmarks.length) {
-      showToast('That backup has no books or bookmarks in it.');
+    if (!parsed.payload.books.length && !parsed.payload.bookmarks.length
+      && !parsed.payload.annotations.length && !parsed.payload.vocabulary.length) {
+      showToast('That backup has no books, bookmarks, notes or words in it.');
       return;
     }
 
@@ -1259,20 +1307,29 @@ async function importLibraryBackup(file) {
     const existingMarks = await getBookmarksFromDB();
     const mergedMarks = mergeBookmarks(existingMarks, parsed.payload.bookmarks);
     const newMarks = mergedMarks.length - existingMarks.length;
+    const existingAnnotations = await getAnnotationsFromDB();
+    const mergedAnnotations = mergeAnnotations(existingAnnotations, parsed.payload.annotations);
+    const newAnnotations = mergedAnnotations.length - existingAnnotations.length;
+    const existingVocabulary = await getVocabFromDB();
+    const mergedVocabulary = mergeVocabulary(existingVocabulary, parsed.payload.vocabulary);
+    const newWords = mergedVocabulary.length - existingVocabulary.length;
 
     const proceed = confirm(
-      'Restore ' + merged.added + ' new book(s) and ' + newMarks + ' bookmark(s)?\n\n' +
+      'Restore ' + merged.added + ' new book(s), ' + newMarks + ' bookmark(s),\n' +
+      newAnnotations + ' note(s) and ' + newWords + ' word(s)?\n\n' +
       'Books already on this device keep whichever reading position is newer.'
     );
     if (!proceed) return;
 
     const booksOk = await writeRecords("books", merged.books);
     await writeRecords("bookmarks", mergedMarks);
+    await writeRecords("annotations", mergedAnnotations);
+    await writeRecords("vocabulary", mergedVocabulary);
     if (!booksOk) {
       showToast('Could not write the backup to this device.');
       return;
     }
-    showToast('Restored ' + merged.added + ' new book(s), updated ' + merged.updated + '.');
+    showToast('Restored ' + merged.added + ' new book(s), updated ' + merged.updated + ', ' + newAnnotations + ' note(s), ' + newWords + ' word(s).');
     await showShelfModal('shelf');
   } catch (err) {
     console.error('Backup import failed:', err);
@@ -1595,7 +1652,7 @@ async function deleteBookmarkFromDB(id) {
   }, false);
 }
 
-async function saveAnnotationToDB({ id, bookTitle, page, sentenceIdx, quoteText, noteText, color }) {
+async function saveAnnotationToDB({ id, bookTitle, page, sentenceIdx, quoteText, noteText, color, createdAt, fromCloud = false }) {
   return withIdbStore('annotations', 'readwrite', (store, _tx, resolve) => {
     const item = {
       bookTitle: bookTitle || '',
@@ -1610,16 +1667,16 @@ async function saveAnnotationToDB({ id, bookTitle, page, sentenceIdx, quoteText,
       item.id = id;
       const req = store.put(item);
       req.onsuccess = () => {
-        syncAnnotationToCloud(item).catch(() => {});
+        if (!fromCloud) syncAnnotationToCloud(item).catch(() => {});
         resolve(item);
       };
       req.onerror = () => resolve(null);
     } else {
-      item.createdAt = Date.now();
+      item.createdAt = Number(createdAt) || Date.now();
       const req = store.add(item);
       req.onsuccess = (e) => {
         const res = { id: e.target.result, ...item };
-        syncAnnotationToCloud(res).catch(() => {});
+        if (!fromCloud) syncAnnotationToCloud(res).catch(() => {});
         resolve(res);
       };
       req.onerror = () => resolve(null);
@@ -1646,6 +1703,99 @@ async function deleteAnnotationFromDB(id) {
     req.onsuccess = () => resolve(true);
     req.onerror = () => resolve(false);
   }, false);
+}
+
+// --- ANNOTATION CLOUD SYNC ---
+// Highlights and margin notes used to be pushed best-effort with no pull and no retry, so a note
+// written offline lived on one device only. The account's row set is the queue: anything local the
+// cloud does not hold gets pushed on every sync, so a failed write is retried without a flag.
+
+// One note as the shape the local store uses. Identity follows the table's unique key.
+function annotationFromCloudRow(row) {
+  if (!row || typeof row.book_title !== 'string') return null;
+  const createdAt = Date.parse(row.created_at);
+  return {
+    bookTitle: row.book_title,
+    page: Math.max(0, Math.floor(Number(row.page) || 0)),
+    sentenceIdx: Math.max(0, Math.floor(Number(row.sentence_idx) || 0)),
+    quoteText: String(row.text == null ? '' : row.text),
+    noteText: String(row.note_text == null ? '' : row.note_text),
+    color: String(row.color == null ? 'amber' : row.color),
+    createdAt: Number.isFinite(createdAt) ? createdAt : Date.now()
+  };
+}
+
+function annotationKey(ann) {
+  if (!ann || typeof ann.bookTitle !== 'string') return null;
+  return [
+    ann.bookTitle,
+    Math.max(0, Math.floor(Number(ann.page) || 0)),
+    Math.max(0, Math.floor(Number(ann.sentenceIdx) || 0)),
+    ann.noteText ? 'note' : 'highlight'
+  ].join('\u0000');
+}
+
+// Pure: the pulled notes this device does not have yet, deduplicated by that same key.
+function selectMissingAnnotations(local, incoming) {
+  const seen = new Set();
+  for (const ann of Array.isArray(local) ? local : []) {
+    const key = annotationKey(ann);
+    if (key) seen.add(key);
+  }
+  const missing = [];
+  for (const ann of Array.isArray(incoming) ? incoming : []) {
+    const key = annotationKey(ann);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    missing.push(ann);
+  }
+  return missing;
+}
+
+async function syncAnnotationsFromCloud() {
+  if (!supabaseClient) return { pulled: 0, pushed: 0 };
+  try {
+    const user = await getSignedInUser();
+    if (!user || !user.id) return { pulled: 0, pushed: 0 };
+
+    const { data, error } = await supabaseClient
+      .from('user_annotations')
+      .select('book_title, page, sentence_idx, text, type, color, note_text, created_at')
+      .eq('user_id', user.id);
+    if (error) {
+      console.warn('Annotation pull failed:', error.message || error);
+      return { pulled: 0, pushed: 0 };
+    }
+
+    const remote = (Array.isArray(data) ? data : [])
+      .map(annotationFromCloudRow)
+      .filter(Boolean);
+    const local = await getAnnotationsFromDB();
+
+    let pulled = 0;
+    for (const ann of selectMissingAnnotations(local, remote)) {
+      const saved = await saveAnnotationToDB({ ...ann, fromCloud: true });
+      if (saved) pulled += 1;
+    }
+
+    // The pull is the record of what the account holds: push exactly what it lacks, so an offline
+    // write is retried on the next launch or reconnect and nothing is sent twice.
+    const remoteKeys = new Set(remote.map(annotationKey).filter(Boolean));
+    const missing = local.filter((ann) => {
+      const key = annotationKey(ann);
+      return key && !remoteKeys.has(key);
+    });
+    const pushed = missing.length && await pushAnnotationsToCloud(missing) ? missing.length : 0;
+
+    if (pulled > 0 && currentDocName) {
+      await refreshCurrentDocAnnotations();
+      renderPage(currentPage);
+    }
+    return { pulled, pushed };
+  } catch (err) {
+    console.warn('Annotation sync skipped:', err);
+    return { pulled: 0, pushed: 0 };
+  }
 }
 
 async function saveVocabToDB({ word, partOfSpeech, definition, bookTitle, context }) {
@@ -2089,7 +2239,9 @@ function syncMediaSessionState(playing) {
   if (!('mediaSession' in navigator)) return;
   try {
     navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
-    if (playing && activeEngine === 'browser') {
+    // Studio plays through a standalone AudioContext, which iOS can suspend when the screen locks.
+    // A looping silent <audio> element keeps the page's media session alive for it too.
+    if (playing && (activeEngine === 'browser' || activeEngine === 'wasm')) {
       startBrowserSpeechKeepAlive();
     } else {
       stopBrowserSpeechKeepAlive();
@@ -2298,6 +2450,9 @@ document.addEventListener('visibilitychange', () => {
         showToast("The system voice pauses when the screen locks. Pick a neural voice for lock-screen listening.");
       }
     }
+  } else if (isPlaying && activeEngine === 'wasm' && wasmAudioCtx && wasmAudioCtx.state === 'suspended') {
+    // Returning from the lock screen: resume the context the scheduled clips belong to.
+    wasmAudioCtx.resume().catch(() => { });
   }
   hiddenAt = 0;
 });
@@ -2963,7 +3118,7 @@ async function showShelfModal(mode = "shelf", options = {}) {
       delBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
         if (confirm(`Remove "${b.title}" from My Shelf?`)) {
-          await deleteBookFromShelf(b.id);
+          await deleteBookFromShelf(b.id, b.title);
           // The local delete is already done: the cloud row follows in the background so the shelf
           // refresh never waits on auth or the network.
           removeCloudProgressForBook(b.title);
@@ -2971,7 +3126,7 @@ async function showShelfModal(mode = "shelf", options = {}) {
         }
       });
 
-      card.addEventListener('click', () => {
+      card.addEventListener('click', async () => {
         stopAudio();
         bookPages = repairSavedPages(b.pages);
         bookChapters = (b.chapters || [{ title: "Beginning", pageIndex: 0 }])
@@ -2982,8 +3137,9 @@ async function showShelfModal(mode = "shelf", options = {}) {
         currentSentenceIdx = b.currentSentenceIdx || 0;
         docTitle.textContent = currentDocName;
 
-        if (b.originalPdf) {
-          currentPdfBinary = b.originalPdf;
+        const pdfBinary = b.originalPdf || (b.hasPdf ? await getPdfBinaryFromDB(b.title) : null);
+        if (pdfBinary) {
+          currentPdfBinary = pdfBinary;
           pageViewPdfDoc = null;
           if (pageViewToggleBtn) pageViewToggleBtn.style.display = 'inline-flex';
         } else {
@@ -6563,6 +6719,9 @@ async function getNeuralAudioSrc(text) {
 
 // --- CHAPTER & SUMMARY AUDIO EXPORT (.mp3) ---
 async function canExportAudio() {
+  // Studio synthesizes entirely on this device, so exporting its audio costs no provider credits
+  // and is not a paid action.
+  if (activeEngine === 'wasm') return true;
   const customOpenAi = localStorage.getItem('marginalia_byok_openai') || '';
   const customEleven = localStorage.getItem('marginalia_byok_eleven') || '';
   if (customOpenAi || customEleven) return true;
@@ -8936,6 +9095,7 @@ function scheduleBackgroundSync(delay = 0) {
     backgroundSyncTimer = null;
     flushPendingProgress();
     syncBookmarksFromCloud();
+    syncAnnotationsFromCloud();
   }, delay);
 }
 window.addEventListener('online', () => scheduleBackgroundSync());
@@ -8949,6 +9109,7 @@ document.addEventListener('visibilitychange', () => {
 initIndexedDB().then(() => {
   restoreProgressFromCloud().then(() => { flushPendingProgress(); });
   syncBookmarksFromCloud();
+  syncAnnotationsFromCloud();
 });
 
 // --- RETURN FROM PAYSTACK ---

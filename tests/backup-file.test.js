@@ -12,6 +12,8 @@ const buildBackupPayload = extractFunction('buildBackupPayload');
 const parseBackupPayload = extractFunction('parseBackupPayload');
 const mergeShelfRecords = extractFunction('mergeShelfRecords');
 const mergeBookmarks = extractFunction('mergeBookmarks');
+const mergeAnnotations = extractFunction('mergeAnnotations');
+const mergeVocabulary = extractFunction('mergeVocabulary');
 
 const T1 = Date.UTC(2026, 0, 1, 12, 0, 0);
 const T2 = Date.UTC(2026, 0, 2, 12, 0, 0);
@@ -37,7 +39,9 @@ test('export drops per-device ids and normalises every field it keeps', () => {
   const payload = buildBackupPayload([book('Dune')], [mark('Dune')], '2026-01-03T00:00:00.000Z');
 
   assert.equal(payload.format, 'marginalia-backup');
-  assert.equal(payload.version, 1);
+  assert.equal(payload.version, 2);
+  assert.deepEqual(payload.annotations, []);
+  assert.deepEqual(payload.vocabulary, []);
   assert.equal(payload.exportedAt, '2026-01-03T00:00:00.000Z');
   assert.deepEqual(payload.books, [{
     title: 'Dune',
@@ -56,6 +60,40 @@ test('export drops per-device ids and normalises every field it keeps', () => {
   }]);
   assert.equal('id' in payload.books[0], false);
   assert.equal('id' in payload.bookmarks[0], false);
+});
+
+test('notes and vocabulary travel in the same file', () => {
+  const note = {
+    id: 7, bookTitle: 'Dune', page: 2, sentenceIdx: 3, quoteText: 'fear is the mind-killer',
+    noteText: 'litany', color: 'mint', createdAt: T1, updatedAt: T2
+  };
+  const word = {
+    id: 8, word: 'Kwisatz', partOfSpeech: 'noun', definition: 'shortening of the way',
+    bookTitle: 'Dune', context: 'Kwisatz Haderach', createdAt: T1, updatedAt: T2
+  };
+
+  const payload = buildBackupPayload([book('Dune')], [mark('Dune')], '2026-01-03T00:00:00.000Z', {
+    annotations: [note],
+    vocabulary: [word]
+  });
+
+  assert.equal(payload.version, 2);
+  assert.equal(payload.annotations.length, 1);
+  assert.equal(payload.annotations[0].noteText, 'litany');
+  assert.equal('id' in payload.annotations[0], false, 'per-device ids are not written');
+  assert.equal(payload.vocabulary[0].word, 'Kwisatz');
+  assert.equal('id' in payload.vocabulary[0], false, 'per-device ids are not written');
+});
+
+test('a v1 backup still restores, with no notes or vocabulary', () => {
+  const v1 = {
+    format: 'marginalia-backup', version: 1, exportedAt: '2026-01-03T00:00:00.000Z',
+    books: [book('Dune')], bookmarks: [mark('Dune')]
+  };
+  const parsed = parseBackupPayload(JSON.stringify(v1));
+  assert.equal(parsed.ok, true);
+  assert.deepEqual(parsed.payload.annotations, []);
+  assert.deepEqual(parsed.payload.vocabulary, []);
 });
 
 test('a written file parses back to the same books and bookmarks', () => {
@@ -80,7 +118,8 @@ test('malformed files are refused instead of half-merged', () => {
     ['not json at all', 'invalid JSON'],
     ['[]', 'array root'],
     [JSON.stringify({ format: 'other-app', version: 1, books: [], bookmarks: [] }), 'wrong format'],
-    [JSON.stringify({ format: 'marginalia-backup', version: 2, books: [], bookmarks: [] }), 'future version'],
+    [JSON.stringify({ format: 'marginalia-backup', version: 3, books: [], bookmarks: [] }), 'future version'],
+    [JSON.stringify({ format: 'marginalia-backup', version: 2, books: [], bookmarks: [] }), 'missing notes and vocabulary lists'],
     [JSON.stringify({ format: 'marginalia-backup', version: 1, books: [] }), 'missing bookmarks array'],
     [JSON.stringify({ format: 'marginalia-backup', version: 1, bookmarks: [] }), 'missing books array']
   ];
@@ -137,4 +176,41 @@ test('bookmarks are deduplicated by content across device and file', () => {
 test('two bookmarks on the same page but different sentences are both kept', () => {
   const merged = mergeBookmarks([mark('Dune', { sentenceIdx: 1 })], [mark('Dune', { sentenceIdx: 2 })]);
   assert.equal(merged.length, 2);
+});
+
+function note(overrides = {}) {
+  return {
+    id: 4, bookTitle: 'Dune', page: 1, sentenceIdx: 2, quoteText: 'fear', noteText: '',
+    color: 'amber', createdAt: T1, updatedAt: T1, ...overrides
+  };
+}
+
+test('notes from the file replace a stale local copy but keep its id', () => {
+  const merged = mergeAnnotations(
+    [note({ noteText: 'old', updatedAt: T1 })],
+    [note({ id: 99, noteText: 'litany', updatedAt: T2 })]
+  );
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, 4, 'the local id is kept so the write updates in place');
+  assert.equal(merged[0].noteText, 'litany');
+});
+
+test('a highlight and a note on the same sentence are two entries', () => {
+  const merged = mergeAnnotations([note()], [note({ noteText: 'litany' })]);
+  assert.equal(merged.length, 2);
+});
+
+test('an older note never overwrites the local one', () => {
+  const merged = mergeAnnotations([note({ noteText: 'keep', updatedAt: T2 })], [note({ noteText: 'old', updatedAt: T1 })]);
+  assert.equal(merged[0].noteText, 'keep');
+});
+
+test('vocabulary merges by word, case-insensitively, newest edit wins', () => {
+  const merged = mergeVocabulary(
+    [{ id: 5, word: 'Kwisatz', definition: 'old', updatedAt: T1 }],
+    [{ id: 6, word: 'kwisatz', definition: 'new', updatedAt: T2 }, { word: 'Shai-Hulud', definition: 'worm' }]
+  );
+  assert.equal(merged.length, 2);
+  assert.equal(merged.find((c) => c.word.toLowerCase() === 'kwisatz').definition, 'new');
+  assert.equal(merged.find((c) => c.word.toLowerCase() === 'kwisatz').id, 5);
 });

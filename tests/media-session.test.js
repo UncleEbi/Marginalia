@@ -109,6 +109,13 @@ test('syncMediaSessionState updates playbackState and controls silent keep-alive
   syncMediaSessionState(false);
   assert.equal(mockMediaSession.playbackState, 'paused');
   assert.equal(keepAlivePaused, true, 'keep-alive audio paused when stopped');
+
+  // Studio plays through an AudioContext, which iOS can suspend on lock: the same keep-alive
+  // element has to run for it too.
+  context.activeEngine = 'wasm';
+  keepAlivePlayed = false;
+  syncMediaSessionState(true);
+  assert.equal(keepAlivePlayed, true, 'keep-alive audio keeps the Studio media session alive');
 });
 
 test('registerMediaSessionHandlers binds play, pause, track skip, and seek handlers', () => {

@@ -32,7 +32,9 @@ test('public/app.js handles original PDF binary storage and drawer visibility', 
   assert.match(app, /currentPdfBinary/, 'currentPdfBinary state variable exists');
   assert.match(app, /pageViewToggleBtn\.style\.display\s*=\s*'inline-flex'/, 'shows button when PDF binary is present');
   assert.match(app, /pageViewToggleBtn\.style\.display\s*=\s*'none'/, 'hides button when no PDF binary is present');
-  assert.match(app, /existing\.originalPdf\s*=\s*options\.originalPdf/, 'saves originalPdf binary to IndexedDB book record');
+  assert.match(app, /savePdfBinaryToDB\(title, options\.originalPdf\)/, 'stores the PDF binary away from the shelf record');
+  assert.match(app, /createObjectStore\("pdf_binaries"/, 'a dedicated pdf_binaries store holds the binaries');
+  assert.match(app, /getPdfBinaryFromDB\(b\.title\)/, 'the binary is loaded only when the book is opened');
 });
 
 test('public/app.js renders high-DPI canvas and cancels in-flight render tasks', () => {

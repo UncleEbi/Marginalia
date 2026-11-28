@@ -60,11 +60,16 @@ test('public/app.js implements cache-first playback before fetching TTS', () => 
   assert.ok(idbCheckIdx < fetchTtsIdx, 'IndexedDB cache lookup happens before calling /api/tts');
 });
 
-test('public/app.js restricts MP3 export to pro or BYOK users', () => {
+test('public/app.js restricts cloud audio export to pro or BYOK users, but not local Studio', () => {
   const app = read('public/app.js');
   assert.match(app, /async function canExportAudio/, 'canExportAudio exists');
   assert.match(app, /exportAudioForSentences/, 'exportAudioForSentences exists');
   assert.match(app, /openPaywall\(\)/, 'opens paywall when user is not pro/byok');
+  assert.match(
+    app,
+    /if \(activeEngine === 'wasm'\) return true;/,
+    'Studio export costs no provider credits, so it is not behind the paywall'
+  );
 });
 
 test('public/app.js triggers the chapter/summary download with a matching extension', () => {

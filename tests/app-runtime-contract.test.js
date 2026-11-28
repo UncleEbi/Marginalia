@@ -605,24 +605,26 @@ test('a repeat trigger pushes only the bookmarks that changed', async () => {
   const { client, state } = bookmarkSupabase();
   dom.window.supabase = { createClient: () => client };
 
+  const bookmarkUpserts = () => state.upserts.filter((u) => u.table === 'user_bookmarks');
+
   dom.window.eval(appJs);
   await settle();
-  assert.equal(state.upserts.length, 1, 'startup pushed the one local bookmark');
-  assert.deepEqual(JSON.parse(JSON.stringify(state.upserts[0].rows)).map((row) => row.page), [2]);
+  assert.equal(bookmarkUpserts().length, 1, 'startup pushed the one local bookmark');
+  assert.deepEqual(JSON.parse(JSON.stringify(bookmarkUpserts()[0].rows)).map((row) => row.page), [2]);
 
   // Opening the modal syncs again, and the account now holds that bookmark.
   openBookmarks(dom);
   await settle();
-  assert.equal(state.upserts.length, 1, 'a trigger with nothing new stays off the network');
+  assert.equal(bookmarkUpserts().length, 1, 'a trigger with nothing new stays off the network');
 
   // One new bookmark: the next trigger carries it alone, not the whole shelf.
   await dom.window.saveBookmarkToDB('Dune', 9, 1, 'a fresh quote');
   dom.window.dispatchEvent(new dom.window.Event('online'));
   await settle();
 
-  assert.equal(state.upserts.length, 2, 'the new bookmark was pushed');
+  assert.equal(bookmarkUpserts().length, 2, 'the new bookmark was pushed');
   assert.deepEqual(
-    JSON.parse(JSON.stringify(state.upserts[1].rows)).map((row) => [row.page, row.sentence_idx]),
+    JSON.parse(JSON.stringify(bookmarkUpserts()[1].rows)).map((row) => [row.page, row.sentence_idx]),
     [[9, 1]],
     'and the already-synced bookmark was not sent again'
   );
