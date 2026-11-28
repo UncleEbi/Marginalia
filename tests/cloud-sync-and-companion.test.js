@@ -11,6 +11,10 @@ import { fileURLToPath } from 'node:url';
 
 const htmlPath = fileURLToPath(new URL('../public/index.html', import.meta.url));
 const html = readFileSync(htmlPath, 'utf8');
+const cssPath = fileURLToPath(new URL('../public/style.css', import.meta.url));
+const css = readFileSync(cssPath, 'utf8');
+const appPath = fileURLToPath(new URL('../public/app.js', import.meta.url));
+const app = readFileSync(appPath, 'utf8');
 
 const migrationPath = fileURLToPath(new URL('../supabase/migrations/20261123_cloud_sync.sql', import.meta.url));
 
@@ -36,6 +40,7 @@ test('Supabase cloud sync migration file exists and defines secure RLS for user_
 test('all AI Reading Companion DOM elements exist in index.html', () => {
   const requiredCompanionIds = [
     'openCompanionBtn',
+    'navCompanion',
     'btnSelectionCompanion',
     'companionOverlay',
     'companionDrawer',
@@ -54,6 +59,17 @@ test('all AI Reading Companion DOM elements exist in index.html', () => {
     assert.ok(html.includes(`id="${id}"`), `element id="${id}" must exist in index.html`);
   }
   assert.match(html, /Reads the highlighted selection or active sentence/, 'companion welcome clarifies passage source and AI credits/BYOK');
+});
+
+test('the companion is reachable on phones through the drawer and an unclipped header', () => {
+  assert.match(html, /id="navCompanion"[\s\S]*?Reading Companion/, 'the drawer lists Reading Companion');
+  assert.match(app, /navCompanion\.addEventListener\('click'/, 'the drawer entry opens the companion');
+  assert.match(app, /openCompanionDrawer\(\);/, 'the drawer entry uses the same opener as the header');
+  assert.match(
+    css,
+    /@media \(max-width: 768px\)[\s\S]*?\.header-actions \.btn-label\s*\{\s*display:\s*none;/,
+    'phone headers become icon-only so the Companion button is not pushed off screen'
+  );
 });
 
 test('api/summarize handles companion modes: simplify, socratic, explain_terms, ask', async () => {

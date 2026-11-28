@@ -529,7 +529,7 @@ function openBookmarks(dom) {
 test('the bookmarks modal shows local rows and adopts the account\'s', async () => {
   const dom = setupTestDom();
   const db = fakeBookDB([], [{
-    id: 1, bookTitle: 'Dune', page: 2, sentenceIdx: 0, snippet: 'local quote', createdAt: Date.now()
+    id: 1, bookTitle: 'Dune', page: 2, sentenceIdx: 0, snippet: 'local quote', ownerId: 'user-1', createdAt: Date.now()
   }]);
   dom.window.indexedDB = { open: () => db.open() };
 
@@ -568,7 +568,7 @@ test('the modal renders local rows before it asks the account for more', () => {
 test('deleting a bookmark removes its cloud row without waiting for the network', async () => {
   const dom = setupTestDom();
   const db = fakeBookDB([], [{
-    id: 1, bookTitle: 'Dune', page: 2, sentenceIdx: 0, snippet: 'local quote', createdAt: Date.now()
+    id: 1, bookTitle: 'Dune', page: 2, sentenceIdx: 0, snippet: 'local quote', ownerId: 'user-1', createdAt: Date.now()
   }]);
   dom.window.indexedDB = { open: () => db.open() };
   dom.window.confirm = () => true;
@@ -598,7 +598,7 @@ test('deleting a bookmark removes its cloud row without waiting for the network'
 test('a repeat trigger pushes only the bookmarks that changed', async () => {
   const dom = setupTestDom();
   const db = fakeBookDB([], [{
-    id: 1, bookTitle: 'Dune', page: 2, sentenceIdx: 0, snippet: 'local quote', createdAt: Date.now()
+    id: 1, bookTitle: 'Dune', page: 2, sentenceIdx: 0, snippet: 'local quote', ownerId: 'user-1', createdAt: Date.now()
   }]);
   dom.window.indexedDB = { open: () => db.open() };
 
@@ -634,7 +634,7 @@ test('a repeat trigger pushes only the bookmarks that changed', async () => {
 test('bookmark sync stays quiet when signed out', async () => {
   const dom = setupTestDom();
   const db = fakeBookDB([], [{
-    id: 1, bookTitle: 'Dune', page: 2, sentenceIdx: 0, snippet: 'local quote', createdAt: Date.now()
+    id: 1, bookTitle: 'Dune', page: 2, sentenceIdx: 0, snippet: 'local quote', ownerId: 'user-1', createdAt: Date.now()
   }]);
   dom.window.indexedDB = { open: () => db.open() };
 

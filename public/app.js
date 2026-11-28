@@ -96,8 +96,32 @@ controlsToggleBar.addEventListener('click', () => openOptionsModal());
 
 // --- INDEXEDDB STORAGE ---
 const DB_NAME = "MarginaliaBookDB";
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 let dbInstance = null;
+
+// Which account owns the notes, bookmarks and words stored in this browser. Empty means "signed
+// out": those records stay visible until an account is chosen, and the claim prompt can adopt them.
+// Keeping the last owner in localStorage means a signed-in reader's notes still render on the first
+// frame, before the session check finishes.
+let activeSyncOwnerId = (() => {
+  try { return localStorage.getItem('marginalia_sync_owner') || ''; } catch { return ''; }
+})();
+let syncClaimPrompted = false;
+
+function setSyncOwner(userId) {
+  const next = userId || '';
+  if (next !== activeSyncOwnerId) syncClaimPrompted = false;
+  activeSyncOwnerId = next;
+  try {
+    if (activeSyncOwnerId) localStorage.setItem('marginalia_sync_owner', activeSyncOwnerId);
+    else localStorage.removeItem('marginalia_sync_owner');
+  } catch { }
+}
+
+function recordOwnerId(record) {
+  return record && record.ownerId ? record.ownerId : '';
+}
+
 
 function initIndexedDB() {
   return new Promise((resolve) => {
@@ -229,6 +253,43 @@ function extractWavPcm(arrayBuffer) {
   return null;
 }
 
+// A cache row remembers which engine and model version wrote it, so a model upgrade can drop clips
+// that the new model can never ask for again.
+function studioCacheEntryIsStale(entry, engine = wasmCacheEngine()) {
+  if (!entry || typeof entry.cacheKey !== 'string') return false;
+  const source = typeof entry.engine === 'string' ? entry.engine : '';
+  return source.startsWith('wasm_') && source !== engine;
+}
+
+async function pruneStaleStudioCache() {
+  if (!dbInstance) await initIndexedDB();
+  if (!dbInstance || !dbInstance.objectStoreNames.contains('audio_cache')) return 0;
+  return new Promise((resolve) => {
+    let removed = 0;
+    let settled = false;
+    const done = () => { if (!settled) { settled = true; resolve(removed); } };
+    try {
+      const tx = dbInstance.transaction(['audio_cache'], 'readwrite');
+      const store = tx.objectStore('audio_cache');
+      const cursorReq = store.openCursor();
+      cursorReq.onsuccess = (e) => {
+        const cursor = e.target.result;
+        if (!cursor) return;
+        if (studioCacheEntryIsStale(cursor.value)) {
+          store.delete(cursor.primaryKey);
+          removed += 1;
+        }
+        cursor.continue();
+      };
+      cursorReq.onerror = done;
+      tx.oncomplete = done;
+      tx.onerror = done;
+    } catch {
+      done();
+    }
+  });
+}
+
 // --- INDEXEDDB AUDIO CACHE (100 MB LRU CAP) ---
 const AUDIO_CACHE_MAX_BYTES = 100 * 1024 * 1024; // 100 MB
 const AUDIO_CACHE_TARGET_BYTES = 85 * 1024 * 1024; // 85 MB
@@ -271,7 +332,7 @@ async function getAudioFromIdbCache(cacheKey) {
   });
 }
 
-async function saveAudioToIdbCache(cacheKey, blob) {
+async function saveAudioToIdbCache(cacheKey, blob, engine = '') {
   if (!blob || !blob.size) return false;
   if (!dbInstance) await initIndexedDB();
   if (!dbInstance || !dbInstance.objectStoreNames.contains('audio_cache')) return false;
@@ -303,6 +364,7 @@ async function saveAudioToIdbCache(cacheKey, blob) {
           }
           store.put({
             cacheKey,
+            engine: engine || '',
             blob,
             sizeBytes,
             lastAccessedAt: Date.now()
@@ -312,7 +374,7 @@ async function saveAudioToIdbCache(cacheKey, blob) {
       };
       cursorReq.onerror = () => {
         try {
-          store.put({ cacheKey, blob, sizeBytes, lastAccessedAt: Date.now() });
+          store.put({ cacheKey, engine: engine || '', blob, sizeBytes, lastAccessedAt: Date.now() });
           resolve(true);
         } catch {
           resolve(false);
@@ -459,6 +521,7 @@ async function syncBookmarkToCloud(bookTitle, page, sentenceIdx, snippet) {
 // One local note as the row user_annotations stores. The unique key is book, page, sentence and
 // kind; the account id always comes from the session, never from the annotation itself.
 function annotationCloudRow(ann, userId) {
+  const updatedAt = Number(ann.updatedAt) || Date.now();
   return {
     user_id: userId,
     book_title: ann.bookTitle,
@@ -469,46 +532,15 @@ function annotationCloudRow(ann, userId) {
     color: ann.color || 'amber',
     note_text: ann.noteText || '',
     created_at: typeof ann.createdAt === 'number' ? new Date(ann.createdAt).toISOString() : (ann.createdAt || new Date().toISOString()),
-    updated_at: new Date().toISOString()
+    updated_at: new Date(updatedAt).toISOString(),
+    deleted_at: ann.deletedAt ? new Date(ann.deletedAt).toISOString() : null
   };
-}
-
-// Pushes any number of notes in one upsert. The sync path hands over every note the account is
-// missing, so a first sign-in with a full notebook costs one request instead of one per note.
-async function pushAnnotationsToCloud(annotations) {
-  const list = (Array.isArray(annotations) ? annotations : []).filter(Boolean);
-  if (!supabaseClient || list.length === 0) return false;
-  try {
-    const { data: { session } } = await supabaseClient.auth.getSession();
-    if (!session?.user) return false;
-    const rows = list.map((ann) => annotationCloudRow(ann, session.user.id));
-    const { error } = await supabaseClient.from('user_annotations').upsert(
-      rows,
-      { onConflict: 'user_id,book_title,page,sentence_idx,type' }
-    );
-    return !error;
-  } catch (e) { return false; }
 }
 
 // A note written in the reader goes out on its own, so the common case stays a single request.
 async function syncAnnotationToCloud(ann) {
-  return pushAnnotationsToCloud(ann ? [ann] : []);
-}
-
-async function deleteCloudAnnotation(bookTitle, page, sentenceIdx, type) {
-  if (!supabaseClient) return;
-  try {
-    const { data: { session } } = await supabaseClient.auth.getSession();
-    if (!session?.user) return;
-    let q = supabaseClient.from('user_annotations')
-      .delete()
-      .eq('user_id', session.user.id)
-      .eq('book_title', bookTitle)
-      .eq('page', page)
-      .eq('sentence_idx', sentenceIdx);
-    if (type) q = q.eq('type', type);
-    await q;
-  } catch (e) { }
+  const result = await pushAnnotationsToCloud(ann ? [ann] : []);
+  return result.ok;
 }
 
 async function getAllBooksFromShelf() {
@@ -1002,7 +1034,9 @@ async function syncBookmarksFromCloud() {
     const user = await getSignedInUser();
     if (!user || !user.id) return { added: 0, pushed: 0 };
 
+    setSyncOwner(user.id);
     const incoming = bookmarksFromCloudRows(await pullCloudBookmarks(supabaseClient, user.id));
+    for (const mark of incoming) mark.ownerId = user.id;
     const local = await getBookmarksFromDB();
     const missing = selectMissingBookmarks(local, incoming);
     if (missing.length) await writeRecords("bookmarks", missing);
@@ -1202,10 +1236,10 @@ function mergeAnnotations(existing, incoming) {
   ].join('\u0000');
   const byKey = new Map();
   for (const ann of Array.isArray(existing) ? existing : []) {
-    if (ann) byKey.set(keyOf(ann), ann);
+    if (ann && !ann.conflictOf) byKey.set(keyOf(ann), ann);
   }
   for (const ann of Array.isArray(incoming) ? incoming : []) {
-    if (!ann) continue;
+    if (!ann || ann.conflictOf) continue;
     const key = keyOf(ann);
     const current = byKey.get(key);
     if (!current) {
@@ -1264,7 +1298,8 @@ async function exportLibraryBackup() {
   try {
     const books = await getAllBooksFromShelf();
     const bookmarks = await getBookmarksFromDB();
-    const annotations = await getAnnotationsFromDB();
+    // Conflict copies are a device-local alternate version; a backup keeps the version that won.
+    const annotations = (await getAnnotationsFromDB()).filter((ann) => !ann.conflictOf);
     const vocabulary = await getVocabFromDB();
     if (!books.length && !bookmarks.length && !annotations.length && !vocabulary.length) {
       showToast('There is nothing on your shelf to back up yet.');
@@ -1629,16 +1664,26 @@ async function updateBookProgressInDB(title, page, sentenceIdx) {
 
 async function saveBookmarkToDB(title, page, sentenceIdx, snippet) {
   return withIdbStore('bookmarks', 'readwrite', (store, tx, resolve) => {
-    store.add({ bookTitle: title, page, sentenceIdx, snippet, createdAt: Date.now() });
+    const now = Date.now();
+    store.add({
+      bookTitle: title,
+      page,
+      sentenceIdx,
+      snippet,
+      ownerId: activeSyncOwnerId,
+      createdAt: now,
+      updatedAt: now
+    });
     tx.oncomplete = () => resolve(true);
     tx.onerror = () => resolve(false);
   }, false);
 }
 
-async function getBookmarksFromDB() {
+async function getBookmarksFromDB(options = {}) {
+  const owner = options.owner !== undefined ? options.owner : activeSyncOwnerId;
   return withIdbStore('bookmarks', 'readonly', (store, _tx, resolve) => {
     const req = store.getAll();
-    req.onsuccess = () => resolve(req.result || []);
+    req.onsuccess = () => resolve((req.result || []).filter((mark) => recordOwnerId(mark) === owner));
     req.onerror = () => resolve([]);
   }, []);
 }
@@ -1652,27 +1697,47 @@ async function deleteBookmarkFromDB(id) {
   }, false);
 }
 
-async function saveAnnotationToDB({ id, bookTitle, page, sentenceIdx, quoteText, noteText, color, createdAt, fromCloud = false }) {
+async function saveAnnotationToDB({
+  id, bookTitle, page, sentenceIdx, quoteText, noteText, color, createdAt,
+  updatedAt, deletedAt, lastSyncedAt, fromCloud = false,
+  conflictOf, conflictFrom, conflictAt
+}) {
   return withIdbStore('annotations', 'readwrite', (store, _tx, resolve) => {
-    const item = {
+    const now = Date.now();
+    const fields = {
       bookTitle: bookTitle || '',
       page: Number.isFinite(page) ? page : 0,
       sentenceIdx: Number.isFinite(sentenceIdx) ? sentenceIdx : 0,
       quoteText: quoteText || '',
       noteText: noteText || '',
       color: color || 'amber',
-      updatedAt: Date.now()
+      ownerId: activeSyncOwnerId,
+      updatedAt: Number(updatedAt) || now,
+      deletedAt: Number(deletedAt) || 0,
+      lastSyncedAt: Number(lastSyncedAt) || 0
     };
+    // A conflict copy is the version of a note that lost a two-device merge. It lives on this device
+    // only, so the marker is stored with it and it is never sent to the account.
+    if (conflictOf) {
+      fields.conflictOf = String(conflictOf);
+      fields.conflictFrom = conflictFrom || '';
+      fields.conflictAt = Number(conflictAt) || now;
+    }
     if (id != null) {
-      item.id = id;
-      const req = store.put(item);
-      req.onsuccess = () => {
-        if (!fromCloud) syncAnnotationToCloud(item).catch(() => {});
-        resolve(item);
+      // Read first so an edit keeps the record's createdAt and any fields the editor did not send.
+      const get = store.get(id);
+      get.onsuccess = () => {
+        const item = { ...(get.result || {}), ...fields, id };
+        const req = store.put(item);
+        req.onsuccess = () => {
+          if (!fromCloud) syncAnnotationToCloud(item).catch(() => {});
+          resolve(item);
+        };
+        req.onerror = () => resolve(null);
       };
-      req.onerror = () => resolve(null);
+      get.onerror = () => resolve(null);
     } else {
-      item.createdAt = Number(createdAt) || Date.now();
+      const item = { ...fields, createdAt: Number(createdAt) || now };
       const req = store.add(item);
       req.onsuccess = (e) => {
         const res = { id: e.target.result, ...item };
@@ -1684,11 +1749,15 @@ async function saveAnnotationToDB({ id, bookTitle, page, sentenceIdx, quoteText,
   }, null);
 }
 
-async function getAnnotationsFromDB(bookTitle = null) {
+async function getAnnotationsFromDB(bookTitle = null, options = {}) {
+  const owner = options.owner !== undefined ? options.owner : activeSyncOwnerId;
+  const includeDeleted = Boolean(options.includeDeleted);
   return withIdbStore('annotations', 'readonly', (store, _tx, resolve) => {
     const req = store.getAll();
     req.onsuccess = () => {
-      let list = req.result || [];
+      let list = (req.result || []).filter((ann) => (
+        recordOwnerId(ann) === owner && (includeDeleted || !ann.deletedAt)
+      ));
       if (bookTitle) list = list.filter(a => a.bookTitle === bookTitle);
       list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
       resolve(list);
@@ -1697,7 +1766,29 @@ async function getAnnotationsFromDB(bookTitle = null) {
   }, []);
 }
 
+// Deleting a note leaves a tombstone so the deletion can travel to the account instead of the note
+// returning from another device on the next pull. The reader never sees the tombstone.
 async function deleteAnnotationFromDB(id) {
+  return withIdbStore('annotations', 'readwrite', (store, _tx, resolve) => {
+    const get = store.get(id);
+    get.onsuccess = () => {
+      const item = get.result;
+      if (!item) return resolve(false);
+      const now = Date.now();
+      item.deletedAt = now;
+      item.updatedAt = now;
+      item.lastSyncedAt = 0;
+      const req = store.put(item);
+      req.onsuccess = () => resolve(true);
+      req.onerror = () => resolve(false);
+    };
+    get.onerror = () => resolve(false);
+  }, false);
+}
+
+// Applying a remote tombstone is the one case that may remove a row outright: keeping it would leave
+// two devices each holding the same deletion forever.
+async function purgeAnnotationFromDB(id) {
   return withIdbStore('annotations', 'readwrite', (store, _tx, resolve) => {
     const req = store.delete(id);
     req.onsuccess = () => resolve(true);
@@ -1705,28 +1796,187 @@ async function deleteAnnotationFromDB(id) {
   }, false);
 }
 
-// --- ANNOTATION CLOUD SYNC ---
-// Highlights and margin notes used to be pushed best-effort with no pull and no retry, so a note
-// written offline lived on one device only. The account's row set is the queue: anything local the
-// cloud does not hold gets pushed on every sync, so a failed write is retried without a flag.
+// --- CLOUD SYNC v2 ---
+// Notes and words move in both directions. A record carries the time it was last edited and the time
+// it was last reconciled with the account; a deletion is a tombstone with deleted_at set. The newest
+// timestamp wins, so an offline edit is not lost just because another device synced first.
+//
+// Both tables run through one engine: they differ only in their key, their column mapping and
+// whether a lost edit is worth keeping. The pull is a full read of the account (these are small
+// records), paged only to keep a single response small. Nothing local remembers "how far we got", so
+// no stored cursor can skip a row that changed while this device was away.
+const SYNC_PAGE_SIZE = 500;
+const SYNC_BATCH_SIZE = 400;
 
-// One note as the shape the local store uses. Identity follows the table's unique key.
+const syncHealth = {
+  annotations: { pulled: 0, pushed: 0, pending: 0, error: '', conflicts: 0 },
+  vocabulary: { pulled: 0, pushed: 0, pending: 0, error: '' },
+  lastSyncAt: 0
+};
+
+function rowRemoteTime(row) {
+  const at = Date.parse((row && (row.updated_at || row.created_at)) || '');
+  return Number.isFinite(at) ? at : 0;
+}
+
+// The local clock of a record: an edit and a deletion are both "a change at this time".
+function recordTime(entry) {
+  return Math.max(Number(entry && entry.updatedAt) || 0, Number(entry && entry.deletedAt) || 0);
+}
+
+// Same key plus same content means both devices already agree; a tombstone only agrees with another.
+function sameSyncFields(a, b, fields) {
+  const aDeleted = Boolean(a && a.deletedAt);
+  const bDeleted = Boolean(b && b.deletedAt);
+  if (aDeleted || bDeleted) return aDeleted === bDeleted;
+  return (Array.isArray(fields) ? fields : []).every(([name, fallback]) => (
+    (a[name] || fallback) === (b[name] || fallback)
+  ));
+}
+
+// Conflict copies belong to one device; the account already holds the version that won.
+function syncableRows(list) {
+  return (Array.isArray(list) ? list : []).filter((row) => row && !row.conflictOf);
+}
+
+function countDirtyRows(entity, list) {
+  return syncableRows(list).filter((row) => (
+    !row.lastSyncedAt || recordTime(row) > Number(row.lastSyncedAt)
+  )).length;
+}
+
+// Pushes any number of records in capped upserts and asks for the server-stamped rows back, so the
+// caller can record when each one was reconciled.
+async function pushSyncRows(entity, records, userId = null) {
+  const list = syncableRows(records);
+  if (!supabaseClient || list.length === 0) return { ok: true, rows: [], error: null };
+  try {
+    let owner = userId;
+    if (!owner) {
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      owner = session?.user?.id;
+    }
+    if (!owner) return { ok: false, rows: [], error: new Error('not signed in') };
+    const rows = [];
+    for (let i = 0; i < list.length; i += SYNC_BATCH_SIZE) {
+      const chunk = list.slice(i, i + SYNC_BATCH_SIZE).map((entry) => entity.toRow(entry, owner));
+      const { data, error } = await supabaseClient
+        .from(entity.table)
+        .upsert(chunk, { onConflict: entity.conflictTarget })
+        .select(entity.stampedColumns);
+      if (error) return { ok: false, rows, error };
+      rows.push(...(Array.isArray(data) ? data : []));
+    }
+    return { ok: true, rows, error: null };
+  } catch (err) {
+    return { ok: false, rows: [], error: err };
+  }
+}
+
+// Full pull of one account's rows. Paged with range() alone: pagination is a transport detail here,
+// not sync state, so an interrupted read simply starts over next time.
+async function pullAllRows(table, columns, userId) {
+  const rows = [];
+  for (let from = 0; ;) {
+    const { data, error } = await supabaseClient
+      .from(table)
+      .select(columns)
+      .eq('user_id', userId)
+      .order('updated_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, from + SYNC_PAGE_SIZE - 1);
+    if (error) throw new Error(error.message || 'Could not read ' + table);
+    const page = Array.isArray(data) ? data : [];
+    rows.push(...page);
+    if (page.length < SYNC_PAGE_SIZE) break;
+    from += page.length;
+  }
+  return rows;
+}
+
+// Pure: decides which side of each key is newer. Local tombstones travel up, remote tombstones remove
+// the local row, and a tie keeps the local copy so a device never silently discards its own edit.
+function planSync(entity, localList, remoteRows) {
+  const localByKey = new Map();
+  for (const row of syncableRows(localList)) {
+    const key = entity.key(row);
+    if (key) localByKey.set(key, row);
+  }
+  const remoteByKey = new Map();
+  for (const row of Array.isArray(remoteRows) ? remoteRows : []) {
+    const entry = entity.fromRow(row);
+    const key = entity.key(entry);
+    if (key) remoteByKey.set(key, entry);
+  }
+
+  const toLocal = [];
+  const toRemote = [];
+  const settled = [];
+  const conflicts = [];
+  const keys = new Set([...localByKey.keys(), ...remoteByKey.keys()]);
+  for (const key of keys) {
+    const local = localByKey.get(key);
+    const remote = remoteByKey.get(key);
+    if (!local) {
+      if (remote && !remote.deletedAt) toLocal.push({ remote });
+      continue;
+    }
+    if (!remote) {
+      toRemote.push(local);
+      continue;
+    }
+    if (sameSyncFields(local, remote, entity.fields)) {
+      // Both sides agree. The caller records the reconciliation (and drops an agreed tombstone).
+      settled.push({ id: local.id, at: remote.updatedAt, deleted: Boolean(local.deletedAt) });
+      continue;
+    }
+    const localTime = recordTime(local);
+    const remoteTime = remote.updatedAt;
+    const syncedAt = Number(local.lastSyncedAt) || 0;
+    if (localTime <= syncedAt && remoteTime <= syncedAt) continue;
+    if (localTime > syncedAt && remoteTime > syncedAt) {
+      conflicts.push({ key, local, remote });
+    }
+    if (remoteTime > localTime) {
+      if (remote.deletedAt) toLocal.push({ removeId: local.id });
+      else toLocal.push({ remote, localId: local.id });
+    } else {
+      toRemote.push(local);
+    }
+  }
+  return { toLocal, toRemote, settled, conflicts };
+}
+
+// Pure: a sync that failed after the copy was kept sees the same conflict again next time, so one
+// copy per lost version is enough.
+function hasSameConflictCopy(existingCopies, copy, fields) {
+  if (!copy || !copy.conflictOf) return false;
+  return (Array.isArray(existingCopies) ? existingCopies : []).some((existing) => (
+    existing && existing.conflictOf === copy.conflictOf && sameSyncFields(existing, copy, fields)
+  ));
+}
+
 function annotationFromCloudRow(row) {
   if (!row || typeof row.book_title !== 'string') return null;
-  const createdAt = Date.parse(row.created_at);
+  const updatedAt = rowRemoteTime(row);
+  const deletedAt = Date.parse((row.deleted_at || '')) || 0;
+  const createdAt = Date.parse((row.created_at || '')) || updatedAt || Date.now();
   return {
     bookTitle: row.book_title,
     page: Math.max(0, Math.floor(Number(row.page) || 0)),
     sentenceIdx: Math.max(0, Math.floor(Number(row.sentence_idx) || 0)),
-    quoteText: String(row.text == null ? '' : row.text),
-    noteText: String(row.note_text == null ? '' : row.note_text),
-    color: String(row.color == null ? 'amber' : row.color),
-    createdAt: Number.isFinite(createdAt) ? createdAt : Date.now()
+    quoteText: row.text || '',
+    noteText: row.note_text || '',
+    color: row.color || 'amber',
+    createdAt,
+    updatedAt: updatedAt || Date.now(),
+    deletedAt,
+    lastSyncedAt: updatedAt || 0
   };
 }
 
 function annotationKey(ann) {
-  if (!ann || typeof ann.bookTitle !== 'string') return null;
+  if (!ann || typeof ann.bookTitle !== 'string') return '';
   return [
     ann.bookTitle,
     Math.max(0, Math.floor(Number(ann.page) || 0)),
@@ -1735,90 +1985,462 @@ function annotationKey(ann) {
   ].join('\u0000');
 }
 
-// Pure: the pulled notes this device does not have yet, deduplicated by that same key.
-function selectMissingAnnotations(local, incoming) {
-  const seen = new Set();
-  for (const ann of Array.isArray(local) ? local : []) {
-    const key = annotationKey(ann);
-    if (key) seen.add(key);
-  }
-  const missing = [];
-  for (const ann of Array.isArray(incoming) ? incoming : []) {
-    const key = annotationKey(ann);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    missing.push(ann);
-  }
-  return missing;
+// Pure: both devices edited a note since the last reconciliation, so the newer side wins. The side
+// that loses becomes a copy that stays on this device, so an edit is never dropped silently. A losing
+// deletion has no text to show and is not copied.
+function annotationConflictCopy(local, remote) {
+  if (!local || !remote) return null;
+  if (annotationKey(local) !== annotationKey(remote)) return null;
+  const localTime = recordTime(local);
+  const remoteTime = Math.max(Number(remote.updatedAt) || 0, Number(remote.deletedAt) || 0);
+  if (!localTime || !remoteTime) return null;
+  const remoteWins = remoteTime > localTime;
+  const kept = remoteWins ? local : remote;
+  if (kept.deletedAt) return null;
+  const now = Date.now();
+  return {
+    bookTitle: kept.bookTitle,
+    page: Math.max(0, Math.floor(Number(kept.page) || 0)),
+    sentenceIdx: Math.max(0, Math.floor(Number(kept.sentenceIdx) || 0)),
+    quoteText: kept.quoteText || '',
+    noteText: kept.noteText || '',
+    color: kept.color || 'amber',
+    createdAt: Number(kept.createdAt) || now,
+    updatedAt: now,
+    deletedAt: 0,
+    lastSyncedAt: now,
+    conflictOf: annotationKey(local),
+    conflictFrom: remoteWins ? 'device' : 'account',
+    conflictAt: now
+  };
 }
 
-async function syncAnnotationsFromCloud() {
-  if (!supabaseClient) return { pulled: 0, pushed: 0 };
+function vocabularyFromCloudRow(row) {
+  if (!row || typeof row.word !== 'string' || !row.word.trim()) return null;
+  const updatedAt = rowRemoteTime(row);
+  const deletedAt = Date.parse((row.deleted_at || '')) || 0;
+  const createdAt = Date.parse((row.created_at || '')) || updatedAt || Date.now();
+  return {
+    word: row.word.trim().toLowerCase(),
+    partOfSpeech: row.part_of_speech || '',
+    definition: row.definition || '',
+    bookTitle: row.book_title || '',
+    context: row.context || '',
+    createdAt,
+    updatedAt: updatedAt || Date.now(),
+    deletedAt,
+    lastSyncedAt: updatedAt || 0
+  };
+}
+
+function vocabularyKey(entry) {
+  return entry && typeof entry.word === 'string' ? entry.word.trim().toLowerCase() : '';
+}
+
+function vocabularyCloudRow(entry, userId) {
+  return {
+    user_id: userId,
+    word: vocabularyKey(entry),
+    part_of_speech: entry.partOfSpeech || '',
+    definition: entry.definition || '',
+    book_title: entry.bookTitle || '',
+    context: entry.context || '',
+    created_at: new Date(Number(entry.createdAt) || Date.now()).toISOString(),
+    updated_at: new Date(Number(entry.updatedAt) || Date.now()).toISOString(),
+    deleted_at: entry.deletedAt ? new Date(entry.deletedAt).toISOString() : null
+  };
+}
+
+async function saveVocabularyFromCloud(entry) {
+  return withIdbStore('vocabulary', 'readwrite', (store, _tx, resolve) => {
+    const req = store.getAll();
+    req.onsuccess = () => {
+      const key = vocabularyKey(entry);
+      const existing = (req.result || []).find((row) => (
+        vocabularyKey(row) === key && recordOwnerId(row) === activeSyncOwnerId
+      ));
+      const item = {
+        ...(existing || {}),
+        word: key,
+        partOfSpeech: entry.partOfSpeech || '',
+        definition: entry.definition || '',
+        bookTitle: entry.bookTitle || '',
+        context: entry.context || '',
+        ownerId: activeSyncOwnerId,
+        createdAt: Number(entry.createdAt) || Date.now(),
+        updatedAt: Number(entry.updatedAt) || Date.now(),
+        deletedAt: Number(entry.deletedAt) || 0,
+        lastSyncedAt: Number(entry.lastSyncedAt) || 0
+      };
+      const write = existing ? store.put(item) : store.add(item);
+      write.onsuccess = (e) => resolve(existing ? item : { id: e.target.result, ...item });
+      write.onerror = () => resolve(null);
+    };
+    req.onerror = () => resolve(null);
+  }, null);
+}
+
+async function purgeVocabularyFromDB(id) {
+  return withIdbStore('vocabulary', 'readwrite', (store, _tx, resolve) => {
+    const req = store.delete(id);
+    req.onsuccess = () => resolve(true);
+    req.onerror = () => resolve(false);
+  }, false);
+}
+
+// The two stores as the engine sees them. Vocabulary deliberately keeps no conflict copies: its list
+// is one card per word, so a copy would duplicate the card and the next pull would overwrite it. A
+// losing word edit is last-write-wins only.
+const SYNC_ENTITIES = {
+  annotations: {
+    store: 'annotations',
+    table: 'user_annotations',
+    columns: 'book_title,page,sentence_idx,text,type,color,note_text,created_at,updated_at,deleted_at',
+    conflictTarget: 'user_id,book_title,page,sentence_idx,type',
+    stampedColumns: 'book_title,page,sentence_idx,type,updated_at',
+    fields: [['quoteText', ''], ['noteText', ''], ['color', 'amber']],
+    key: annotationKey,
+    fromRow: annotationFromCloudRow,
+    toRow: annotationCloudRow,
+    read: () => getAnnotationsFromDB(null, { includeDeleted: true }),
+    save: (remote, localId) => saveAnnotationToDB({
+      ...remote,
+      id: localId != null ? localId : undefined,
+      fromCloud: true
+    }),
+    purge: purgeAnnotationFromDB,
+    buildConflictCopy: annotationConflictCopy
+  },
+  vocabulary: {
+    store: 'vocabulary',
+    table: 'user_vocabulary',
+    columns: 'word,part_of_speech,definition,book_title,context,created_at,updated_at,deleted_at',
+    conflictTarget: 'user_id,word',
+    stampedColumns: 'word,updated_at',
+    fields: [['partOfSpeech', ''], ['definition', ''], ['bookTitle', ''], ['context', '']],
+    key: vocabularyKey,
+    fromRow: vocabularyFromCloudRow,
+    toRow: vocabularyCloudRow,
+    read: () => getVocabFromDB(null, { includeDeleted: true }),
+    save: (remote) => saveVocabularyFromCloud(remote),
+    purge: purgeVocabularyFromDB,
+    buildConflictCopy: null
+  }
+};
+
+async function keepConflictCopies(entity, conflicts, existingCopies) {
+  let kept = 0;
+  for (const conflict of Array.isArray(conflicts) ? conflicts : []) {
+    const copy = entity.buildConflictCopy(conflict.local, conflict.remote);
+    if (hasSameConflictCopy(existingCopies, copy, entity.fields)) continue;
+    const saved = await entity.save(copy);
+    if (!saved) continue;
+    existingCopies.push(saved);
+    kept += 1;
+  }
+  return kept;
+}
+
+async function markRowSynced(storeName, id, at) {
+  const stamp = Number(at) || 0;
+  if (!stamp) return false;
+  return withIdbStore(storeName, 'readwrite', (store, _tx, resolve) => {
+    const req = store.get(id);
+    req.onsuccess = () => {
+      const row = req.result;
+      if (!row) return resolve(false);
+      if (Number(row.lastSyncedAt) >= stamp) return resolve(true);
+      row.lastSyncedAt = stamp;
+      const put = store.put(row);
+      put.onsuccess = () => resolve(true);
+      put.onerror = () => resolve(false);
+    };
+    req.onerror = () => resolve(false);
+  }, false);
+}
+
+// Both sides already agree. Record the reconciliation so the row stops counting as pending, and drop
+// a local tombstone the account agrees with: keeping it would report "waiting to sync" forever.
+async function settleSyncRows(entity, settled) {
+  for (const entry of Array.isArray(settled) ? settled : []) {
+    if (entry.id == null) continue;
+    if (entry.deleted) {
+      await entity.purge(entry.id);
+      continue;
+    }
+    await markRowSynced(entity.store, entry.id, entry.at);
+  }
+}
+
+async function markSyncRowsSynced(entity, localRows, serverRows, sentAt) {
+  const times = new Map();
+  for (const row of Array.isArray(serverRows) ? serverRows : []) {
+    const entry = entity.fromRow(row);
+    const key = entity.key(entry);
+    if (key) times.set(key, rowRemoteTime(row) || sentAt);
+  }
+  return withIdbStore(entity.store, 'readwrite', (store, _tx, resolve) => {
+    const req = store.getAll();
+    req.onsuccess = () => {
+      const byId = new Map((req.result || []).map((row) => [row.id, row]));
+      for (const row of Array.isArray(localRows) ? localRows : []) {
+        const stored = byId.get(row.id);
+        if (!stored || recordTime(stored) > sentAt) continue;
+        stored.lastSyncedAt = times.get(entity.key(stored)) || sentAt;
+        store.put(stored);
+      }
+      resolve(true);
+    };
+    req.onerror = () => resolve(false);
+  }, false);
+}
+
+async function syncEntity(kind) {
+  const entity = SYNC_ENTITIES[kind];
+  const empty = { pulled: 0, pushed: 0, pending: 0, conflicts: 0 };
+  if (!entity || !supabaseClient) return empty;
+  const user = await getSignedInUser();
+  if (!user || !user.id) {
+    reportSync(kind, { ...empty, error: '' });
+    return empty;
+  }
+  setSyncOwner(user.id);
+  const stored = await entity.read();
+  const local = syncableRows(stored);
+
+  let remoteRows;
   try {
-    const user = await getSignedInUser();
-    if (!user || !user.id) return { pulled: 0, pushed: 0 };
+    remoteRows = await pullAllRows(entity.table, entity.columns, user.id);
+  } catch (err) {
+    const pending = countDirtyRows(entity, local);
+    reportSync(kind, { error: String(err.message || err), pending });
+    return { ...empty, pending, error: err };
+  }
 
-    const { data, error } = await supabaseClient
-      .from('user_annotations')
-      .select('book_title, page, sentence_idx, text, type, color, note_text, created_at')
-      .eq('user_id', user.id);
-    if (error) {
-      console.warn('Annotation pull failed:', error.message || error);
-      return { pulled: 0, pushed: 0 };
+  // Signing out (or into another account) while the pull was in flight would file these rows under
+  // the wrong owner. Stop here; the next sync belongs to whichever account is active by then.
+  if (activeSyncOwnerId !== user.id) {
+    reportSync(kind, { ...empty, error: '' });
+    return empty;
+  }
+
+  const plan = planSync(entity, local, remoteRows);
+  const conflicts = entity.buildConflictCopy
+    ? await keepConflictCopies(entity, plan.conflicts, stored.filter((row) => row && row.conflictOf))
+    : 0;
+  if (conflicts > 0) {
+    showToast('Kept ' + conflicts + ' conflicting note version' + (conflicts === 1 ? '' : 's') + ' — open Notes to compare.');
+  }
+
+  let pulled = 0;
+  for (const action of plan.toLocal) {
+    if (action.removeId != null) {
+      if (await entity.purge(action.removeId)) pulled += 1;
+    } else if (action.remote) {
+      if (await entity.save(action.remote, action.localId)) pulled += 1;
     }
+  }
+  await settleSyncRows(entity, plan.settled);
 
-    const remote = (Array.isArray(data) ? data : [])
-      .map(annotationFromCloudRow)
-      .filter(Boolean);
-    const local = await getAnnotationsFromDB();
-
-    let pulled = 0;
-    for (const ann of selectMissingAnnotations(local, remote)) {
-      const saved = await saveAnnotationToDB({ ...ann, fromCloud: true });
-      if (saved) pulled += 1;
+  let pushed = 0;
+  if (plan.toRemote.length) {
+    const sentAt = Date.now();
+    const result = await pushSyncRows(entity, plan.toRemote, user.id);
+    if (!result.ok) {
+      const pending = countDirtyRows(entity, await entity.read());
+      reportSync(kind, {
+        error: String((result.error && result.error.message) || result.error || 'Push failed'),
+        pending
+      });
+      return { pulled, pushed: 0, pending, conflicts, error: result.error };
     }
+    pushed = plan.toRemote.length;
+    await markSyncRowsSynced(entity, plan.toRemote, result.rows, sentAt);
+  }
 
-    // The pull is the record of what the account holds: push exactly what it lacks, so an offline
-    // write is retried on the next launch or reconnect and nothing is sent twice.
-    const remoteKeys = new Set(remote.map(annotationKey).filter(Boolean));
-    const missing = local.filter((ann) => {
-      const key = annotationKey(ann);
-      return key && !remoteKeys.has(key);
-    });
-    const pushed = missing.length && await pushAnnotationsToCloud(missing) ? missing.length : 0;
+  const pending = countDirtyRows(entity, await entity.read());
+  reportSync(kind, { pulled, pushed, pending, error: '', conflicts });
+  if (pulled > 0 && kind === 'annotations' && currentDocName) {
+    await refreshCurrentDocAnnotations();
+    renderPage(currentPage);
+  }
+  return { pulled, pushed, pending, conflicts };
+}
 
-    if (pulled > 0 && currentDocName) {
+function syncAnnotationsFromCloud() {
+  return syncEntity('annotations');
+}
+
+function syncVocabularyFromCloud() {
+  return syncEntity('vocabulary');
+}
+
+function pushAnnotationsToCloud(annotations, userId = null) {
+  return pushSyncRows(SYNC_ENTITIES.annotations, annotations, userId);
+}
+
+function pushVocabularyToCloud(entries, userId = null) {
+  return pushSyncRows(SYNC_ENTITIES.vocabulary, entries, userId);
+}
+
+function shortSyncError(error) {
+  const text = String((error && error.message) || error || '').trim();
+  return text.length > 48 ? text.slice(0, 45) + '…' : text;
+}
+
+function relativeSyncTime(at) {
+  const seconds = Math.max(0, Math.round((Date.now() - Number(at)) / 1000));
+  if (seconds < 45) return 'just now';
+  if (seconds < 3600) return Math.max(1, Math.round(seconds / 60)) + 'm ago';
+  if (seconds < 86400) return Math.round(seconds / 3600) + 'h ago';
+  return Math.round(seconds / 86400) + 'd ago';
+}
+
+function reportSync(kind, result) {
+  if (!syncHealth[kind]) return;
+  Object.assign(syncHealth[kind], result || {});
+  if (!syncHealth[kind].error) syncHealth.lastSyncAt = Date.now();
+  renderSyncHealth();
+}
+
+function renderSyncHealth() {
+  const note = document.getElementById('syncHealthNote');
+  if (!note) return;
+  const pending = syncHealth.annotations.pending + syncHealth.vocabulary.pending;
+  const error = syncHealth.annotations.error || syncHealth.vocabulary.error;
+  let text;
+  if (!activeSyncOwnerId) {
+    text = 'Notes and words stay on this device.';
+  } else if (error) {
+    text = pending + ' waiting · sync paused (' + shortSyncError(error) + ')';
+  } else if (pending > 0) {
+    text = pending + ' waiting to sync';
+  } else if (syncHealth.lastSyncAt) {
+    const kept = syncHealth.annotations.conflicts || 0;
+    text = 'Synced ' + relativeSyncTime(syncHealth.lastSyncAt) + (kept ? ' · ' + kept + ' conflict kept' : '');
+  } else {
+    text = 'Waiting for first sync…';
+  }
+  note.textContent = text;
+  note.title = error ? String(error) : 'Notes and vocabulary sync when you are signed in.';
+}
+
+async function claimStoreForAccount(storeName, userId) {
+  return withIdbStore(storeName, 'readwrite', (store, _tx, resolve) => {
+    const req = store.getAll();
+    req.onsuccess = () => {
+      for (const record of (req.result || [])) {
+        if (!record.ownerId) {
+          record.ownerId = userId;
+          store.put(record);
+        }
+      }
+      resolve(true);
+    };
+    req.onerror = () => resolve(false);
+  }, false);
+}
+
+// A decline belongs to the account that was asked, not to the page: the reader answers once and the
+// next launch does not nag again. The unowned rows are left exactly where they are (hidden while an
+// account is signed in, visible again when signed out), so removing the key below re-opens the offer.
+const CLAIM_DECLINED_PREFIX = 'marginalia_claim_declined_v1_';
+
+function claimDeclinedFor(userId) {
+  if (!userId) return false;
+  try { return localStorage.getItem(CLAIM_DECLINED_PREFIX + userId) === '1'; } catch { return false; }
+}
+
+function rememberClaimDecline(userId) {
+  if (!userId) return;
+  try { localStorage.setItem(CLAIM_DECLINED_PREFIX + userId, '1'); } catch { }
+}
+
+// Records written before sign-in have no owner. Adopt them once, only after the reader agrees: on a
+// shared browser another account's notes must not arrive silently.
+async function claimUnownedLocalData(userId) {
+  if (!userId || syncClaimPrompted) return 0;
+  syncClaimPrompted = true;
+  // This account already said no on an earlier launch: keep its unowned records untouched and skip
+  // the prompt instead of asking again every time the page opens.
+  if (claimDeclinedFor(userId)) return 0;
+  try {
+    const [annotations, bookmarks, vocabulary] = await Promise.all([
+      getAnnotationsFromDB(null, { owner: '' }),
+      getBookmarksFromDB({ owner: '' }),
+      getVocabFromDB(null, { owner: '' })
+    ]);
+    const total = annotations.length + bookmarks.length + vocabulary.length;
+    if (!total) return 0;
+    const message = 'This device has ' + annotations.length + ' note(s), '
+      + bookmarks.length + ' bookmark(s) and ' + vocabulary.length
+      + ' word(s) saved before you signed in. Add them to this account?';
+    const accepted = typeof confirm === 'function' && confirm(message);
+    if (!accepted) {
+      rememberClaimDecline(userId);
+      return 0;
+    }
+    await Promise.all([
+      claimStoreForAccount('annotations', userId),
+      claimStoreForAccount('bookmarks', userId),
+      claimStoreForAccount('vocabulary', userId)
+    ]);
+    if (currentDocName) {
       await refreshCurrentDocAnnotations();
       renderPage(currentPage);
     }
-    return { pulled, pushed };
+    return total;
   } catch (err) {
-    console.warn('Annotation sync skipped:', err);
-    return { pulled: 0, pushed: 0 };
+    console.warn('Could not claim local records:', err);
+    return 0;
   }
+}
+
+async function syncAllCloudData() {
+  const user = await getSignedInUser();
+  setSyncOwner(user?.id || '');
+  renderSyncHealth();
+  if (!user || !user.id) return [];
+  await claimUnownedLocalData(user.id);
+  const results = await Promise.allSettled([
+    syncAnnotationsFromCloud(),
+    syncVocabularyFromCloud(),
+    syncBookmarksFromCloud()
+  ]);
+  syncHealth.lastSyncAt = Date.now();
+  renderSyncHealth();
+  return results;
 }
 
 async function saveVocabToDB({ word, partOfSpeech, definition, bookTitle, context }) {
   return withIdbStore('vocabulary', 'readwrite', (store, _tx, resolve) => {
     const req = store.getAll();
     req.onsuccess = () => {
-      const existing = (req.result || []).find(v => v.word.toLowerCase() === (word || '').toLowerCase());
+      const normalized = (word || '').toLowerCase();
+      const existing = (req.result || []).find((v) => (
+        v.word.toLowerCase() === normalized && recordOwnerId(v) === activeSyncOwnerId
+      ));
       if (existing) {
         existing.partOfSpeech = partOfSpeech || existing.partOfSpeech;
         existing.definition = definition || existing.definition;
         existing.context = context || existing.context;
+        existing.ownerId = activeSyncOwnerId;
         existing.updatedAt = Date.now();
+        existing.lastSyncedAt = 0;
         store.put(existing);
         resolve(existing);
       } else {
         const item = {
-          word: (word || '').toLowerCase(),
+          word: normalized,
           partOfSpeech: partOfSpeech || '',
           definition: definition || '',
           bookTitle: bookTitle || '',
           context: context || '',
+          ownerId: activeSyncOwnerId,
           createdAt: Date.now(),
-          updatedAt: Date.now()
+          updatedAt: Date.now(),
+          deletedAt: 0,
+          lastSyncedAt: 0
         };
         const addReq = store.add(item);
         addReq.onsuccess = (e) => resolve({ id: e.target.result, ...item });
@@ -1829,11 +2451,15 @@ async function saveVocabToDB({ word, partOfSpeech, definition, bookTitle, contex
   }, null);
 }
 
-async function getVocabFromDB(bookTitle = null) {
+async function getVocabFromDB(bookTitle = null, options = {}) {
+  const owner = options.owner !== undefined ? options.owner : activeSyncOwnerId;
+  const includeDeleted = Boolean(options.includeDeleted);
   return withIdbStore('vocabulary', 'readonly', (store, _tx, resolve) => {
     const req = store.getAll();
     req.onsuccess = () => {
-      let list = req.result || [];
+      let list = (req.result || []).filter((v) => (
+        recordOwnerId(v) === owner && (includeDeleted || !v.deletedAt)
+      ));
       if (bookTitle) list = list.filter(v => !v.bookTitle || v.bookTitle === bookTitle);
       list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
       resolve(list);
@@ -1846,7 +2472,9 @@ let currentDocAnnotations = [];
 
 async function refreshCurrentDocAnnotations() {
   try {
-    currentDocAnnotations = await getAnnotationsFromDB(currentDocName);
+    // Conflict copies appear in the notes list, but the page itself keeps the version that won.
+    currentDocAnnotations = (await getAnnotationsFromDB(currentDocName))
+      .filter((ann) => !ann.conflictOf);
   } catch (e) {
     currentDocAnnotations = [];
   }
@@ -2014,6 +2642,17 @@ let selectedNoteColor = 'amber';
 const annotationsModal = document.getElementById('annotationsModal');
 const annotationsModalList = document.getElementById('annotationsModalList');
 const annotationsCountSummary = document.getElementById('annotationsCountSummary');
+const syncRetryBtn = document.getElementById('syncRetryBtn');
+if (syncRetryBtn) {
+  syncRetryBtn.addEventListener('click', async () => {
+    syncRetryBtn.disabled = true;
+    syncRetryBtn.textContent = 'Syncing…';
+    try { await syncAllCloudData(); } finally {
+      syncRetryBtn.disabled = false;
+      syncRetryBtn.textContent = '↻ Retry';
+    }
+  });
+}
 
 // Study Kit Modal Elements
 const studyKitModal = document.getElementById('studyKitModal');
@@ -2037,6 +2676,7 @@ let isAudioDrillActive = false;
 let isAudioDrillPaused = false;
 const audioDrillBtn = document.getElementById('audioDrillBtn');
 const navAudioDrill = document.getElementById('navAudioDrill');
+const navCompanion = document.getElementById('navCompanion');
 const audioDrillModal = document.getElementById('audioDrillModal');
 const drillSourceSelect = document.getElementById('drillSourceSelect');
 const drillPauseSelect = document.getElementById('drillPauseSelect');
@@ -2163,6 +2803,9 @@ function cancelAllSpeech() {
     wasmActiveSourceNodes.clear();
   }
   if (typeof wasmScheduledChunks !== 'undefined') wasmScheduledChunks.clear();
+  if (typeof wasmMediaStream !== 'undefined' && wasmMediaStream) {
+    try { wasmMediaStream.element.pause(); } catch (e) { }
+  }
   if (typeof wasmScheduledEndTime !== 'undefined') wasmScheduledEndTime = 0;
   if (typeof wasmClauseStreams !== 'undefined') {
     // Detach this session's schedulers; the already-received clauses stay for a replay.
@@ -2243,6 +2886,7 @@ function syncMediaSessionState(playing) {
     // A looping silent <audio> element keeps the page's media session alive for it too.
     if (playing && (activeEngine === 'browser' || activeEngine === 'wasm')) {
       startBrowserSpeechKeepAlive();
+      if (typeof resumeWasmMediaStreamAudio === 'function') resumeWasmMediaStreamAudio();
     } else {
       stopBrowserSpeechKeepAlive();
     }
@@ -3330,25 +3974,36 @@ async function showAnnotationsModal() {
   const notes = await getAnnotationsFromDB(currentDocName);
   if (!annotationsModalList) return;
   annotationsModalList.innerHTML = '';
+  const conflictCopyCount = notes.filter((n) => n.conflictOf).length;
   if (annotationsCountSummary) {
-    annotationsCountSummary.textContent = `${notes.length} note${notes.length === 1 ? '' : 's'} / highlight${notes.length === 1 ? '' : 's'} in ${currentDocName}`;
+    const copyNote = conflictCopyCount
+      ? ` · ${conflictCopyCount} conflict ${conflictCopyCount === 1 ? 'copy' : 'copies'}`
+      : '';
+    annotationsCountSummary.textContent = `${notes.length} note${notes.length === 1 ? '' : 's'} / highlight${notes.length === 1 ? '' : 's'} in ${currentDocName}${copyNote}`;
   }
+  renderSyncHealth();
 
   if (notes.length === 0) {
     annotationsModalList.innerHTML = '<div style="text-align:center; padding:2rem; color:var(--text-muted); font-size:0.85rem;">No notes or highlights in this document yet.<br>Select any text to highlight or add a margin note.</div>';
   } else {
     notes.forEach(n => {
       const card = document.createElement('div');
-      card.className = 'shelf-card';
+      const isConflictCopy = Boolean(n.conflictOf);
+      card.className = 'shelf-card' + (isConflictCopy ? ' shelf-card-conflict' : '');
       const colorBadge = n.color === 'mint' ? '🟢 Mint' : n.color === 'rose' ? '🔴 Rose' : '🟡 Amber';
+      const conflictBadge = isConflictCopy
+        ? '<span class="annotation-conflict-badge" title="Both devices edited this note before they synced. This copy keeps the version that lost.">⚠️ Conflict copy</span>'
+        : '';
       card.innerHTML = `
         <div class="shelf-card-info">
-          <div style="display:flex; align-items:center; gap:0.4rem; margin-bottom:0.2rem;">
+          <div style="display:flex; align-items:center; gap:0.4rem; margin-bottom:0.2rem; flex-wrap:wrap;">
             <span style="font-size:0.72rem; padding:1px 6px; border-radius:10px; background:var(--border);">${colorBadge}</span>
             <span class="shelf-card-sub">Page ${n.page + 1}</span>
+            ${conflictBadge}
           </div>
           <span class="shelf-card-title" style="font-style:italic;">"${escapeHtml(n.quoteText)}"</span>
           ${n.noteText ? `<span style="font-size:0.82rem; color:var(--text-main); margin-top:0.25rem;">📝 ${escapeHtml(n.noteText)}</span>` : ''}
+          ${isConflictCopy ? '<span class="annotation-conflict-hint">Both devices changed this note before they synced. This is the version that lost; delete it if you do not want to keep it.</span>' : ''}
         </div>
         <div class="shelf-action-group">
           <button class="shelf-delete-btn" title="Delete note">🗑️</button>
@@ -3360,9 +4015,14 @@ async function showAnnotationsModal() {
       if (delBtn) {
         delBtn.addEventListener('click', async (e) => {
           e.stopPropagation();
-          if (confirm('Delete this annotation?')) {
-            await deleteAnnotationFromDB(n.id);
-            deleteCloudAnnotation(n.bookTitle, n.page, n.sentenceIdx, n.type);
+          if (confirm(isConflictCopy ? 'Delete this conflict copy?' : 'Delete this annotation?')) {
+            // A conflict copy never reached the account, so it is removed outright instead of being
+            // left behind as a tombstone with nothing to send.
+            if (isConflictCopy) await purgeAnnotationFromDB(n.id);
+            else await deleteAnnotationFromDB(n.id);
+            // The tombstone is the delete request: the same sync path sends it, and a failed push is
+            // retried on the next launch instead of resurrecting the note from another device.
+            if (!isConflictCopy) syncAnnotationsFromCloud().catch(() => { });
             await refreshCurrentDocAnnotations();
             showAnnotationsModal();
             renderPage(currentPage);
@@ -3906,6 +4566,13 @@ if (navAudioDrill) {
   navAudioDrill.addEventListener('click', () => {
     closeDrawer();
     openAudioDrillModal();
+  });
+}
+
+if (navCompanion) {
+  navCompanion.addEventListener('click', () => {
+    // openCompanionDrawer closes the side drawer itself, so the menu never sits behind it.
+    openCompanionDrawer();
   });
 }
 
@@ -4685,6 +5352,13 @@ profileSignOutBtn.addEventListener('click', async () => {
     }
     localStorage.removeItem('marginalia_auth_token');
     localStorage.removeItem('marginalia_auth_user');
+    // Signed-out records are a separate namespace: the next account on this browser must not see or
+    // upload the previous account's notes, bookmarks or words.
+    setSyncOwner('');
+    if (currentDocName) {
+      refreshCurrentDocAnnotations().then(() => renderPage(currentPage)).catch(() => { });
+    }
+    renderSyncHealth();
     resetProfileModalPlaceholders();
     closeModalById('profileModal');
     updateAuthBadge();
@@ -5019,9 +5693,10 @@ async function submitAuth(action) {
     localStorage.setItem('marginalia_auth_token', session.access_token);
     if (session.user) localStorage.setItem('marginalia_auth_user', JSON.stringify(session.user));
 
-    // Signing in is the moment another device's reading positions and bookmarks become relevant.
+    // Signing in is the moment another device's reading positions, notes and words become relevant.
+    setSyncOwner(session.user?.id || '');
     restoreProgressFromCloud();
-    syncBookmarksFromCloud();
+    syncAllCloudData();
 
     showAuthAlert(action === 'signup' ? 'Account created & signed in!' : 'Success! Signed in.', 'success');
     resetCaptchaChallenge();
@@ -6010,11 +6685,103 @@ function base64ToBlobUrl(b64) {
 const modelSampleRate = 22050;
 const KOKORO_CDN_URL = 'https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/+esm';
 const KOKORO_MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
+// Cached clips are keyed by the model that produced them. Bumping this (with KOKORO_MODEL_ID) makes
+// every older clip unreachable, and startup drops those rows instead of waiting for the LRU cap.
+const STUDIO_MODEL_VERSION = 'kokoro_v1';
+function wasmCacheEngine() {
+  return 'wasm_' + STUDIO_MODEL_VERSION;
+}
 const KOKORO_VOICE_MAP = {
   heart: 'af_heart',
   michael: 'am_michael',
   emma: 'bf_emma'
 };
+// --- One-time model download consent ---------------------------------------
+// Studio is the only engine that must download a model (~85 MB) before it can speak, so it asks
+// once before spending the reader's data. The answer and the readiness of the model survive
+// reloads: "ready" means the model is on the device, so the next read works offline.
+const STUDIO_MODEL_READY_KEY = 'marginalia_studio_model_ready_' + STUDIO_MODEL_VERSION;
+const STUDIO_MODEL_CONSENT_KEY = 'marginalia_studio_model_consent_v1';
+
+function studioModelReady() {
+  try { return localStorage.getItem(STUDIO_MODEL_READY_KEY) === '1'; } catch { return false; }
+}
+
+function setStudioModelReady(ready) {
+  try {
+    if (ready) localStorage.setItem(STUDIO_MODEL_READY_KEY, '1');
+    else localStorage.removeItem(STUDIO_MODEL_READY_KEY);
+  } catch { }
+  if (typeof renderStudioStats === 'function') renderStudioStats();
+}
+
+function studioModelConsent() {
+  try { return localStorage.getItem(STUDIO_MODEL_CONSENT_KEY) || ''; } catch { return ''; }
+}
+
+function setStudioModelConsent(answer) {
+  try {
+    if (answer) localStorage.setItem(STUDIO_MODEL_CONSENT_KEY, answer);
+    else localStorage.removeItem(STUDIO_MODEL_CONSENT_KEY);
+  } catch { }
+}
+
+function studioModelConsentNeeded() {
+  return !studioModelReady() && studioModelConsent() !== 'granted';
+}
+
+function askStudioModelDownload() {
+  // A webview or test harness may have no dialog at all: never trap the reader behind a missing
+  // confirm() - treat it as consent so playback keeps working.
+  if (typeof confirm !== 'function') {
+    setStudioModelConsent('granted');
+    return true;
+  }
+  const agreed = confirm(
+    'Studio reads with a neural voice that runs on this device.\n\n' +
+    'The first use downloads the Kokoro voice model (~85 MB) once; after that Studio reads offline. ' +
+    'Download it now?'
+  );
+  setStudioModelConsent(agreed ? 'granted' : 'declined');
+  return agreed;
+}
+
+// A declined download must not leave the reader parked on a voice that cannot speak: the browser's
+// own voices are already on the device, so fall back to them and say why.
+function declineStudioModelDownload() {
+  activeEngine = 'browser';
+  try { localStorage.setItem('marginalia_active_engine', 'browser'); } catch { }
+  document.querySelectorAll('.engine-tab').forEach((t) => {
+    t.classList.toggle('active', t.dataset.engine === 'browser');
+  });
+  populateVoices();
+  renderStudioStats();
+  showToast('Studio needs a one-time model download. Switched to Native Voice — choose Studio in Options when you have data.');
+}
+
+// What to tell the reader when the on-device engine cannot start, which depends on whether the model
+// is already on the device and whether there is a connection to fetch it.
+function studioVoiceErrorMessage() {
+  const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+  if (studioModelReady()) {
+    return offline
+      ? 'Studio could not start its voice while offline. Switch to Native Voice to keep reading.'
+      : 'Studio could not start its on-device voice. Try again, or switch to Native Voice.';
+  }
+  return 'Studio (On-Device) voice needs an internet connection once to download the model (~85 MB). Switch to Native Voice for offline reading right now.';
+}
+
+function studioModelStatusText() {
+  if (studioModelReady()) return 'Voice model: ready on this device — Studio reads offline.';
+  if (studioModelConsent() === 'declined') return 'Voice model: not downloaded (download declined). Choose Studio again to enable it.';
+  return 'Voice model: not downloaded yet — the first Studio read downloads it once (~85 MB).';
+}
+
+function renderStudioModelStatus() {
+  const el = document.getElementById('studioModelStatus');
+  if (el) el.textContent = studioModelStatusText();
+}
+
 let kokoroTtsPromise = null;
 let wasmTtsWorker = null;
 let wasmWorkerJobId = 0;
@@ -6052,8 +6819,10 @@ function getWasmTtsWorker() {
           console.info(`[Studio voice] ${msg.device} backend (${msg.dtype})${why}`);
           return;
         }
-        // Warm-up finished: the model is in memory, so the next Play only has to synthesize.
+        // Warm-up finished: the model is in memory, so the next Play only has to synthesize - and
+        // because the browser has stored it, the next launch reads offline.
         if (msg.type === 'warmed') {
+          setStudioModelReady(true);
           if (activeEngine === 'wasm' && preloadStatus && !isPlaying) preloadStatus.textContent = 'Ready';
           return;
         }
@@ -6187,6 +6956,7 @@ function synthInWasmWorker(text, voice, priority = 'high', speed = 1) {
       text,
       voice,
       speed,
+      maxChars: studioChunkPlan().maxChars,
       sessionId: wasmSessionId,
       priority
     });
@@ -6229,10 +6999,10 @@ async function stitchWasmClauseStream(stream, text) {
   if (stream.src) releaseAudioSrc(stream.src);
 
   try {
-    const cacheKey = await computeAudioCacheKey('wasm_kokoro_v1', wasmCacheVoiceId(), speed, text);
+    const cacheKey = await computeAudioCacheKey(wasmCacheEngine(), wasmCacheVoiceId(), speed, text);
     if (src.startsWith('blob:')) {
       const blob = await (await fetch(src)).blob();
-      if (blob && blob.size) saveAudioToIdbCache(cacheKey, blob).catch(() => { });
+      if (blob && blob.size) saveAudioToIdbCache(cacheKey, blob, wasmCacheEngine()).catch(() => { });
     }
   } catch (e) { }
 
@@ -6242,10 +7012,20 @@ async function stitchWasmClauseStream(stream, text) {
 // Load the model when Studio is chosen rather than on first Play: the download, session creation
 // and first-inference cost all happen while the reader is still picking a voice.
 const wasmWarmedVoices = new Set();
-function warmWasmTtsWorker() {
+function warmWasmTtsWorker(options = {}) {
   if (activeEngine !== 'wasm') return;
   const worker = getWasmTtsWorker();
   if (!worker) return;
+  // Ask before the first download, and respect an earlier no until the reader picks Studio again
+  // from Options (that click is the fresh intent, so it may ask once more).
+  if (studioModelConsentNeeded()) {
+    const mayAsk = studioModelConsent() !== 'declined' || Boolean(options.ask);
+    if (!mayAsk) return;
+    if (!askStudioModelDownload()) {
+      declineStudioModelDownload();
+      return;
+    }
+  }
   const picked = (typeof voicePicker !== 'undefined' && voicePicker) ? voicePicker.value : '';
   const kokoroVoice = KOKORO_VOICE_MAP[picked] || KOKORO_VOICE_MAP.heart;
   if (wasmWarmedVoices.has(kokoroVoice)) return;
@@ -6281,6 +7061,7 @@ async function loadKokoroOnDeviceTts() {
           }
         }
       });
+      setStudioModelReady(true);
       return tts;
     })().catch((err) => {
       kokoroTtsPromise = null;
@@ -6295,6 +7076,7 @@ const synthPcmCache = new Map();
 const wasmClauseStreams = new Map();
 let wasmAudioCtx = null;
 let wasmGainNode = null;
+let wasmMediaStream = null;
 let wasmScheduledEndTime = 0;
 let wasmSessionId = 0;
 const wasmActiveSourceNodes = new Set();
@@ -6305,6 +7087,26 @@ const wasmScheduledChunks = new Map();
 const WASM_AHEAD_SECONDS = 6;
 function wasmQueuedSeconds(currentTime, scheduledEndTime) {
   return Math.max(0, scheduledEndTime - currentTime);
+}
+
+// --- Adaptive lead and clause size ------------------------------------------
+// A fixed 6 s lead assumes synthesis outruns playback. On a slow device the same sentence takes
+// longer to make than to hear, so the queue drains at every seam; smaller clauses start sooner. On
+// a fast device bigger clauses mean fewer joins and no audible difference. Both follow the measured
+// real-time factor, not the device name.
+const WASM_CHUNK_CHARS = { fast: 80, steady: 60, slow: 40 };
+const WASM_LEAD_SECONDS = { fast: WASM_AHEAD_SECONDS, steady: 9, slow: 14 };
+function studioChunkPlan(summary) {
+  const measured = summary || (typeof studioPerfSummary === 'function' ? studioPerfSummary() : null);
+  const samples = (measured && measured.samples) || 0;
+  const rtf = measured && measured.rtf ? measured.rtf.median : null;
+  // No measurements yet: the original fixed plan, so the opening sentences are unaffected.
+  if (!samples || rtf == null || !Number.isFinite(rtf)) {
+    return { maxChars: WASM_CHUNK_CHARS.fast, leadSeconds: WASM_LEAD_SECONDS.fast, tier: 'fast' };
+  }
+  if (rtf >= 1) return { maxChars: WASM_CHUNK_CHARS.slow, leadSeconds: WASM_LEAD_SECONDS.slow, tier: 'slow' };
+  if (rtf >= 0.6) return { maxChars: WASM_CHUNK_CHARS.steady, leadSeconds: WASM_LEAD_SECONDS.steady, tier: 'steady' };
+  return { maxChars: WASM_CHUNK_CHARS.fast, leadSeconds: WASM_LEAD_SECONDS.fast, tier: 'fast' };
 }
 
 // --- Studio synthesis instrumentation --------------------------------------
@@ -6343,6 +7145,7 @@ function noteStudioSynth(sample) {
   };
   studioPerf.samples.push(entry);
   while (studioPerf.samples.length > STUDIO_PERF_SAMPLES) studioPerf.samples.shift();
+  if (typeof renderStudioStats === 'function') renderStudioStats();
   if (studioPerfVerbose()) {
     console.info(
       `[Studio perf] ${entry.backend}${entry.device ? ` (${entry.device})` : ''}: ${entry.chars} chars,` +
@@ -6386,6 +7189,74 @@ if (typeof window !== 'undefined') {
   };
 }
 
+// --- Studio diagnostics panel ----------------------------------------------
+// The numbers a phone cannot hand a profiler (is synthesis keeping up, how long the first clause
+// took) are worth pasting into a bug report, so Options shows a one-line summary and copies the
+// full JSON instead of asking the reader to open a dev console on the device.
+function studioStatsSnapshot() {
+  return {
+    capturedAt: new Date().toISOString(),
+    engine: typeof activeEngine !== 'undefined' ? activeEngine : '',
+    voice: typeof wasmCacheVoiceId === 'function' ? wasmCacheVoiceId() : '',
+    speed: typeof playbackSpeed !== 'undefined' ? playbackSpeed : 1,
+    modelVersion: typeof STUDIO_MODEL_VERSION !== 'undefined' ? STUDIO_MODEL_VERSION : '',
+    ...studioPerfSummary()
+  };
+}
+
+function studioStatsLine() {
+  const snapshot = studioStatsSnapshot();
+  if (!snapshot.samples) return 'No Studio audio synthesized yet on this device.';
+  const rtf = snapshot.rtf.median == null ? '—' : snapshot.rtf.median.toFixed(2);
+  const p95 = snapshot.rtf.p95 == null ? '—' : snapshot.rtf.p95.toFixed(2);
+  const first = snapshot.firstAudioMs.median == null ? '—' : Math.round(snapshot.firstAudioMs.median) + ' ms';
+  const where = snapshot.device ? `${snapshot.backend} (${snapshot.device})` : snapshot.backend;
+  return `${snapshot.samples} sentence${snapshot.samples === 1 ? '' : 's'} · ${where} · ` +
+    `rtf ${rtf} (p95 ${p95}) · first audio ${first} · ${snapshot.slowerThanRealTime} slower than real time`;
+}
+
+function renderStudioStats() {
+  const block = document.getElementById('studioStatsBlock');
+  if (!block) return;
+  const show = typeof activeEngine !== 'undefined' && activeEngine === 'wasm';
+  block.style.display = show ? 'block' : 'none';
+  if (!show) return;
+  const summaryEl = document.getElementById('studioStatsSummary');
+  if (summaryEl) summaryEl.textContent = studioStatsLine();
+  if (typeof renderStudioModelStatus === 'function') renderStudioModelStatus();
+}
+
+async function copyStudioStats() {
+  const text = JSON.stringify(studioStatsSnapshot(), null, 2);
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      await navigator.clipboard.writeText(text);
+    } else if (typeof document !== 'undefined' && typeof document.execCommand === 'function') {
+      // Older Safari/webviews have no async clipboard outside a secure, focused document.
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      const copied = document.execCommand('copy');
+      area.remove();
+      if (!copied) throw new Error('copy blocked');
+    } else {
+      throw new Error('clipboard unavailable');
+    }
+    showToast('Studio stats copied — paste them into a bug report.');
+  } catch (err) {
+    showToast('Could not copy automatically. The summary is selectable in Options.');
+  }
+}
+
+const copyStudioStatsBtn = document.getElementById('copyStudioStatsBtn');
+if (copyStudioStatsBtn) {
+  copyStudioStatsBtn.addEventListener('click', () => { copyStudioStats(); });
+}
+
 function getWasmAudioCtx() {
   if (typeof window === 'undefined') return null;
   const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -6395,6 +7266,7 @@ function getWasmAudioCtx() {
     wasmGainNode = wasmAudioCtx.createGain();
     wasmGainNode.gain.value = playbackVolume;
     wasmGainNode.connect(wasmAudioCtx.destination);
+    routeWasmAudioThroughMediaStream(wasmAudioCtx, wasmGainNode);
   }
   if (wasmAudioCtx.state === 'suspended') {
     wasmAudioCtx.resume().catch(() => { });
@@ -6402,11 +7274,93 @@ function getWasmAudioCtx() {
   return wasmAudioCtx;
 }
 
+// --- iOS lock-screen routing ------------------------------------------------
+// iOS suspends a plain AudioContext when the screen locks. Routing the same graph through a
+// MediaStreamDestination and a hidden <audio> element makes it media playback the OS keeps alive,
+// which is what lets a Studio chapter continue with the screen off. Only iOS takes the extra hop.
+function needsMediaStreamRouting() {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  return /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && Number(navigator.maxTouchPoints) > 1);
+}
+
+function routeWasmAudioThroughMediaStream(audioCtx, gain) {
+  if (!needsMediaStreamRouting()) return null;
+  if (typeof MediaStream === 'undefined' || typeof document === 'undefined') return null;
+  if (!audioCtx || !gain || typeof audioCtx.createMediaStreamDestination !== 'function') return null;
+  if (wasmMediaStream) return wasmMediaStream;
+  try {
+    const destination = audioCtx.createMediaStreamDestination();
+    const element = document.createElement('audio');
+    element.setAttribute('playsinline', '');
+    element.preload = 'auto';
+    element.srcObject = destination.stream;
+    gain.disconnect();
+    gain.connect(destination);
+    const routed = { destination, element, failed: false };
+    const started = element.play();
+    if (started && typeof started.catch === 'function') {
+      // The media element was refused (the gesture was already spent): put the graph back on the
+      // direct destination so the next sentences are audible instead of feeding a stream nobody plays.
+      started.catch(() => {
+        routed.failed = true;
+        try { gain.disconnect(destination); } catch { }
+        try { gain.connect(audioCtx.destination); } catch { }
+        try { element.pause(); element.srcObject = null; } catch { }
+      });
+    }
+    wasmMediaStream = routed;
+    return routed;
+  } catch {
+    try { gain.connect(audioCtx.destination); } catch { }
+    return null;
+  }
+}
+
+// Coming back from the lock screen: the context is resumed, and the media element may have been
+// paused with it. Restarting it is what keeps the route (and the session) alive.
+function resumeWasmMediaStreamAudio() {
+  if (!wasmMediaStream || wasmMediaStream.failed) return;
+  const element = wasmMediaStream.element;
+  if (!element || !element.paused) return;
+  try {
+    const started = element.play();
+    if (started && typeof started.catch === 'function') started.catch(() => { });
+  } catch { }
+}
+
+// The model's raw output varies from sentence to sentence and from clause to clause, and the
+// streamed path used to play it untouched while the encoded path scaled it: the same sentence
+// changed loudness depending on how it was delivered. Every Studio buffer is level-matched to one
+// peak before it is scheduled, so clips join without a jump in volume.
+const STUDIO_TARGET_PEAK = 0.9;
+const STUDIO_SILENCE_FLOOR = 0.02;
+const STUDIO_MAX_GAIN = 8;
+function normalizeStudioPcm(pcm, targetPeak = STUDIO_TARGET_PEAK) {
+  if (!pcm || !pcm.length) return pcm;
+  let peak = 0;
+  for (let i = 0; i < pcm.length; i++) {
+    const a = Math.abs(pcm[i]);
+    if (Number.isFinite(a) && a > peak) peak = a;
+  }
+  // Digital silence (padding, a pause-only clause) has no level to match, and a clipped or silent
+  // stretch must not be blown up into noise.
+  if (!Number.isFinite(peak) || peak < STUDIO_SILENCE_FLOOR) return pcm;
+  const gain = Math.min(STUDIO_MAX_GAIN, targetPeak / peak);
+  if (Math.abs(gain - 1) < 0.001) return pcm;
+  const out = new Float32Array(pcm.length);
+  for (let i = 0; i < pcm.length; i++) {
+    const s = pcm[i];
+    out[i] = Number.isFinite(s) ? Math.max(-1, Math.min(1, s * gain)) : 0;
+  }
+  return out;
+}
+
 function createWasmAudioBuffer(audioCtx, pcmData, rate = modelSampleRate) {
   if (!audioCtx || !pcmData) return null;
   // Match Native Model Sample Rate: ensure AudioContext.createBuffer uses modelSampleRate rather than audioCtx.sampleRate
   const audioBuffer = audioCtx.createBuffer(1, pcmData.length, rate);
-  audioBuffer.getChannelData(0).set(pcmData);
+  audioBuffer.getChannelData(0).set(normalizeStudioPcm(pcmData));
   return audioBuffer;
 }
 
@@ -6417,14 +7371,10 @@ function encodeWasmPcmToBlobUrl(rawFloatSamples, sampleRate) {
   const totalSamples = padSamples + rawFloatSamples.length + padSamples;
   const pcmData = new Float32Array(totalSamples);
 
-  let maxAmp = 0;
-  for (let i = 0; i < rawFloatSamples.length; i++) {
-    const a = Math.abs(rawFloatSamples[i]);
-    if (a > maxAmp) maxAmp = a;
-  }
-  const normFactor = maxAmp > 1.0 ? 0.98 / maxAmp : 1.0;
-  for (let i = 0; i < rawFloatSamples.length; i++) {
-    pcmData[padSamples + i] = Math.max(-1.0, Math.min(1.0, rawFloatSamples[i] * normFactor));
+  // Same level matcher as the playback buffers, so a file export and a streamed sentence sound alike.
+  const levelMatched = normalizeStudioPcm(rawFloatSamples);
+  for (let i = 0; i < levelMatched.length; i++) {
+    pcmData[padSamples + i] = levelMatched[i];
   }
 
   const buffer = (typeof encodeMonoWavBuffer === 'function')
@@ -6500,9 +7450,7 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
         } catch (err) {
           if (err && err.name === 'AbortError') throw err;
           if (!String(err?.message || '').includes('WASM worker failed')) {
-            throw new Error(
-              'Studio (On-Device) voice needs an internet connection once to download the model (~85 MB). Switch to Native Voice for offline reading right now.'
-            );
+            throw new Error(studioVoiceErrorMessage());
           }
         }
       }
@@ -6515,9 +7463,7 @@ async function synthOnDeviceSpeech(text, voiceId = 'heart') {
       try {
         tts = await loadKokoroOnDeviceTts();
       } catch (err) {
-        throw new Error(
-          'Studio (On-Device) voice needs an internet connection once to download the model (~85 MB). Switch to Native Voice for offline reading right now.'
-        );
+        throw new Error(studioVoiceErrorMessage());
       }
       if (activeEngine === 'wasm' && preloadStatus) {
         preloadStatus.textContent = 'Synthesizing...';
@@ -6588,7 +7534,7 @@ async function getNeuralAudioSrc(text) {
   if (audioInflight.has(key)) return audioInflight.get(key);
 
   // 1. Check persistent IndexedDB audio cache FIRST (cache-first playback)
-  const cacheEngine = engine === 'wasm' ? 'wasm_kokoro_v1' : engine;
+  const cacheEngine = engine === 'wasm' ? wasmCacheEngine() : engine;
   const cacheKey = await computeAudioCacheKey(cacheEngine, voiceId, speed, spokenText);
   try {
     const cachedBlob = await getAudioFromIdbCache(cacheKey);
@@ -6628,7 +7574,7 @@ async function getNeuralAudioSrc(text) {
           if (src.startsWith('blob:') || src.startsWith('data:')) {
             const resp = await fetch(src);
             const b = await resp.blob();
-            saveAudioToIdbCache(cacheKey, b).catch(() => { });
+            saveAudioToIdbCache(cacheKey, b, cacheEngine).catch(() => { });
           }
         } catch { }
         cacheAudio(key, src);
@@ -6670,7 +7616,7 @@ async function getNeuralAudioSrc(text) {
     if (res.ok && (res.headers.get('Content-Type') || '').includes('audio/')) {
       const blob = await res.blob();
       if (!blob.size) throw new Error("The voice server returned no audio.");
-      saveAudioToIdbCache(cacheKey, blob).catch(() => { });
+      saveAudioToIdbCache(cacheKey, blob, engine).catch(() => { });
       src = URL.createObjectURL(blob);
     } else {
       // errors (and older servers) answer with JSON
@@ -6697,7 +7643,7 @@ async function getNeuralAudioSrc(text) {
         const bytes = new Uint8Array(bin.length);
         for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
         const b = new Blob([bytes], { type: 'audio/mpeg' });
-        saveAudioToIdbCache(cacheKey, b).catch(() => { });
+        saveAudioToIdbCache(cacheKey, b, engine).catch(() => { });
         src = URL.createObjectURL(b);
       } else {
         src = data.audioUrl || '';
@@ -6809,12 +7755,15 @@ async function exportAudioForSentences(sentences, titlePrefix) {
   const engine = activeEngine;
   // Studio downloads a .wav, the cloud voice an .mp3: say which one this export is actually making.
   if (titleEl) titleEl.textContent = `⬇️ Exporting Audio (${engine === 'wasm' ? '.wav' : '.mp3'})`;
-  const cacheEngine = engine === 'wasm' ? 'wasm_kokoro_v1' : engine;
+  const cacheEngine = engine === 'wasm' ? wasmCacheEngine() : engine;
   const voiceId = (engine === 'wasm' && (!voicePicker.value || !['heart', 'michael', 'emma'].includes(voicePicker.value)))
     ? 'heart'
     : voicePicker.value;
   const speed = 1; // exports are always normal pace
 
+  // Studio appends each clip to one growing file image as it is synthesized; the cloud voice still
+  // concatenates finished frames. Either way only the finished file is downloaded.
+  const wasmSink = engine === 'wasm' ? createWavExportSink() : null;
   const chunks = [];
   const total = sentences.length;
 
@@ -6839,7 +7788,10 @@ async function exportAudioForSentences(sentences, titlePrefix) {
         }
       }
 
-      if (blob) chunks.push(blob);
+      if (blob) {
+        if (wasmSink) await wasmSink.add(blob);
+        else chunks.push(blob);
+      }
     }
 
     if (cancelled) {
@@ -6847,14 +7799,14 @@ async function exportAudioForSentences(sentences, titlePrefix) {
       return;
     }
 
-    if (chunks.length === 0) {
+    if (wasmSink ? wasmSink.chunks === 0 : chunks.length === 0) {
       throw new Error("Could not synthesize audio chunks.");
     }
 
     if (statusText) statusText.textContent = "Stitching audio file...";
     if (progressBar) progressBar.style.width = '100%';
 
-    const finalBlob = await stitchExportChunks(chunks, engine);
+    const finalBlob = wasmSink ? wasmSink.finish() : await stitchExportChunks(chunks, engine);
 
     const downloadUrl = URL.createObjectURL(finalBlob);
     const a = document.createElement('a');
@@ -6927,6 +7879,44 @@ async function stitchExportChunks(chunks, engine) {
   view.setUint32(4, 36 + totalSamples * 2, true);
   view.setUint32(40, totalSamples * 2, true);
   return new Blob([header, ...parts.map((part) => part.buffer)], { type: 'audio/wav' });
+}
+
+// A Studio export used to collect every sentence's WAV blob and only then decode the chapter, so a
+// long book held the audio twice (WAV blobs and 16-bit samples) before the file was written. This
+// sink takes each clip as it arrives: it decodes immediately, drops the blob and appends the samples
+// to one growing file image. Same single header and same seam, half the peak memory.
+function createWavExportSink() {
+  let sampleRate = 0;
+  const parts = [];
+  let totalSamples = 0;
+  return {
+    get chunks() { return parts.length; },
+    async add(blob) {
+      let parsed = null;
+      try { parsed = extractWavPcm(await blob.arrayBuffer()); } catch { }
+      if (!parsed) throw new Error('Could not read the synthesized audio for this export.');
+      if (sampleRate && parsed.sampleRate !== sampleRate) {
+        throw new Error('The synthesized audio changed sample rate mid-export.');
+      }
+      sampleRate = parsed.sampleRate;
+      const int16 = new Int16Array(parsed.pcmData.length);
+      for (let i = 0; i < parsed.pcmData.length; i++) {
+        const sample = Number.isFinite(parsed.pcmData[i]) ? Math.max(-1, Math.min(1, parsed.pcmData[i])) : 0;
+        int16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+      }
+      totalSamples += int16.length;
+      parts.push(int16);
+      return totalSamples;
+    },
+    finish() {
+      if (!totalSamples) throw new Error('Could not synthesize audio chunks.');
+      const header = encodeMonoWavBuffer(new Float32Array(0), sampleRate);
+      const view = new DataView(header);
+      view.setUint32(4, 36 + totalSamples * 2, true);
+      view.setUint32(40, totalSamples * 2, true);
+      return new Blob([header, ...parts.map((part) => part.buffer)], { type: 'audio/wav' });
+    }
+  };
 }
 
 // A sentence long enough for the worker to split resolves its request with the first clause, because
@@ -7078,7 +8068,7 @@ function switchToStudioVoice() {
   });
   clearAudioCache();
   populateVoices();
-  warmWasmTtsWorker(); // loads (or reuses) the on-device model now, so the next sentence can start
+  warmWasmTtsWorker({ ask: true }); // loads (or reuses) the on-device model now, so the next sentence can start
   if (!didFallBackToStudio) {
     didFallBackToStudio = true;
     showToast('That cloud voice has been retired — switched to Studio (on-device) voice.');
@@ -7317,11 +8307,14 @@ async function scheduleNextWasmChunkBackToBack(audioCtx, sessionAtStart) {
   // in order and any sentence that cannot be prepared yet ends the run, so nothing is skipped.
   let nextPos = getNextSentencePosition(currentPage, currentSentenceIdx);
   let scheduled = 0; // sentences this pass accounts for: queued now or already queued
+  // One plan per pass: every sentence queued behind this one is split and led by the same
+  // measurement, so the batch does not change shape halfway through.
+  const plan = studioChunkPlan();
   while (nextPos) {
     // Always keep one sentence ahead, as before, then top up while the queue is thinner than the
     // target lead. The check is skipped on the first pass so a long sentence does not lose its
     // lookahead just because its own audio already covers the target.
-    if (scheduled > 0 && wasmQueuedSeconds(audioCtx.currentTime, wasmScheduledEndTime) >= WASM_AHEAD_SECONDS) break;
+    if (scheduled > 0 && wasmQueuedSeconds(audioCtx.currentTime, wasmScheduledEndTime) >= plan.leadSeconds) break;
     const schedKey = `${nextPos.page}:${nextPos.sentenceIdx}:${sessionAtStart}`;
     // Already queued by an earlier top-up. It holds its own slot at the end of wasmScheduledEndTime,
     // so skip over it and keep filling behind it: returning here stopped the top-up at the first
@@ -7983,6 +8976,7 @@ if (activeEngine === 'wasm' && typeof window !== 'undefined') {
   // page load: wait for the first tap. By then the model is usually already cached.
   window.addEventListener('pointerdown', () => warmWasmTtsWorker(), { once: true });
 }
+renderStudioStats();
 
 function populateVoices() {
   const prevChoice = voicePicker.value;
@@ -8096,6 +9090,7 @@ voicePicker.addEventListener('change', () => {
   const badgeIcon = (activeEngine === 'browser' || activeEngine === 'wasm') ? '🎙️' : '⚡';
   activeVoiceBadge.textContent = `${badgeIcon} ${selectedOption ? selectedOption.text.split('(')[0].trim() : 'Voice'}`;
   warmWasmTtsWorker(); // a different Studio voice carries its own embeddings: fetch them now
+  renderStudioStats(); // the summary names the voice and speed the samples were taken at
 
   if (isPlaying) {
     stopAudio();
@@ -8114,7 +9109,8 @@ document.querySelectorAll('.engine-tab').forEach(tab => {
     clearAudioCache();
     learnedCadenceMultiplier = cadenceByVoice.get(voiceCadenceKey()) || 1.0;
     populateVoices();
-    warmWasmTtsWorker(); // Studio was just chosen: load the model now, not on the first Play
+    warmWasmTtsWorker({ ask: true }); // Studio was just chosen: load the model now, not on the first Play
+    renderStudioStats();
     if (isPlaying) {
       stopAudio();
       if (activeEngine !== 'browser') unlockAudioForIOS();
@@ -9094,8 +10090,7 @@ function scheduleBackgroundSync(delay = 0) {
   backgroundSyncTimer = setTimeout(() => {
     backgroundSyncTimer = null;
     flushPendingProgress();
-    syncBookmarksFromCloud();
-    syncAnnotationsFromCloud();
+    syncAllCloudData();
   }, delay);
 }
 window.addEventListener('online', () => scheduleBackgroundSync());
@@ -9108,8 +10103,10 @@ document.addEventListener('visibilitychange', () => {
 // after the pull so a position written offline last session reaches the cloud on this launch.
 initIndexedDB().then(() => {
   restoreProgressFromCloud().then(() => { flushPendingProgress(); });
-  syncBookmarksFromCloud();
-  syncAnnotationsFromCloud();
+  syncAllCloudData();
+  // Clips from an older Studio model can never be looked up again: drop them now rather than
+  // leaving them to occupy the 100 MB cache until the LRU cap notices.
+  pruneStaleStudioCache().catch(() => { });
 });
 
 // --- RETURN FROM PAYSTACK ---

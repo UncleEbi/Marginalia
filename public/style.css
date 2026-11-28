@@ -226,6 +226,17 @@ header {
 }
 .credit-badge:hover { background: rgba(56, 189, 248, 0.2); }
 
+/* Phones cannot fit four labelled header actions plus the account badge. Keep the actions as
+   icon-only controls (each already has a title/aria-label) so the Companion stays on screen, and
+   let the wordmark give up width before any control is clipped. */
+@media (max-width: 768px) {
+  .header-actions { gap: 0.25rem; }
+  .header-actions .btn-label { display: none; }
+  .header-actions .btn-header { padding: 0.35rem 0.45rem; }
+  .brand-group { min-width: 0; }
+  .brand-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+
 .user-avatar-mini {
   width: 18px;
   height: 18px;
@@ -1286,6 +1297,25 @@ button:not(:disabled):not(.player-btn-main):active {
   text-overflow: ellipsis;
 }
 .shelf-card-sub { font-size: 0.74rem; color: var(--text-muted); }
+
+/* A note both devices edited before syncing keeps the losing version here, marked so the reader can
+   see it instead of wondering where an edit went. */
+.shelf-card-conflict { border-style: dashed; border-color: var(--accent); }
+.annotation-conflict-badge {
+  font-size: 0.68rem;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--border);
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.annotation-conflict-hint {
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+}
 
 /* How far into the book the reader already is, so a shelf of half-read books looks like progress
    rather than a backlog. */

@@ -237,6 +237,11 @@
         <span>Audio Drill (Active Recall)</span>
       </div>
 
+      <div class="drawer-nav-item" id="navCompanion">
+        <span style="font-size:1.2rem;">💡</span>
+        <span>Reading Companion</span>
+      </div>
+
       <div class="drawer-nav-item" id="navUploadFile">
         <span style="font-size:1.2rem;">📂</span>
         <span>Import New Document</span>
@@ -600,8 +605,10 @@
         <button class="bookmark-ribbon-btn" data-close="annotationsModal" style="font-size:1.1rem;">✕</button>
       </div>
       <div id="annotationsModalList" class="modal-scrollable-list"></div>
-      <div class="modal-footer-row" style="display:flex; justify-content:space-between; align-items:center; margin-top:0.5rem;">
+      <div class="modal-footer-row" style="display:flex; justify-content:space-between; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-top:0.5rem;">
         <span id="annotationsCountSummary" style="font-size:0.8rem; color:var(--text-muted);"></span>
+        <span id="syncHealthNote" style="font-size:0.72rem; color:var(--text-muted); flex:1 1 12rem; text-align:right;"></span>
+        <button id="syncRetryBtn" type="button" title="Sync notes and vocabulary now" style="padding:0.4rem 0.7rem; border-radius:6px; background:transparent; color:var(--text-main); border:1px solid var(--border); cursor:pointer;">↻ Retry</button>
         <button data-close="annotationsModal" style="padding:0.4rem 0.8rem; border-radius:6px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); cursor:pointer;">Close</button>
       </div>
     </div>
@@ -719,6 +726,15 @@
               <input type="checkbox" id="autoFlipCheck" checked style="accent-color: var(--accent);" />
               <span>Auto-page</span>
             </label>
+          </div>
+
+          <div id="studioStatsBlock" style="display:none; margin-top:0.5rem; padding:0.5rem 0.6rem; border:1px solid var(--border); border-radius:8px; background:var(--bg-main);">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
+              <span style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">Studio diagnostics</span>
+              <button id="copyStudioStatsBtn" type="button" style="padding:0.2rem 0.55rem; font-size:0.72rem; border-radius:6px; border:1px solid var(--border); background:var(--bg-main); color:var(--text-main); cursor:pointer;">Copy stats</button>
+            </div>
+            <div id="studioStatsSummary" style="font-size:0.72rem; color:var(--text-muted); margin-top:0.3rem; line-height:1.4; user-select:text; -webkit-user-select:text;">No Studio audio synthesized yet on this device.</div>
+            <div id="studioModelStatus" style="font-size:0.72rem; color:var(--text-muted); margin-top:0.2rem; line-height:1.4;">Voice model: checking…</div>
           </div>
         </div>
 

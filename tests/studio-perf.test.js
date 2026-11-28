@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { appSource, extractFunction } from './helpers/extract-function.mjs';
 
 // The recorder reads module-level state the extractor cannot carry across, so inject it the way the
@@ -9,6 +11,7 @@ globalThis.studioPerf = { samples: [], backend: 'unknown', device: '' };
 globalThis.studioPerfVerbose = () => false;
 const noteStudioSynth = extractFunction('noteStudioSynth');
 const studioPerfSummary = extractFunction('studioPerfSummary');
+globalThis.studioPerfSummary = studioPerfSummary;
 
 const reset = () => { globalThis.studioPerf.samples.length = 0; };
 
@@ -60,6 +63,42 @@ test('first-clause latency is summarised only for the sentences that reported on
   const summary = studioPerfSummary();
   assert.equal(summary.firstAudioMs.median, 300);
   assert.equal(summary.firstAudioMs.worst, 900);
+});
+
+test('the copyable Studio snapshot carries the device, model and measured factors', () => {
+  reset();
+  globalThis.studioPerf.backend = 'kokoro-worker';
+  globalThis.studioPerf.device = 'webgpu/fp16';
+  noteStudioSynth({ backend: 'kokoro-worker', chars: 90, audioMs: 2000, synthMs: 600, firstAudioMs: 310 });
+  globalThis.activeEngine = 'wasm';
+  globalThis.wasmCacheVoiceId = () => 'heart';
+  globalThis.playbackSpeed = 1.25;
+  globalThis.STUDIO_MODEL_VERSION = 'kokoro_v1';
+
+  const snapshot = extractFunction('studioStatsSnapshot')();
+
+  assert.equal(snapshot.engine, 'wasm');
+  assert.equal(snapshot.voice, 'heart');
+  assert.equal(snapshot.speed, 1.25);
+  assert.equal(snapshot.modelVersion, 'kokoro_v1');
+  assert.equal(snapshot.backend, 'kokoro-worker');
+  assert.equal(snapshot.samples, 1);
+  assert.equal(snapshot.rtf.median, 0.3);
+  assert.ok(Date.parse(snapshot.capturedAt), 'the snapshot says when it was taken');
+});
+
+test('the diagnostics panel shows the summary in Options and copies the full JSON', () => {
+  const app = appSource();
+  assert.match(app, /function renderStudioStats\(\)/, 'the panel has a renderer');
+  assert.match(app, /function copyStudioStats\(\)/, 'the stats can be copied');
+  assert.match(app, /navigator\.clipboard\.writeText\(text\)/, 'the copy uses the clipboard');
+  assert.match(app, /JSON\.stringify\(studioStatsSnapshot\(\), null, 2\)/, 'the whole snapshot is copied');
+  assert.match(app, /block\.style\.display = show \? 'block' : 'none'/, 'the panel only appears for Studio');
+
+  const html = readFileSync(fileURLToPath(new URL('../public/index.html', import.meta.url)), 'utf8');
+  assert.match(html, /id="studioStatsBlock"/, 'the panel is in Options');
+  assert.match(html, /id="studioStatsSummary"/, 'the summary is addressable');
+  assert.match(html, /id="copyStudioStatsBtn"/, 'the copy button exists');
 });
 
 test('both synthesis paths report to the recorder and the summary is reachable from the page', () => {

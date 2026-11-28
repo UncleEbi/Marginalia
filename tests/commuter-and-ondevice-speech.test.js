@@ -16,6 +16,10 @@ const html = readFileSync(htmlPath, 'utf8');
 
 // public/app.js is one classic script, so its functions reach each other through the global scope.
 // An extracted function needs the same for the helpers it calls.
+globalThis.STUDIO_TARGET_PEAK = 0.9;
+globalThis.STUDIO_SILENCE_FLOOR = 0.02;
+globalThis.STUDIO_MAX_GAIN = 8;
+globalThis.normalizeStudioPcm = extractFunction('normalizeStudioPcm');
 globalThis.encodeWasmPcmToBlobUrl = extractFunction('encodeWasmPcmToBlobUrl');
 
 test('Studio (On-Device) engine tab exists in index.html', () => {
@@ -271,7 +275,7 @@ test('Studio bakes the reading speed into synthesis and schedules buffers in rea
 
   // 2. Speed reaches the synthesizer and never the playout graph: retiming an
   //    AudioBufferSourceNode resamples it and raises its pitch (the chipmunk effect at 1.5x/2x).
-  assert.match(workerSrc, /synthesizeSegments\(tts, text, voice, speed, emit, isCancelled\)/);
+  assert.match(workerSrc, /synthesizeSegments\(tts, text, voice, speed, emit, isCancelled, maxChars = 80\)/);
   assert.match(workerSrc, /tts\.generate\(parts\[i\], \{ voice, speed \}\)/);
   assert.ok(appSrc.includes('sourceNode.playbackRate.value = 1;'), 'first chunk plays at real time');
   assert.ok(appSrc.includes('nextSource.playbackRate.value = 1;'), 'pre-scheduled chunk plays at real time');
@@ -293,7 +297,7 @@ test('Studio bakes the reading speed into synthesis and schedules buffers in rea
     'the in-memory key must resolve a leftover cloud voice id the same way IndexedDB does'
   );
   assert.match(appSrc, /\$\{activeEngine\}_\$\{voice\}_\$\{speed\}_\$\{normalized\}/);
-  assert.ok(appSrc.includes("computeAudioCacheKey('wasm_kokoro_v1', wasmCacheVoiceId(), speed, text)"));
+  assert.ok(appSrc.includes('computeAudioCacheKey(wasmCacheEngine(), wasmCacheVoiceId(), speed, text)'));
   assert.ok(
     appSrc.includes('const key = neuralCacheKey(spokenText, speed);'),
     'the in-memory key must use the synthesized speed, so a 1x export never lands under the 2x key'
@@ -321,8 +325,13 @@ test('Studio synthesis lead is measured in seconds, so 2x queues more sentences 
   // The queue is topped up while the audio already scheduled covers less than the lead target.
   assert.match(
     appSrc,
-    /wasmQueuedSeconds\(audioCtx\.currentTime, wasmScheduledEndTime\) >= WASM_AHEAD_SECONDS\) break;/,
+    /wasmQueuedSeconds\(audioCtx\.currentTime, wasmScheduledEndTime\) >= plan\.leadSeconds\) break;/,
     'the lead has to be compared in seconds, not sentences'
+  );
+  assert.match(
+    appSrc,
+    /WASM_LEAD_SECONDS = \{ fast: WASM_AHEAD_SECONDS/,
+    'the default (no measurements yet) lead stays the original target'
   );
   assert.match(appSrc, /let scheduled = 0;/, 'the first lookahead stays unconditional');
 
@@ -386,6 +395,7 @@ test('a finished clause stream is stitched into one cached clip so replay does n
   const savedIdb = [];
   const released = [];
   const saved = {
+    wasmCacheEngine: globalThis.wasmCacheEngine,
     encodeWasmPcmToBlobUrl: globalThis.encodeWasmPcmToBlobUrl,
     cacheAudio: globalThis.cacheAudio,
     neuralCacheKey: globalThis.neuralCacheKey,
@@ -405,6 +415,7 @@ test('a finished clause stream is stitched into one cached clip so replay does n
   };
   globalThis.neuralCacheKey = (text) => `preload:${text}`;
   globalThis.wasmCacheVoiceId = () => 'heart';
+  globalThis.wasmCacheEngine = () => 'wasm_kokoro_v1';
   globalThis.cacheAudio = (key, src) => cached.push({ key, src });
   globalThis.computeAudioCacheKey = async (engine, voice, speed, text) => `idb:${engine}:${voice}:${speed}:${text}`;
   globalThis.saveAudioToIdbCache = async (key, blob) => { savedIdb.push({ key, size: blob.size }); return true; };
@@ -537,6 +548,7 @@ test('the Studio queue tops up past sentences it has already scheduled', async (
   set('currentPage', 0);
   set('currentSentenceIdx', 0);
   set('WASM_AHEAD_SECONDS', 6);
+  set('studioChunkPlan', () => ({ maxChars: 80, leadSeconds: 6 }));
   set('wasmQueuedSeconds', queuedSeconds);
   set('wasmScheduledChunks', scheduled);
   set('wasmClauseStreams', new Map());

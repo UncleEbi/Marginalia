@@ -87,6 +87,21 @@ function splitLongText(text, maxLen = 80) {
   return finalChunks;
 }
 
+// The pause between two clauses belongs to the punctuation that ended the first one: a comma is a
+// beat, a semicolon or colon a longer one, a dash a held breath. A word split with no punctuation
+// barely pauses at all, so the seam sounds like one sentence rather than two.
+const CLAUSE_PAUSE_MS = { ',': 120, ';': 220, ':': 220, '\u2014': 260, '-': 120 };
+function clauseGapMs(text) {
+  // A closing quote or bracket sits after the punctuation it belongs to: 'he said "stop."'
+  // still ends a sentence, and that is the pause the reader should hear.
+  const trimmed = String(text || '').trimEnd().replace(/["'\u201d\u2019)\]]+$/, '');
+  const last = trimmed.charAt(trimmed.length - 1);
+  if (!last) return 40;
+  if (last === '\u2026') return 320;
+  if (/[.!?]/.test(last)) return 260;
+  return CLAUSE_PAUSE_MS[last] != null ? CLAUSE_PAUSE_MS[last] : 40;
+}
+
 const downloadProgress = new Map();
 
 function reportProgress(info) {
@@ -168,8 +183,8 @@ async function getTts() {
 // generated. The clause's inter-sentence pause is carried inside its samples (except for the last
 // one) so the player can schedule the chunks back to back without knowing about gaps. Text that
 // fits in one chunk still comes back merged.
-async function synthesizeSegments(tts, text, voice, speed, emit, isCancelled) {
-  const parts = splitLongText(text);
+async function synthesizeSegments(tts, text, voice, speed, emit, isCancelled, maxChars = 80) {
+  const parts = splitLongText(text, maxChars);
   if (parts.length === 0) return { pcm: new Float32Array(0), sampleRate: 24000 };
 
   if (parts.length === 1) {
@@ -191,7 +206,7 @@ async function synthesizeSegments(tts, text, voice, speed, emit, isCancelled) {
     const raw = out && (out.audio || out.data);
     let pcm = raw && raw.length ? Float32Array.from(raw) : new Float32Array(0);
     if (pcm.length && i < parts.length - 1) {
-      const gapSamples = Math.round(sampleRate * 0.08);
+      const gapSamples = Math.round(sampleRate * (clauseGapMs(parts[i]) / 1000));
       const padded = new Float32Array(pcm.length + gapSamples);
       padded.set(pcm);
       pcm = padded;
@@ -262,7 +277,8 @@ async function drainQueue() {
               [copy.buffer]
             );
           },
-          () => job.sessionId != null && job.sessionId < activeSessionId
+          () => job.sessionId != null && job.sessionId < activeSessionId,
+          job.maxChars
         );
         if (out.cancelled) {
           self.postMessage({ type: 'cancelled', id: job.id });
@@ -323,6 +339,8 @@ self.addEventListener('message', (e) => {
       text: msg.text,
       voice: msg.voice || 'af_heart',
       speed: Number(msg.speed) > 0 ? Number(msg.speed) : 1,
+      // The page sizes clauses from its measured real-time factor; 80 is the long-standing default.
+      maxChars: Number(msg.maxChars) > 0 ? Number(msg.maxChars) : 80,
       sessionId: typeof msg.sessionId === 'number' ? msg.sessionId : activeSessionId,
       priority: msg.priority === 'high' ? 0 : 1
     };
